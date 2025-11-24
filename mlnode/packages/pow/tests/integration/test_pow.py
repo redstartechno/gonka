@@ -9,7 +9,7 @@ from pow.service.client import PowClient
 from pow.compute.stats import estimate_R_from_experiment
 from pow.compute.compute import ProofBatch
 from pow.data import ValidatedBatch
-from pow.models.utils import Params
+from pow.models.utils import PARAMS_V1
 
 @pytest.fixture(scope="session")
 def server_urls():
@@ -41,19 +41,7 @@ def client(server_urls):
 
 @pytest.fixture(scope="session")
 def model_params():
-    return Params(
-        dim=128,
-        n_layers=16,
-        n_heads=16,
-        n_kv_heads=16,
-        vocab_size=128,
-        ffn_dim_multiplier=16.0,
-        multiple_of=1024,
-        norm_eps=1e-05,
-        rope_theta=500000.0,
-        use_scaled_rope=False,
-        seq_len=4
-    )
+    return PARAMS_V1
 
 @pytest.fixture(scope="session")
 def r_target(model_params):
