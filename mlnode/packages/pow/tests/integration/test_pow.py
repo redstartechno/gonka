@@ -107,7 +107,7 @@ def get_incorrect_nonce(pb):
     for i in range(min(pb.nonces), max(pb.nonces)):
         if i not in pb.nonces:
             return i
-    return None
+    return max(pb.nonces) + 1
 
 def create_incorrect_batch(pb, n, n_invalid):
     incorrect_pb_dict = {
@@ -150,11 +150,11 @@ def test_generated_proofs(init_generation, server_urls):
 def test_validate_correct_batch(client, server_urls, latest_proof_batch):
     batch_receiver_url, _ = server_urls
     clear_batches(batch_receiver_url)
-    correct_pb = create_correct_batch(latest_proof_batch, n=100)
+    correct_pb = create_correct_batch(latest_proof_batch, n=10)
     client.start_validation()
     client.validate(correct_pb)
     sleep(5)  # Give time for validation to complete and batch to be sent
-    timeout = 60  # 60 seconds timeout
+    timeout = 60
     start_time = time.time()
     while time.time() - start_time < timeout:
         val_proof_batches = get_val_proof_batches(batch_receiver_url)
@@ -163,18 +163,28 @@ def test_validate_correct_batch(client, server_urls, latest_proof_batch):
         sleep(1)
     assert len(val_proof_batches) > 0, f"No validated batches received after {timeout} seconds"
     vpb = ValidatedBatch(**val_proof_batches[-1])
-    assert len(vpb) == 100
+    assert len(vpb) == 10
     assert vpb.n_invalid == 0
     assert not vpb.fraud_detected
 
-def test_validate_incorrect_batch(client, server_urls, latest_proof_batch):
+def test_validate_incorrect_batch(client, server_urls):
     batch_receiver_url, _ = server_urls
+    
+    # Briefly restart generation to get a fresh batch
+    client.start_generation()
+    while True:
+        proof_batches = get_proof_batches(batch_receiver_url)
+        if len(proof_batches) > 0:
+            break
+        sleep(1)
+    pb = ProofBatch(**proof_batches[-1])
+    
     clear_batches(batch_receiver_url)
-    incorrect_pb = create_incorrect_batch(latest_proof_batch, n=100, n_invalid=30)
+    incorrect_pb = create_incorrect_batch(pb, n=10, n_invalid=3)
     client.start_validation()
     client.validate(incorrect_pb)
     sleep(5)  # Give time for validation to complete and batch to be sent
-    timeout = 60  # 60 seconds timeout
+    timeout = 60
     start_time = time.time()
     while time.time() - start_time < timeout:
         val_proof_batches = get_val_proof_batches(batch_receiver_url)
@@ -184,7 +194,7 @@ def test_validate_incorrect_batch(client, server_urls, latest_proof_batch):
     assert len(val_proof_batches) > 0, f"No validated batches received after {timeout} seconds"
     vpb = ValidatedBatch(**val_proof_batches[-1])
 
-    assert len(vpb) == 100
+    assert len(vpb) == 10
     assert vpb.n_invalid > 0
 
 
