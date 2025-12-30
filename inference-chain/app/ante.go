@@ -198,6 +198,7 @@ func NewAnteHandler(options HandlerOptions) (sdk.AnteHandler, error) {
 		circuitante.NewCircuitBreakerDecorator(options.CircuitKeeper),
 		ante.NewExtensionOptionsDecorator(options.ExtensionOptionChecker),
 		ante.NewValidateBasicDecorator(),
+		NewPocPeriodValidationDecorator(options.InferenceKeeper), // Validate PoC period early to reject invalid submissions
 		ante.NewTxTimeoutHeightDecorator(),
 		ante.NewValidateMemoDecorator(options.AccountKeeper),
 		ante.NewConsumeGasForTxSizeDecorator(options.AccountKeeper),
