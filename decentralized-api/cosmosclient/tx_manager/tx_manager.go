@@ -48,6 +48,8 @@ const (
 
 	hashHeader = "TX_HASH"
 	idHeader   = "TX_ID"
+
+	maxBlockTimeDrift = 120 * time.Second
 )
 
 type TxManager interface {
@@ -69,7 +71,7 @@ type blockTimeTracker struct {
 	latestBlockHeight int64
 	lastUpdatedAt     time.Time
 	maxBlockTimeout   time.Duration
-	chainHalt         bool
+	pauseSending      bool
 	mtx               sync.Mutex
 }
 
@@ -474,8 +476,9 @@ func (m *manager) sendTxs() error {
 
 	_, err := m.natsJetStream.Subscribe(server.TxsToSendStream, func(msg *nats.Msg) {
 		if halt, err := m.updateChainHalt(); err != nil || halt {
-			logging.Error("chain is slowing down or couldn't fetch actual chain status", types.Messages, "latest_block_timestamp", m.blockTimeTracker.latestBlockTime.Load().(time.Time))
-			time.Sleep(3 * time.Second)
+			logging.Warn("node paused, delaying tx processing", types.Messages,
+				"latest_block_timestamp", m.blockTimeTracker.latestBlockTime.Load().(time.Time))
+			msg.NakWithDelay(5 * time.Second)
 			return
 		}
 		txId := msg.Header.Get(idHeader)
@@ -592,7 +595,10 @@ func (m *manager) observeTxs() error {
 	logging.Info("Tx manager: observeTxs txs: run in background", types.Messages)
 	_, err := m.natsJetStream.Subscribe(server.TxsToObserveStream, func(msg *nats.Msg) {
 		if halt, err := m.updateChainHalt(); err != nil || halt {
-			logging.Error("chain is slowing down or couldn't fetch actual chain status", types.Messages, "latest_block_timestamp", m.blockTimeTracker.latestBlockTime.Load().(time.Time))
+			logging.Warn("node paused, delaying tx observation", types.Messages,
+				"latest_block_timestamp", m.blockTimeTracker.latestBlockTime.Load().(time.Time))
+			msg.NakWithDelay(5 * time.Second)
+			return
 		}
 
 		var tx txInfo
@@ -921,11 +927,33 @@ func (m *manager) getLatestBlockHeight() int64 {
 	return m.blockTimeTracker.latestBlockHeight
 }
 
+func (m *manager) isNodeBehind(syncInfo ctypes.SyncInfo) bool {
+	if syncInfo.CatchingUp {
+		logging.Warn("node is catching up", types.Messages,
+			"height", syncInfo.LatestBlockHeight)
+		return true
+	}
+
+	drift := time.Since(syncInfo.LatestBlockTime)
+	if drift > maxBlockTimeDrift {
+		logging.Warn("node block time is stale", types.Messages,
+			"latestBlockTime", syncInfo.LatestBlockTime,
+			"drift", drift)
+		return true
+	}
+
+	return false
+}
+
 func (m *manager) updateChainHalt() (bool, error) {
+	m.blockTimeTracker.mtx.Lock()
 	now := time.Now()
 	if now.Sub(m.blockTimeTracker.lastUpdatedAt) < time.Second*3 {
-		return m.blockTimeTracker.chainHalt, nil
+		result := m.blockTimeTracker.pauseSending
+		m.blockTimeTracker.mtx.Unlock()
+		return result, nil
 	}
+	m.blockTimeTracker.mtx.Unlock()
 
 	status, err := m.client.Status(m.ctx)
 	if err != nil {
@@ -936,20 +964,34 @@ func (m *manager) updateChainHalt() (bool, error) {
 	m.blockTimeTracker.mtx.Lock()
 	defer m.blockTimeTracker.mtx.Unlock()
 
+	// Priority 1: Chain halt detection (chain stopped producing blocks)
 	if status.SyncInfo.LatestBlockTime.Equal(m.blockTimeTracker.latestBlockTime.Load().(time.Time)) &&
 		status.SyncInfo.LatestBlockHeight == m.blockTimeTracker.latestBlockHeight &&
 		!m.blockTimeTracker.lastUpdatedAt.IsZero() && now.Sub(m.blockTimeTracker.lastUpdatedAt) > m.blockTimeTracker.maxBlockTimeout {
-		// same block, and we sow it more than N seconds ago -> chain halt
-		m.blockTimeTracker.chainHalt = true
+		m.blockTimeTracker.pauseSending = true
+		m.blockTimeTracker.lastUpdatedAt = now
+		return true, nil
 	}
 
+	// Priority 2: Node behind (catching up or stale block time)
+	if m.isNodeBehind(status.SyncInfo) {
+		m.blockTimeTracker.latestBlockHeight = status.SyncInfo.LatestBlockHeight
+		m.blockTimeTracker.latestBlockTime.Store(status.SyncInfo.LatestBlockTime)
+		m.blockTimeTracker.pauseSending = true
+		m.blockTimeTracker.lastUpdatedAt = now
+		return true, nil
+	}
+
+	// Recovery: passed both checks, safe to send
+	m.blockTimeTracker.pauseSending = false
+
+	// Update tracker if newer block seen
 	if status.SyncInfo.LatestBlockTime.After(m.blockTimeTracker.latestBlockTime.Load().(time.Time)) &&
 		status.SyncInfo.LatestBlockHeight > m.blockTimeTracker.latestBlockHeight {
 		m.blockTimeTracker.latestBlockHeight = status.SyncInfo.LatestBlockHeight
 		m.blockTimeTracker.latestBlockTime.Store(status.SyncInfo.LatestBlockTime)
-		m.blockTimeTracker.chainHalt = false
 	}
 
 	m.blockTimeTracker.lastUpdatedAt = now
-	return m.blockTimeTracker.chainHalt, nil
+	return m.blockTimeTracker.pauseSending, nil
 }
