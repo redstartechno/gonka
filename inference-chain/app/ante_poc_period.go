@@ -18,14 +18,14 @@ func NewPocPeriodValidationDecorator(ik *inferencemodulekeeper.Keeper) PocPeriod
 }
 
 // validatePocMessage validates a single PoC message (either direct or nested)
-func (ppd PocPeriodValidationDecorator) validatePocMessage(ctx sdk.Context, msg sdk.Msg) error {
+func (ppd PocPeriodValidationDecorator) checkPocMessageTooLate(ctx sdk.Context, msg sdk.Msg) error {
 	switch m := msg.(type) {
 	case *inferencetypes.MsgSubmitPocBatch:
-		if err := ppd.inferenceKeeper.ValidatePocPeriod(ctx, m.PocStageStartBlockHeight, inferencemodulekeeper.PocWindowBatch); err != nil {
+		if err := ppd.inferenceKeeper.CheckPocMessageTooLate(ctx, m.PocStageStartBlockHeight, inferencemodulekeeper.PocWindowBatch); err != nil {
 			return err
 		}
 	case *inferencetypes.MsgSubmitPocValidation:
-		if err := ppd.inferenceKeeper.ValidatePocPeriod(ctx, m.PocStageStartBlockHeight, inferencemodulekeeper.PocWindowValidation); err != nil {
+		if err := ppd.inferenceKeeper.CheckPocMessageTooLate(ctx, m.PocStageStartBlockHeight, inferencemodulekeeper.PocWindowValidation); err != nil {
 			return err
 		}
 	case *authztypes.MsgExec:
@@ -36,7 +36,7 @@ func (ppd PocPeriodValidationDecorator) validatePocMessage(ctx sdk.Context, msg 
 				// If we can't unpack, skip (but log in production)
 				continue
 			}
-			if err := ppd.validatePocMessage(ctx, unwrapped); err != nil {
+			if err := ppd.checkPocMessageTooLate(ctx, unwrapped); err != nil {
 				return err
 			}
 		}
@@ -55,7 +55,7 @@ func (ppd PocPeriodValidationDecorator) AnteHandle(ctx sdk.Context, tx sdk.Tx, s
 	}
 
 	for _, msg := range tx.GetMsgs() {
-		if err := ppd.validatePocMessage(ctx, msg); err != nil {
+		if err := ppd.checkPocMessageTooLate(ctx, msg); err != nil {
 			return ctx, err
 		}
 	}
