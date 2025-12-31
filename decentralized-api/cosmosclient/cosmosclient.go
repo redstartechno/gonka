@@ -159,7 +159,7 @@ func NewInferenceCosmosClient(ctx context.Context, addressPrefix string, config 
 		}
 	}()
 
-	mn, err := tx_manager.StartTxManager(ctx, &cosmoclient, apiAccount, time.Second*60, natsConn, accAddress)
+	mn, err := tx_manager.StartTxManager(ctx, &cosmoclient, apiAccount, time.Second*60, natsConn, accAddress, config.GetHeight)
 	if err != nil {
 		return nil, err
 	}

@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	ctypes "github.com/cometbft/cometbft/rpc/core/types"
@@ -67,12 +66,11 @@ type TxManager interface {
 }
 
 type blockTimeTracker struct {
-	latestBlockTime   atomic.Value
-	latestBlockHeight int64
-	lastUpdatedAt     time.Time
-	maxBlockTimeout   time.Duration
-	pauseSending      bool
-	mtx               sync.Mutex
+	latestBlockTime time.Time
+	lastUpdatedAt   time.Time
+	maxBlockTimeout time.Duration
+	pauseSending    bool
+	mtx             sync.Mutex
 }
 
 type manager struct {
@@ -86,6 +84,7 @@ type manager struct {
 	natsConnection   *nats.Conn
 	natsJetStream    nats.JetStreamContext
 	blockTimeTracker *blockTimeTracker
+	getHeightFunc    func() int64
 }
 
 func StartTxManager(
@@ -94,7 +93,8 @@ func StartTxManager(
 	account *apiconfig.ApiAccount,
 	defaultTimeout time.Duration,
 	natsConnection *nats.Conn,
-	address string) (*manager, error) {
+	address string,
+	getHeight func() int64) (*manager, error) {
 	js, err := natsConnection.JetStream()
 	if err != nil {
 		return nil, err
@@ -110,9 +110,6 @@ func StartTxManager(
 	restrictionstypes.RegisterInterfaces(client.Context().InterfaceRegistry)
 	blstypes.RegisterInterfaces(client.Context().InterfaceRegistry)
 
-	ts := atomic.Value{}
-	ts.Store(time.Time{})
-
 	m := &manager{
 		ctx:              ctx,
 		client:           client,
@@ -122,8 +119,8 @@ func StartTxManager(
 		defaultTimeout:   defaultTimeout,
 		natsConnection:   natsConnection,
 		natsJetStream:    js,
+		getHeightFunc:    getHeight,
 		blockTimeTracker: &blockTimeTracker{
-			latestBlockTime: ts,
 			maxBlockTimeout: 10 * time.Second,
 		},
 	}
@@ -141,9 +138,10 @@ func StartTxManager(
 const maxAttempts = 3
 
 type txToSend struct {
-	TxInfo   txInfo
-	Sent     bool
-	Attempts int
+	TxInfo      txInfo
+	Sent        bool
+	Attempts    int
+	RequeueTime time.Time `json:",omitempty"`
 }
 
 type txInfo struct {
@@ -181,7 +179,7 @@ func (m *manager) SendTransactionAsyncWithRetry(rawTx sdk.Msg, deadlineBlockOpt 
 	}
 
 	if halt, err := m.updateChainHalt(); err != nil || halt {
-		logging.Error("chain is slowing down or couldn't fetch actual chain status", types.Messages, "latest_block_timestamp", m.blockTimeTracker.latestBlockTime.Load().(time.Time))
+		logging.Error("chain is slowing down or couldn't fetch actual chain status", types.Messages, "latest_block_timestamp", m.blockTimeTracker.latestBlockTime)
 
 		if err := m.putOnRetry(id, "", time.Time{}, rawTx, 0, false, deadlineBlock); err != nil {
 			logging.Error("failed to put in queue", types.Messages, "tx_id", id, "resend_err", err)
@@ -258,7 +256,7 @@ func (m *manager) SendBatchAsyncWithRetry(msgs []sdk.Msg, deadlineBlockOpt ...in
 	logging.Debug("SendBatchAsyncWithRetry: sending batch", types.Messages, "tx_id", id, "count", len(msgs))
 
 	if halt, err := m.updateChainHalt(); err != nil || halt {
-		logging.Error("chain is slowing down or couldn't fetch actual chain status", types.Messages, "latest_block_timestamp", m.blockTimeTracker.latestBlockTime.Load().(time.Time))
+		logging.Error("chain is slowing down or couldn't fetch actual chain status", types.Messages, "latest_block_timestamp", m.blockTimeTracker.latestBlockTime)
 
 		if err := m.putBatchOnRetry(id, msgs, "", time.Time{}, 0, false, deadlineBlock); err != nil {
 			logging.Error("failed to put batch in queue", types.Messages, "tx_id", id, "resend_err", err)
@@ -471,33 +469,38 @@ func (m *manager) putInfoToObserve(info txInfo) error {
 	return err
 }
 
+func (m *manager) requeue(tx *txToSend) error {
+	tx.Attempts++
+	tx.RequeueTime = time.Now()
+	if tx.Attempts >= maxAttempts {
+		logging.Warn("tx max attempts reached", types.Messages, "id", tx.TxInfo.Id)
+		return nil
+	}
+	b, err := json.Marshal(tx)
+	if err != nil {
+		return err
+	}
+	msg := &nats.Msg{Subject: server.TxsToSendStream, Data: b, Header: nats.Header{}}
+	msg.Header.Set(idHeader, tx.TxInfo.Id)
+	msg.Header.Set(hashHeader, tx.TxInfo.TxHash)
+	_, err = m.natsJetStream.PublishMsg(msg)
+	return err
+}
+
 func (m *manager) sendTxs() error {
 	logging.Info("Tx manager: sending txs: run in background", types.Messages)
 
 	_, err := m.natsJetStream.Subscribe(server.TxsToSendStream, func(msg *nats.Msg) {
-		for {
-			if halt, err := m.updateChainHalt(); err != nil || halt {
-				logging.Warn("node paused, waiting to process tx", types.Messages,
-					"latest_block_timestamp", m.blockTimeTracker.latestBlockTime.Load().(time.Time))
-				msg.InProgress()
-				time.Sleep(5 * time.Second)
-				continue
-			}
-			break
+		if halt, _ := m.updateChainHalt(); halt {
+			logging.Warn("node paused, delaying tx", types.Messages,
+				"latest_block_timestamp", m.blockTimeTracker.latestBlockTime)
+			msg.NakWithDelay(defaultSenderNackDelay)
+			return
 		}
 
 		txId := msg.Header.Get(idHeader)
 		txHash := msg.Header.Get(hashHeader)
-
-		md, err := msg.Metadata()
-		if err == nil {
-			logging.Info("sendTxs metadata", types.Messages, "delivered", md.NumDelivered, "pending", md.NumPending, "id", txId, "hash", txHash)
-			if md.NumDelivered >= maxAttempts {
-				logging.Warn("tx retry max attempts failed", types.Messages, "delivered", md.NumDelivered, "id", txId, "hash", txHash)
-				msg.Term()
-				return
-			}
-		}
+		logging.Debug("sendTxs processing", types.Messages, "id", txId, "hash", txHash)
 
 		var tx txToSend
 		if err := json.Unmarshal(msg.Data, &tx); err != nil {
@@ -506,7 +509,21 @@ func (m *manager) sendTxs() error {
 			return
 		}
 
-		logging.Debug("SendTxs: got tx", types.Messages, "id", tx.TxInfo.Id)
+		logging.Debug("SendTxs: got tx", types.Messages, "id", tx.TxInfo.Id, "attempts", tx.Attempts)
+
+		if tx.Attempts >= maxAttempts {
+			logging.Warn("tx max attempts reached", types.Messages, "id", tx.TxInfo.Id)
+			msg.Term()
+			return
+		}
+
+		if !tx.RequeueTime.IsZero() {
+			elapsed := time.Since(tx.RequeueTime)
+			if elapsed < defaultSenderNackDelay {
+				msg.NakWithDelay(defaultSenderNackDelay - elapsed)
+				return
+			}
+		}
 
 		currentHeight := m.getLatestBlockHeight()
 		if tx.TxInfo.DeadlineBlock > 0 && currentHeight > tx.TxInfo.DeadlineBlock {
@@ -553,8 +570,11 @@ func (m *manager) sendTxs() error {
 			if broadcastErr != nil {
 				// Check if broadcast error is retryable
 				if isRetryableBroadcastError(broadcastErr) {
-					logging.Warn("retryable broadcast error in sendTxs, will retry", types.Messages, "id", tx.TxInfo.Id, "err", broadcastErr)
-					msg.NakWithDelay(defaultSenderNackDelay)
+					logging.Warn("retryable broadcast error, requeuing", types.Messages, "id", tx.TxInfo.Id, "err", broadcastErr)
+					if err := m.requeue(&tx); err != nil {
+						logging.Error("requeue failed, dropping tx", types.Messages, "id", tx.TxInfo.Id, "err", err)
+					}
+					msg.Ack()
 					return
 				}
 				// Non-retryable broadcast error - drop permanently
@@ -572,9 +592,12 @@ func (m *manager) sendTxs() error {
 				msg.Term()
 				return
 			case TxActionRetry:
-				logging.Warn("Retryable response error in sendTxs, will retry", types.Messages,
+				logging.Warn("Retryable response error, requeuing", types.Messages,
 					"id", tx.TxInfo.Id, "code", resp.Code, "rawLog", resp.RawLog)
-				msg.NakWithDelay(defaultSenderNackDelay)
+				if err := m.requeue(&tx); err != nil {
+					logging.Error("requeue failed, dropping tx", types.Messages, "id", tx.TxInfo.Id, "err", err)
+				}
+				msg.Ack()
 				return
 			case TxActionObserve:
 				// Success or tx-in-mempool - continue to observer
@@ -587,11 +610,10 @@ func (m *manager) sendTxs() error {
 		logging.Debug("tx broadcast, put to observe", types.Messages, "id", tx.TxInfo.Id, "tx_hash", tx.TxInfo.TxHash, "timeout", tx.TxInfo.Timeout.String())
 
 		if err := m.putInfoToObserve(tx.TxInfo); err != nil {
-			logging.Error("error pushing to observe queue", types.Messages, "id", tx.TxInfo.Id, "err", err)
-			msg.NakWithDelay(defaultSenderNackDelay)
-		} else {
-			msg.Ack()
+			logging.Error("error pushing to observe queue, tx broadcast but untracked",
+				types.Messages, "id", tx.TxInfo.Id, "txHash", tx.TxInfo.TxHash, "err", err)
 		}
+		msg.Ack()
 	}, nats.Durable(txSenderConsumer), nats.ManualAck())
 	return err
 }
@@ -599,15 +621,11 @@ func (m *manager) sendTxs() error {
 func (m *manager) observeTxs() error {
 	logging.Info("Tx manager: observeTxs txs: run in background", types.Messages)
 	_, err := m.natsJetStream.Subscribe(server.TxsToObserveStream, func(msg *nats.Msg) {
-		for {
-			if halt, err := m.updateChainHalt(); err != nil || halt {
-				logging.Warn("node paused, waiting to observe tx", types.Messages,
-					"latest_block_timestamp", m.blockTimeTracker.latestBlockTime.Load().(time.Time))
-				msg.InProgress()
-				time.Sleep(5 * time.Second)
-				continue
-			}
-			break
+		if halt, _ := m.updateChainHalt(); halt {
+			logging.Warn("node paused, delaying observe", types.Messages,
+				"latest_block_timestamp", m.blockTimeTracker.latestBlockTime)
+			msg.NakWithDelay(defaultObserverNackDelay)
+			return
 		}
 
 		var tx txInfo
@@ -676,7 +694,7 @@ func (m *manager) observeTxs() error {
 		}
 
 		if errors.Is(err, ErrTxNotFound) {
-			if m.blockTimeTracker.latestBlockTime.Load().(time.Time).After(tx.Timeout) {
+			if m.blockTimeTracker.latestBlockTime.After(tx.Timeout) {
 				logging.Debug("tx expired", types.Messages, "tx_id", tx.Id, "tx_hash", tx.TxHash, "tx_timestamp", tx.Timeout, "latest_block_timestamp", m.blockTimeTracker.latestBlockTime)
 				tx.Attempts++
 
@@ -898,13 +916,13 @@ func (m *manager) getFactory(id string) (*tx.Factory, error) {
 }
 
 func (m *manager) getSignedBytes(id string, unsignedTx client.TxBuilder, factory *tx.Factory) ([]byte, time.Time, error) {
-	blockTs := m.blockTimeTracker.latestBlockTime.Load().(time.Time)
+	blockTs := m.blockTimeTracker.latestBlockTime
 	if blockTs.IsZero() {
 		_, err := m.updateChainHalt()
 		if err != nil {
 			return nil, time.Time{}, err
 		}
-		blockTs = m.blockTimeTracker.latestBlockTime.Load().(time.Time)
+		blockTs = m.blockTimeTracker.latestBlockTime
 	}
 
 	timestamp := getTimestamp(blockTs.UnixNano(), m.defaultTimeout)
@@ -931,9 +949,7 @@ func (m *manager) getSignedBytes(id string, unsignedTx client.TxBuilder, factory
 }
 
 func (m *manager) getLatestBlockHeight() int64 {
-	m.blockTimeTracker.mtx.Lock()
-	defer m.blockTimeTracker.mtx.Unlock()
-	return m.blockTimeTracker.latestBlockHeight
+	return m.getHeightFunc()
 }
 
 func (m *manager) isNodeBehind(syncInfo ctypes.SyncInfo) bool {
@@ -974,8 +990,7 @@ func (m *manager) updateChainHalt() (bool, error) {
 	defer m.blockTimeTracker.mtx.Unlock()
 
 	// Priority 1: Chain halt detection (chain stopped producing blocks)
-	if status.SyncInfo.LatestBlockTime.Equal(m.blockTimeTracker.latestBlockTime.Load().(time.Time)) &&
-		status.SyncInfo.LatestBlockHeight == m.blockTimeTracker.latestBlockHeight &&
+	if status.SyncInfo.LatestBlockTime.Equal(m.blockTimeTracker.latestBlockTime) &&
 		!m.blockTimeTracker.lastUpdatedAt.IsZero() && now.Sub(m.blockTimeTracker.lastUpdatedAt) > m.blockTimeTracker.maxBlockTimeout {
 		m.blockTimeTracker.pauseSending = true
 		m.blockTimeTracker.lastUpdatedAt = now
@@ -984,8 +999,7 @@ func (m *manager) updateChainHalt() (bool, error) {
 
 	// Priority 2: Node behind (catching up or stale block time)
 	if m.isNodeBehind(status.SyncInfo) {
-		m.blockTimeTracker.latestBlockHeight = status.SyncInfo.LatestBlockHeight
-		m.blockTimeTracker.latestBlockTime.Store(status.SyncInfo.LatestBlockTime)
+		m.blockTimeTracker.latestBlockTime = status.SyncInfo.LatestBlockTime
 		m.blockTimeTracker.pauseSending = true
 		m.blockTimeTracker.lastUpdatedAt = now
 		return true, nil
@@ -994,11 +1008,9 @@ func (m *manager) updateChainHalt() (bool, error) {
 	// Recovery: passed both checks, safe to send
 	m.blockTimeTracker.pauseSending = false
 
-	// Update tracker if newer block seen
-	if status.SyncInfo.LatestBlockTime.After(m.blockTimeTracker.latestBlockTime.Load().(time.Time)) &&
-		status.SyncInfo.LatestBlockHeight > m.blockTimeTracker.latestBlockHeight {
-		m.blockTimeTracker.latestBlockHeight = status.SyncInfo.LatestBlockHeight
-		m.blockTimeTracker.latestBlockTime.Store(status.SyncInfo.LatestBlockTime)
+	// Update block time for halt detection
+	if status.SyncInfo.LatestBlockTime.After(m.blockTimeTracker.latestBlockTime) {
+		m.blockTimeTracker.latestBlockTime = status.SyncInfo.LatestBlockTime
 	}
 
 	m.blockTimeTracker.lastUpdatedAt = now
