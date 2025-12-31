@@ -18,7 +18,7 @@ const (
 func (k Keeper) CheckPocMessageTooLate(ctx sdk.Context, startBlockHeight int64, windowType PocWindowType) error {
 	currentBlockHeight := ctx.BlockHeight()
 
-	if startBlockHeight >= currentBlockHeight {
+	if startBlockHeight > currentBlockHeight {
 		// It may filter legit transaction if the node is behind (node lag / state sync),
 		// But hope that it will be propogated by other nodes
 		//TODO: In the next release, skip the filter on CheckTx, and enforce only on DeliverTx.
@@ -65,7 +65,7 @@ func (k Keeper) checkConfirmationPocMessageTooLate(ctx sdk.Context, event *types
 
 	switch windowType {
 	case PocWindowBatch:
-		if event.Phase > types.ConfirmationPoCPhase_CONFIRMATION_POC_GENERATION {
+		if currentBlockHeight > event.GetExchangeEnd(epochParams) {
 			k.Logger().Error(
 				"[ValidatePocPeriod] Confirmation PoC: outside batch submission window",
 				"currentBlockHeight", currentBlockHeight,
@@ -76,7 +76,7 @@ func (k Keeper) checkConfirmationPocMessageTooLate(ctx sdk.Context, event *types
 		}
 
 	case PocWindowValidation:
-		if event.Phase > types.ConfirmationPoCPhase_CONFIRMATION_POC_VALIDATION {
+		if currentBlockHeight > event.GetValidationEnd(epochParams) {
 			k.Logger().Error(
 				"[ValidatePocPeriod] Confirmation PoC: outside validation window",
 				"currentBlockHeight", currentBlockHeight,
