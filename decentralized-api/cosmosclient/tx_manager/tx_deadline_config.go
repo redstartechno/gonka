@@ -1,7 +1,7 @@
 package tx_manager
 
 // defaultMaxBlocks is the default deadline in blocks (500 blocks ≈ 40 minutes at 5s/block)
-const defaultMaxBlocks int64 = 500
+const defaultMaxBlocks int64 = 30
 
 // deadlineByMsgType defines message-specific deadlines based on chain epoch parameters
 var deadlineByMsgType = map[string]int64{
