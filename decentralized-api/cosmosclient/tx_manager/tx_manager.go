@@ -475,12 +475,17 @@ func (m *manager) sendTxs() error {
 	logging.Info("Tx manager: sending txs: run in background", types.Messages)
 
 	_, err := m.natsJetStream.Subscribe(server.TxsToSendStream, func(msg *nats.Msg) {
-		if halt, err := m.updateChainHalt(); err != nil || halt {
-			logging.Warn("node paused, delaying tx processing", types.Messages,
-				"latest_block_timestamp", m.blockTimeTracker.latestBlockTime.Load().(time.Time))
-			msg.NakWithDelay(5 * time.Second)
-			return
+		for {
+			if halt, err := m.updateChainHalt(); err != nil || halt {
+				logging.Warn("node paused, waiting to process tx", types.Messages,
+					"latest_block_timestamp", m.blockTimeTracker.latestBlockTime.Load().(time.Time))
+				msg.InProgress()
+				time.Sleep(5 * time.Second)
+				continue
+			}
+			break
 		}
+
 		txId := msg.Header.Get(idHeader)
 		txHash := msg.Header.Get(hashHeader)
 
@@ -594,11 +599,15 @@ func (m *manager) sendTxs() error {
 func (m *manager) observeTxs() error {
 	logging.Info("Tx manager: observeTxs txs: run in background", types.Messages)
 	_, err := m.natsJetStream.Subscribe(server.TxsToObserveStream, func(msg *nats.Msg) {
-		if halt, err := m.updateChainHalt(); err != nil || halt {
-			logging.Warn("node paused, delaying tx observation", types.Messages,
-				"latest_block_timestamp", m.blockTimeTracker.latestBlockTime.Load().(time.Time))
-			msg.NakWithDelay(5 * time.Second)
-			return
+		for {
+			if halt, err := m.updateChainHalt(); err != nil || halt {
+				logging.Warn("node paused, waiting to observe tx", types.Messages,
+					"latest_block_timestamp", m.blockTimeTracker.latestBlockTime.Load().(time.Time))
+				msg.InProgress()
+				time.Sleep(5 * time.Second)
+				continue
+			}
+			break
 		}
 
 		var tx txInfo
