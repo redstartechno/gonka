@@ -2,6 +2,7 @@ package validation
 
 import (
 	"bytes"
+	"context"
 	"decentralized-api/apiconfig"
 	"decentralized-api/broker"
 	"decentralized-api/chainphase"
@@ -14,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"math/rand"
 	"net/http"
 	"net/url"
 	"sort"
@@ -387,6 +389,12 @@ func (s *InferenceValidator) DetectMissedValidations(epochIndex uint64, seed int
 // This function uses the inference data already obtained and executes validations in parallel goroutines
 // It waits for all validations to complete before returning
 func (s *InferenceValidator) ExecuteRecoveryValidations(missedInferences []types.Inference) (int, error) {
+	// TODO: allow to send validation for previous epoch and then rollback changes
+	// Chain requires validator to be active in CURRENT epoch
+	if !s.isActiveInCurrentEpoch() {
+		logging.Info("Skipping validation recovery: not active participant in current epoch", types.ValidationRecovery)
+		return 0, nil
+	}
 
 	availableModels, err := s.getCurrentSupportedModels()
 	if err != nil {
@@ -645,6 +653,21 @@ func (s *InferenceValidator) isEpochStale(inferenceEpochId uint64) bool {
 	return epochState.LatestEpoch.EpochIndex >= inferenceEpochId+2
 }
 
+func (s *InferenceValidator) isActiveInCurrentEpoch() bool {
+	queryClient := s.recorder.NewInferenceQueryClient()
+	resp, err := queryClient.CurrentEpochGroupData(context.Background(), &types.QueryCurrentEpochGroupDataRequest{})
+	if err != nil {
+		return false
+	}
+	address := s.recorder.GetAddress()
+	for _, vw := range resp.EpochGroupData.ValidationWeights {
+		if vw.MemberAddress == address {
+			return true
+		}
+	}
+	return false
+}
+
 // isAlreadyValidated checks if this validator already submitted validation for the inference.
 // Used to avoid duplicate work when multiple sources trigger validation for same inference.
 func (s *InferenceValidator) isAlreadyValidated(inferenceId string, epochId uint64, recorder cosmosclient.InferenceCosmosClient) bool {
@@ -710,9 +733,10 @@ func (s *InferenceValidator) retrievePayloadsWithRetry(inf types.Inference) ([]b
 			"maxRetries", maxRetries,
 			"error", err)
 
-		// Wait between retries (skip sleep on final attempt since we're done)
+		// Wait between retries with random jitter (skip sleep on final attempt since we're done)
 		if attempt < maxRetries {
-			time.Sleep(retryInterval)
+			jitter := time.Duration(1+rand.Intn(120)) * time.Second
+			time.Sleep(retryInterval + jitter)
 		}
 	}
 

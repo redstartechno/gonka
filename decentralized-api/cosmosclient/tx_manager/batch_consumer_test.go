@@ -29,7 +29,7 @@ type mockTxManager struct {
 	mu             sync.Mutex
 }
 
-func (m *mockTxManager) SendBatchAsyncWithRetry(msgs []sdk.Msg) error {
+func (m *mockTxManager) SendBatchAsyncWithRetry(msgs []sdk.Msg, deadlineBlock ...int64) error {
 	m.mu.Lock()
 	m.sendBatchCalls = append(m.sendBatchCalls, msgs)
 	m.mu.Unlock()
@@ -42,7 +42,7 @@ func (m *mockTxManager) getBatchCalls() [][]sdk.Msg {
 	return m.sendBatchCalls
 }
 
-func (m *mockTxManager) SendTransactionAsyncWithRetry(sdk.Msg) (*sdk.TxResponse, error) {
+func (m *mockTxManager) SendTransactionAsyncWithRetry(sdk.Msg, ...int64) (*sdk.TxResponse, error) {
 	return &sdk.TxResponse{}, nil
 }
 func (m *mockTxManager) SendTransactionAsyncNoRetry(sdk.Msg) (*sdk.TxResponse, error) {
