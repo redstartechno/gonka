@@ -100,6 +100,20 @@ func startTestNatsServer(t *testing.T) (*server.Server, nats.JetStreamContext) {
 	})
 	require.NoError(t, err)
 
+	_, err = js.AddStream(&nats.StreamConfig{
+		Name:     "txs_batch_poc_batch",
+		Subjects: []string{"txs_batch_poc_batch"},
+		Storage:  nats.MemoryStorage,
+	})
+	require.NoError(t, err)
+
+	_, err = js.AddStream(&nats.StreamConfig{
+		Name:     "txs_batch_poc_validation",
+		Subjects: []string{"txs_batch_poc_validation"},
+		Storage:  nats.MemoryStorage,
+	})
+	require.NoError(t, err)
+
 	t.Cleanup(func() {
 		nc.Close()
 		ns.Shutdown()
@@ -224,11 +238,37 @@ func TestBatchConsumer_SeparateQueues(t *testing.T) {
 		require.NoError(t, err)
 	}
 
+	// Publish 3 PoC batch messages
+	for i := 0; i < 3; i++ {
+		msg := &inference.MsgSubmitPocBatch{
+			Creator:                  "creator",
+			PocStageStartBlockHeight: 1,
+			BatchId:                  uuid.New().String(),
+			Nonces:                   []int64{1},
+			Dist:                     []float64{0.1},
+			NodeId:                   "node",
+		}
+		err := consumer.PublishPocBatch(msg)
+		require.NoError(t, err)
+	}
+
+	// Publish 3 PoC validation messages
+	for i := 0; i < 3; i++ {
+		msg := &inference.MsgSubmitPocValidation{
+			Creator:                  "creator",
+			ParticipantAddress:       "participant",
+			PocStageStartBlockHeight: 1,
+			FraudDetected:            false,
+		}
+		err := consumer.PublishPocValidation(msg)
+		require.NoError(t, err)
+	}
+
 	time.Sleep(500 * time.Millisecond)
 
-	// Should have 2 batch calls (one for start, one for finish)
+	// Should have 4 batch calls (one for each queue type)
 	calls := mockMgr.getBatchCalls()
-	assert.Len(t, calls, 2)
+	assert.Len(t, calls, 4)
 }
 
 func TestBatchConsumer_Persistence(t *testing.T) {

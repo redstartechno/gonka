@@ -361,12 +361,18 @@ func (icc *InferenceCosmosClient) BankBalances(ctx context.Context, address stri
 
 func (icc *InferenceCosmosClient) SubmitPocBatch(transaction *inference.MsgSubmitPocBatch) error {
 	transaction.Creator = icc.Address
+	if icc.batchingEnabled {
+		return icc.batchConsumer.PublishPocBatch(transaction)
+	}
 	_, err := icc.manager.SendTransactionAsyncWithRetry(transaction)
 	return err
 }
 
 func (icc *InferenceCosmosClient) SubmitPoCValidation(transaction *inference.MsgSubmitPocValidation) error {
 	transaction.Creator = icc.Address
+	if icc.batchingEnabled {
+		return icc.batchConsumer.PublishPocValidation(transaction)
+	}
 	_, err := icc.manager.SendTransactionAsyncWithRetry(transaction)
 	return err
 }
