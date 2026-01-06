@@ -22,6 +22,7 @@ message Params {
   ConfirmationPoCParams confirmation_poc_params = 9;
   GenesisGuardianParams genesis_guardian_params = 10;
   DeveloperAccessParams developer_access_params = 11;
+  ParticipantAccessParams participant_access_params = 12;
 }
 
 message GenesisOnlyParams {
@@ -272,4 +273,14 @@ message DeveloperAccessParams {
   int64 until_block_height = 1;
   // allowed_developer_addresses are the bech32 account addresses allowed to request inferences before until_block_height.
   repeated string allowed_developer_addresses = 2;
+}
+
+message ParticipantAccessParams {
+  option (gogoproto.equal) = true;
+  // new_participant_registration_start_height blocks creation of NEW participants while current_height < new_participant_registration_start_height.
+  // (i.e. registration opens at new_participant_registration_start_height). Set to 0 to disable.
+  int64 new_participant_registration_start_height = 1;
+  // blocked_participant_addresses are bech32 account addresses that are not allowed to participate in PoC
+  // (submit PoC batches or validations).
+  repeated string blocked_participant_addresses = 2;
 }

@@ -11,6 +11,7 @@ const defaultGenesisGuardianNetworkMaturityThreshold int64 = 2_000_000 // 2M
 const defaultGenesisGuardianNetworkMaturityMinHeight int64 = 0
 
 const defaultDeveloperAccessUntilBlockHeight int64 = 0
+const defaultNewParticipantRegistrationStartHeight int64 = 0
 
 // GetParams get all parameters as types.Params
 func (k Keeper) GetParams(ctx context.Context) (params types.Params) {
@@ -162,4 +163,45 @@ func (k Keeper) IsAllowedDeveloper(ctx context.Context, developerAddress string)
 		}
 	}
 	return false
+}
+
+func (k Keeper) GetParticipantAccessParams(ctx context.Context) *types.ParticipantAccessParams {
+	return k.GetParams(ctx).ParticipantAccessParams
+}
+
+// IsNewParticipantRegistrationClosed returns true iff NEW participant registration is closed at this height.
+// Semantics: registration is blocked while current height < endHeight (i.e. opens at endHeight).
+// Existing participants may still update their keys/URL.
+func (k Keeper) IsNewParticipantRegistrationClosed(ctx context.Context, height int64) bool {
+	p := k.GetParticipantAccessParams(ctx)
+	if p == nil {
+		return false
+	}
+	start := p.NewParticipantRegistrationStartHeight
+	if start == 0 {
+		start = defaultNewParticipantRegistrationStartHeight
+	}
+	if start == 0 {
+		return false
+	}
+	return height < start
+}
+
+// IsPoCParticipantBlocked returns true if the address is blocked from participating in PoC.
+// Uses a map for O(1) membership checks (map build is O(n) per call).
+func (k Keeper) IsPoCParticipantBlocked(ctx context.Context, address string) bool {
+	p := k.GetParticipantAccessParams(ctx)
+	if p == nil {
+		return false
+	}
+	list := p.BlockedParticipantAddresses
+	if len(list) == 0 {
+		return false
+	}
+	blocked := make(map[string]struct{}, len(list))
+	for _, a := range list {
+		blocked[a] = struct{}{}
+	}
+	_, ok := blocked[address]
+	return ok
 }

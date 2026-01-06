@@ -94,9 +94,13 @@ func DefaultParams() Params {
 			GuardianAddresses: nil,
 		},
 		DeveloperAccessParams: &DeveloperAccessParams{
-			UntilBlockHeight:          0, // disabled by default
+			UntilBlockHeight: 0, // disabled by default
 			// Note: proto encoding does not preserve empty-vs-nil for repeated fields; keep nil to match round-trips.
 			AllowedDeveloperAddresses: nil,
+		},
+		ParticipantAccessParams: &ParticipantAccessParams{
+			NewParticipantRegistrationStartHeight: 0,   // disabled by default
+			BlockedParticipantAddresses:           nil, // keep nil to match proto round-trips
 		},
 	}
 }
@@ -377,6 +381,12 @@ func (p Params) Validate() error {
 	if p.DeveloperAccessParams != nil {
 		if p.DeveloperAccessParams.UntilBlockHeight < 0 {
 			return fmt.Errorf("developer access until block height cannot be negative")
+		}
+	}
+
+	if p.ParticipantAccessParams != nil {
+		if p.ParticipantAccessParams.NewParticipantRegistrationStartHeight < 0 {
+			return fmt.Errorf("new participant registration start height cannot be negative")
 		}
 	}
 	return nil
