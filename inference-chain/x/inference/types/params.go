@@ -87,6 +87,15 @@ func DefaultParams() Params {
 		CollateralParams:      DefaultCollateralParams(),
 		BitcoinRewardParams:   DefaultBitcoinRewardParams(),
 		DynamicPricingParams:  DefaultDynamicPricingParams(),
+		GenesisGuardianParams: &GenesisGuardianParams{
+			NetworkMaturityThreshold: 2_000_000,
+			NetworkMaturityMinHeight: 0,
+			GuardianAddresses:        []string{},
+		},
+		DeveloperAccessParams: &DeveloperAccessParams{
+			UntilBlockHeight:          0, // disabled by default
+			AllowedDeveloperAddresses: []string{},
+		},
 	}
 }
 
@@ -352,6 +361,21 @@ func (p Params) Validate() error {
 	}
 	if err := p.DynamicPricingParams.Validate(); err != nil {
 		return err
+	}
+
+	if p.GenesisGuardianParams != nil {
+		if p.GenesisGuardianParams.NetworkMaturityThreshold < 0 {
+			return fmt.Errorf("genesis guardian network maturity threshold cannot be negative")
+		}
+		if p.GenesisGuardianParams.NetworkMaturityMinHeight < 0 {
+			return fmt.Errorf("genesis guardian network maturity min height cannot be negative")
+		}
+	}
+
+	if p.DeveloperAccessParams != nil {
+		if p.DeveloperAccessParams.UntilBlockHeight < 0 {
+			return fmt.Errorf("developer access until block height cannot be negative")
+		}
 	}
 	return nil
 }

@@ -39,7 +39,7 @@ func CreateUpgradeHandler(
 			fromVM["capability"] = mm.Modules["capability"].(module.HasConsensusVersion).ConsensusVersion()
 		}
 
-		if err := setNewPocParams(ctx, k); err != nil {
+		if err := setV0_2_7Params(ctx, k); err != nil {
 			return nil, err
 		}
 
@@ -57,10 +57,35 @@ func CreateUpgradeHandler(
 	}
 }
 
-func setNewPocParams(ctx context.Context, k keeper.Keeper) error {
+func setV0_2_7Params(ctx context.Context, k keeper.Keeper) error {
 	params, err := k.GetParamsSafe(ctx)
 	if err != nil {
 		return err
+	}
+
+	// Genesis guardian maturity gating + guardian address migration (genesis-only -> governance params).
+	//
+	// - threshold: 20,000,000
+	// - min height: 3,000,000
+	// - guardian addresses: copied from legacy GenesisOnlyParams if present
+	if params.GenesisGuardianParams == nil {
+		params.GenesisGuardianParams = &types.GenesisGuardianParams{}
+	}
+	params.GenesisGuardianParams.NetworkMaturityThreshold = 20_000_000
+	params.GenesisGuardianParams.NetworkMaturityMinHeight = 3_000_000
+
+	if legacy, found := k.GetGenesisOnlyParams(ctx); found {
+		// Only overwrite if legacy has something (avoid wiping if already set by governance earlier).
+		if len(legacy.GenesisGuardianAddresses) > 0 && len(params.GenesisGuardianParams.GuardianAddresses) == 0 {
+			params.GenesisGuardianParams.GuardianAddresses = legacy.GenesisGuardianAddresses
+		}
+	}
+
+	// Developer access gating: restrict inference requests to a developer allowlist until a fixed cutoff height.
+	// NOTE: 2,222,222 is roughly ~2 weeks after the upgrade at typical block times.
+	params.DeveloperAccessParams = &types.DeveloperAccessParams{
+		UntilBlockHeight:          2_222_222,
+		AllowedDeveloperAddresses: []string{"gonka1ktl3kkn9l68c9amanu8u4868mcjmtsr5tgzmjk"}, // placeholder; update before the upgrade
 	}
 
 	return k.SetParams(ctx, params)

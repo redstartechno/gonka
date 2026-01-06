@@ -20,6 +20,8 @@ message Params {
   DynamicPricingParams dynamic_pricing_params = 7;
   BandwidthLimitsParams bandwidth_limits_params = 8;
   ConfirmationPoCParams confirmation_poc_params = 9;
+  GenesisGuardianParams genesis_guardian_params = 10;
+  DeveloperAccessParams developer_access_params = 11;
 }
 
 message GenesisOnlyParams {
@@ -251,4 +253,23 @@ message ConfirmationPoCParams {
 
   // upgrade_protection_window is blocks before/after upgrade to skip confirmation PoC (default: 500)
   int64 upgrade_protection_window = 4;
+}
+
+message GenesisGuardianParams {
+  option (gogoproto.equal) = true;
+  // network_maturity_threshold is the minimum total network power required for the network to be considered "mature".
+  int64 network_maturity_threshold = 1;
+  // network_maturity_min_height is the minimum block height required for the network to be considered "mature".
+  int64 network_maturity_min_height = 2;
+  // guardian_addresses are the validator operator addresses treated as genesis guardians.
+  repeated string guardian_addresses = 3;
+}
+
+message DeveloperAccessParams {
+  option (gogoproto.equal) = true;
+  // until_block_height limits inference requests to allowed_developer_addresses while current_height < until_block_height.
+  // Set to 0 to disable gating.
+  int64 until_block_height = 1;
+  // allowed_developer_addresses are the bech32 account addresses allowed to request inferences before until_block_height.
+  repeated string allowed_developer_addresses = 2;
 }

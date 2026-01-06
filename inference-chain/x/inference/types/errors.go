@@ -57,4 +57,5 @@ var (
 	ErrSignatureInFuture                     = sdkerrors.Register(ModuleName, 1151, "signature is in the future")
 	ErrValidationPayloadDeprecated           = sdkerrors.Register(ModuleName, 1152, "validation response payload is deprecated")
 	ErrBridgeAddressNotFound                 = sdkerrors.Register(ModuleName, 1153, "bridge addresses not found")
+	ErrDeveloperNotAllowlisted               = sdkerrors.Register(ModuleName, 1154, "developer is not allowlisted to request inference at this height")
 )

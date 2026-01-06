@@ -214,6 +214,12 @@ func (s *Server) postChat(ctx echo.Context) error {
 		return ErrNoModelSpecified
 	}
 
+	// Developer access gating: before a configured cutoff height, only allowlisted developers may use the public API
+	// for both transfer-agent and executor request paths.
+	if err := s.enforceDeveloperAccessGate(ctx.Request().Context(), chatRequest.RequesterAddress); err != nil {
+		return err
+	}
+
 	if chatRequest.InferenceId != "" && chatRequest.Seed != "" {
 		logging.Info("Executor request", types.Inferences, "inferenceId", chatRequest.InferenceId, "seed", chatRequest.Seed)
 		return s.handleExecutorRequest(ctx, chatRequest, ctx.Response().Writer)
@@ -221,6 +227,35 @@ func (s *Server) postChat(ctx echo.Context) error {
 		logging.Info("Transfer request", types.Inferences, "requesterAddress", chatRequest.RequesterAddress)
 		return s.handleTransferRequest(ctx, chatRequest)
 	}
+}
+
+func (s *Server) enforceDeveloperAccessGate(ctx context.Context, requesterAddress string) error {
+	queryClient := s.recorder.NewInferenceQueryClient()
+	paramsResp, err := queryClient.Params(ctx, &types.QueryParamsRequest{})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusServiceUnavailable, "unable to fetch chain params")
+	}
+	p := paramsResp.Params.DeveloperAccessParams
+	if p == nil || p.UntilBlockHeight == 0 {
+		return nil
+	}
+
+	status, err := s.recorder.Status(context.Background())
+	if err != nil {
+		return echo.NewHTTPError(http.StatusServiceUnavailable, "unable to fetch chain status")
+	}
+	currentHeight := status.SyncInfo.LatestBlockHeight
+	if currentHeight >= p.UntilBlockHeight {
+		return nil
+	}
+
+	for _, a := range p.AllowedDeveloperAddresses {
+		if a == requesterAddress {
+			return nil
+		}
+	}
+
+	return echo.NewHTTPError(http.StatusForbidden, fmt.Sprintf("inference requests are restricted until block height %d", p.UntilBlockHeight))
 }
 
 func (s *Server) handleTransferRequest(ctx echo.Context, request *ChatRequest) error {

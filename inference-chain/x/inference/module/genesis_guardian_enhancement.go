@@ -27,7 +27,13 @@ func ShouldApplyGenesisGuardianEnhancement(ctx context.Context, k keeper.Keeper,
 	}
 
 	// Enhancement only applies if network is below maturity threshold
-	if k.IsNetworkMature(ctx, totalNetworkPower) {
+	var height int64
+	if direct, ok := ctx.(sdk.Context); ok {
+		height = direct.BlockHeight()
+	} else {
+		height = sdk.UnwrapSDKContext(ctx).BlockHeight()
+	}
+	if k.InNetworkMature(ctx, height, totalNetworkPower) {
 		return false
 	}
 
