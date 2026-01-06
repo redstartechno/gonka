@@ -240,7 +240,7 @@ func (s *Server) enforceDeveloperAccessGate(ctx context.Context, requesterAddres
 		return nil
 	}
 
-	status, err := s.recorder.Status(context.Background())
+	status, err := s.recorder.Status(ctx)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusServiceUnavailable, "unable to fetch chain status")
 	}
