@@ -85,9 +85,9 @@ func (k msgServer) Validation(goCtx context.Context, msg *types.MsgValidation) (
 	)
 	needsRevalidation := false
 
-	epochGroup, err := k.GetCurrentEpochGroup(ctx)
+	epochGroup, err := k.GetEpochGroup(ctx, inference.EpochId, "")
 	if err != nil {
-		k.LogError("Failed to get current epoch group", types.Validation, "error", err)
+		k.LogError("Failed to get epoch group", types.Validation, "error", err, "epochIndex", inference.EpochId)
 		return nil, err
 	}
 
