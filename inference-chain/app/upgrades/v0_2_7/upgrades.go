@@ -3244,7 +3244,23 @@ var (
 	}
 
 	// Bounty Program
-	bountyProgramRewards = []BountyReward{}
+	bountyProgramRewards = []BountyReward{
+		// Bug Bounty: PoC Validation Sampling Predictability
+		{
+			Address: "TMP",
+			Amount:  10_000_000_000,
+		},
+		// Bug Bounty: Non Determinism in denom
+		{
+			Address: "TMP",
+			Amount:  5_000_000_000,
+		},
+		// Bug Bounty: Low-VRAM GPUs
+		{
+			Address: "TMP",
+			Amount:  3_500_000_000,
+		},
+	}
 )
 
 func CreateUpgradeHandler(
