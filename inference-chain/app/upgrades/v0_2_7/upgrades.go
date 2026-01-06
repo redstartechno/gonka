@@ -3252,13 +3252,13 @@ var (
 		},
 		// Bug Bounty: Non Determinism in denom
 		{
-			Address: "TMP",
-			Amount:  5_000_000_000,
+			Address: "gonka1z0phwa33ggyzs4djmntsahcjjrjqjyyjsg8f86",
+			Amount:  12_000_000_000,
 		},
-		// Bug Bounty: Low-VRAM GPUs
+		// Bug Bounty: CICD Vulnerability
 		{
-			Address: "TMP",
-			Amount:  3_500_000_000,
+			Address: "gonka1wpan224906ant68frjd8vqreaxr87hudy2wvd9",
+			Amount:  2_500_000_000,
 		},
 	}
 )
