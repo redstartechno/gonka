@@ -84,6 +84,18 @@
           "inference_pruning_max": "0",
           "poc_pruning_max": "0"
         },
+        "validation_params": {
+          "binom_test_p0": {
+            "value": "4",
+            "exponent": -1
+          }
+        },
+        "poc_params": {
+          "weight_scale_factor": {
+            "value": "25",
+            "exponent": -1
+          }
+        },
         "bandwidth_limits_params": {
           "estimated_limits_per_block_kb": "10752",
           "kb_per_input_token": {
@@ -93,7 +105,8 @@
           "kb_per_output_token": {
             "value": "64",
             "exponent": "-2"
-          }
+          },
+          "max_inferences_per_block": "1000"
         }
       },
       "model_list": [
