@@ -75,7 +75,7 @@ func (k Keeper) transferUnclaimedSettleAmountToGovernance(ctx context.Context, s
 			k.LogError("Error transferring unclaimed settle amount coins to governance", types.Settle, "error", err, "participant", settleAmount.Participant, "amount", totalCoins)
 			return err
 		}
-		k.SafeLogSubAccountTransaction(ctx, govtypes.ModuleName, types.ModuleName, types.SettleSubAccount, int64(totalCoins), reason)
+		k.SafeLogSubAccountTransaction(ctx, types.ModuleName, settleAmount.Participant, types.SettleSubAccount, totalCoins, reason)
 		k.LogInfo("Transferred unclaimed settle amount to governance", types.Settle, "participant", settleAmount.Participant, "amount", totalCoins, "reason", reason)
 	}
 	return nil
