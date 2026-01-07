@@ -446,6 +446,11 @@ var (
 			Address: "gonka1v0uvvhrxje6zqeyqqransjulw8h6wfkhmut5s2",
 			Amount:  609_661_462_180,
 		},
+		// 277_273_832_267 + 300_364_513_815 (epoch + additional)
+		{
+			Address: "gonka1gr8njjad9rwfmay75xvkr6dmtkky3e3fwceuxq",
+			Amount:  577_638_346_083,
+		},
 		// 275_865_755_252 + 298_839_175_615 (epoch + additional)
 		{
 			Address: "gonka1f47q2ppldw5f9wkfv7xgwhvmptd27knqrl8xr4",
@@ -540,6 +545,11 @@ var (
 		{
 			Address: "gonka1ycmm7dsxa6sg09x2yg05elta6wwcj3mk6em45l",
 			Amount:  426_934_139_413,
+		},
+		// 202_704_420_331 + 219_585_144_991 (epoch + additional)
+		{
+			Address: "gonka1060g3x0qxkarfvupav5srccyuht95swyl0kpzc",
+			Amount:  422_289_565_323,
 		},
 		// 202_528_410_704 + 219_394_477_716 (epoch + additional)
 		{
@@ -673,12 +683,12 @@ var (
 		},
 		// 322_857_141_842 (additional only, already claimed)
 		{
-			Address: "gonka1lnus3x4dy0ze8naktrldft5edx4e36qc53yxjf",
+			Address: "gonka1nluanlq02cg8qrwyqn2qm2zf0mmlyqdevtf66a",
 			Amount:  322_857_141_842,
 		},
 		// 322_857_141_842 (additional only, already claimed)
 		{
-			Address: "gonka1nluanlq02cg8qrwyqn2qm2zf0mmlyqdevtf66a",
+			Address: "gonka1lnus3x4dy0ze8naktrldft5edx4e36qc53yxjf",
 			Amount:  322_857_141_842,
 		},
 		// 322_529_899_655 (additional only, already claimed)
@@ -768,32 +778,32 @@ var (
 		},
 		// 319_322_926_221 (additional only, already claimed)
 		{
-			Address: "gonka1rn5jll76utekvhjaxpqa4mwap3twnknnd6fv0c",
+			Address: "gonka10qpuqx5xcp4l4yjfh49gdcedgjsh3eazjm470v",
 			Amount:  319_322_926_221,
 		},
 		// 319_322_926_221 (additional only, already claimed)
 		{
-			Address: "gonka10qpuqx5xcp4l4yjfh49gdcedgjsh3eazjm470v",
+			Address: "gonka1rn5jll76utekvhjaxpqa4mwap3twnknnd6fv0c",
 			Amount:  319_322_926_221,
-		},
-		// 319_192_029_346 (additional only, already claimed)
-		{
-			Address: "gonka1vnmmnq4x9f7d3kume6xq2fh8x3mdye25gclzln",
-			Amount:  319_192_029_346,
 		},
 		// 319_192_029_346 (additional only, already claimed)
 		{
 			Address: "gonka1hvat7x6qspwh5vw2pynwcdh57kc6xjl8g67ljx",
 			Amount:  319_192_029_346,
 		},
-		// 318_733_890_284 (additional only, already claimed)
+		// 319_192_029_346 (additional only, already claimed)
 		{
-			Address: "gonka13uuqfsenjazwu6am5fctzscar364s240zek5st",
-			Amount:  318_733_890_284,
+			Address: "gonka1vnmmnq4x9f7d3kume6xq2fh8x3mdye25gclzln",
+			Amount:  319_192_029_346,
 		},
 		// 318_733_890_284 (additional only, already claimed)
 		{
 			Address: "gonka1cn7jka3lx0ex0dxwdcfeaxkqfjl2as080mx90k",
+			Amount:  318_733_890_284,
+		},
+		// 318_733_890_284 (additional only, already claimed)
+		{
+			Address: "gonka13uuqfsenjazwu6am5fctzscar364s240zek5st",
 			Amount:  318_733_890_284,
 		},
 		// 318_144_854_348 (additional only, already claimed)
@@ -843,12 +853,12 @@ var (
 		},
 		// 317_228_576_223 (additional only, already claimed)
 		{
-			Address: "gonka1jrwj2hqjwy5ulgkpdsdv6gwch7x4alnj88wmm5",
+			Address: "gonka1ntlp35e8cyylh5fjmlzt0qvkhyjszsuwngd6ka",
 			Amount:  317_228_576_223,
 		},
 		// 317_228_576_223 (additional only, already claimed)
 		{
-			Address: "gonka1ntlp35e8cyylh5fjmlzt0qvkhyjszsuwngd6ka",
+			Address: "gonka1jrwj2hqjwy5ulgkpdsdv6gwch7x4alnj88wmm5",
 			Amount:  317_228_576_223,
 		},
 		// 317_097_679_349 (additional only, already claimed)
@@ -858,12 +868,12 @@ var (
 		},
 		// 317_032_230_911 (additional only, already claimed)
 		{
-			Address: "gonka1x8pupvvcgcn00kguy9umycj98qgqehwlxt6l93",
+			Address: "gonka1jvp4r2dx3t0d736fmxy5ncgwp0w3kdy063m5ps",
 			Amount:  317_032_230_911,
 		},
 		// 317_032_230_911 (additional only, already claimed)
 		{
-			Address: "gonka1jvp4r2dx3t0d736fmxy5ncgwp0w3kdy063m5ps",
+			Address: "gonka1x8pupvvcgcn00kguy9umycj98qgqehwlxt6l93",
 			Amount:  317_032_230_911,
 		},
 		// 316_770_437_162 (additional only, already claimed)
@@ -878,12 +888,12 @@ var (
 		},
 		// 315_985_055_912 (additional only, already claimed)
 		{
-			Address: "gonka1xrcdrdjy0s0e5nhy6nw3tcm9vrzn347qtct4p2",
+			Address: "gonka1p3jfqqnjuu20zyk5t5d9xhemys2z7zxrln5vv0",
 			Amount:  315_985_055_912,
 		},
 		// 315_985_055_912 (additional only, already claimed)
 		{
-			Address: "gonka1p3jfqqnjuu20zyk5t5d9xhemys2z7zxrln5vv0",
+			Address: "gonka1xrcdrdjy0s0e5nhy6nw3tcm9vrzn347qtct4p2",
 			Amount:  315_985_055_912,
 		},
 		// 315_854_159_037 (additional only, already claimed)
@@ -908,12 +918,12 @@ var (
 		},
 		// 315_461_468_413 (additional only, already claimed)
 		{
-			Address: "gonka1rss07hzdm9d3y45fg3s3rnxjgzs26yt0h7khs6",
+			Address: "gonka1vmhd38lxl68lm76755u4xdxp5wqm646a2hasze",
 			Amount:  315_461_468_413,
 		},
 		// 315_461_468_413 (additional only, already claimed)
 		{
-			Address: "gonka1vmhd38lxl68lm76755u4xdxp5wqm646a2hasze",
+			Address: "gonka1rss07hzdm9d3y45fg3s3rnxjgzs26yt0h7khs6",
 			Amount:  315_461_468_413,
 		},
 		// 315_134_226_226 (additional only, already claimed)
@@ -1048,12 +1058,12 @@ var (
 		},
 		// 307_214_965_296 (additional only, already claimed)
 		{
-			Address: "gonka1l5y7amaux93wgd60wn0446h97ezl3vjd6sy025",
+			Address: "gonka14ntugumwzhdlkc66qlzczdmfa02fcm4pcldtwz",
 			Amount:  307_214_965_296,
 		},
 		// 307_214_965_296 (additional only, already claimed)
 		{
-			Address: "gonka14ntugumwzhdlkc66qlzczdmfa02fcm4pcldtwz",
+			Address: "gonka1l5y7amaux93wgd60wn0446h97ezl3vjd6sy025",
 			Amount:  307_214_965_296,
 		},
 		// 307_018_619_984 (additional only, already claimed)
@@ -1171,11 +1181,6 @@ var (
 			Address: "gonka1qhzauckmv78r9wpsr6lvjku5g70hmktgv2ku7d",
 			Amount:  300_604_673_116,
 		},
-		// 300_364_513_815 (additional only, already claimed)
-		{
-			Address: "gonka1gr8njjad9rwfmay75xvkr6dmtkky3e3fwceuxq",
-			Amount:  300_364_513_815,
-		},
 		// 300_342_879_366 (additional only, already claimed)
 		{
 			Address: "gonka1v765pascdp3v6qqtpdrcqm8qwdwq4hxa85gu5z",
@@ -1208,12 +1213,12 @@ var (
 		},
 		// 298_968_462_180 (additional only, already claimed)
 		{
-			Address: "gonka1sn2fuds6qh5dhrdp7afdyepmr6lcpwvsuwzlye",
+			Address: "gonka1r9u4nyprt7ym64pdea4a7wpjf446c0zsmphqx9",
 			Amount:  298_968_462_180,
 		},
 		// 298_968_462_180 (additional only, already claimed)
 		{
-			Address: "gonka1r9u4nyprt7ym64pdea4a7wpjf446c0zsmphqx9",
+			Address: "gonka1sn2fuds6qh5dhrdp7afdyepmr6lcpwvsuwzlye",
 			Amount:  298_968_462_180,
 		},
 		// 298_510_323_118 (additional only, already claimed)
@@ -1253,12 +1258,12 @@ var (
 		},
 		// 297_266_802_808 (additional only, already claimed)
 		{
-			Address: "gonka1k3lva2jsxu5qx30f65yxdlcey8d6f3unmy2gks",
+			Address: "gonka1r4zuhduduwqzyw4a5y5y5aw57sj9jl56qpp7pk",
 			Amount:  297_266_802_808,
 		},
 		// 297_266_802_808 (additional only, already claimed)
 		{
-			Address: "gonka1r4zuhduduwqzyw4a5y5y5aw57sj9jl56qpp7pk",
+			Address: "gonka1k3lva2jsxu5qx30f65yxdlcey8d6f3unmy2gks",
 			Amount:  297_266_802_808,
 		},
 		// 297_201_354_369 (additional only, already claimed)
@@ -1308,12 +1313,12 @@ var (
 		},
 		// 294_387_071_560 (additional only, already claimed)
 		{
-			Address: "gonka1rpszx3te4396yyplpl7lmcqngcwtk5vw0t57ym",
+			Address: "gonka1707yvgk9wgpzrp35wd84mcps4pujelx36n5du9",
 			Amount:  294_387_071_560,
 		},
 		// 294_387_071_560 (additional only, already claimed)
 		{
-			Address: "gonka1707yvgk9wgpzrp35wd84mcps4pujelx36n5du9",
+			Address: "gonka1rpszx3te4396yyplpl7lmcqngcwtk5vw0t57ym",
 			Amount:  294_387_071_560,
 		},
 		// 293_994_380_936 (additional only, already claimed)
@@ -1443,12 +1448,12 @@ var (
 		},
 		// 287_384_088_755 (additional only, already claimed)
 		{
-			Address: "gonka12fnudtsmw6heu6t982rnk8c5lgpgz4wmvwd75s",
+			Address: "gonka1aevup75mz4q3vd89ljkqjlrkxvfpwk3dtvtvq2",
 			Amount:  287_384_088_755,
 		},
 		// 287_384_088_755 (additional only, already claimed)
 		{
-			Address: "gonka1aevup75mz4q3vd89ljkqjlrkxvfpwk3dtvtvq2",
+			Address: "gonka12fnudtsmw6heu6t982rnk8c5lgpgz4wmvwd75s",
 			Amount:  287_384_088_755,
 		},
 		// 287_122_295_006 (additional only, already claimed)
@@ -1568,12 +1573,12 @@ var (
 		},
 		// 282_082_765_324 (additional only, already claimed)
 		{
-			Address: "gonka1strn82prjujtuh0dkpt024a4j49qgf37dq83dn",
+			Address: "gonka1rzchltn9xn5ysur4c6x89xvtuuddzccvt8zqrw",
 			Amount:  282_082_765_324,
 		},
 		// 282_082_765_324 (additional only, already claimed)
 		{
-			Address: "gonka1rzchltn9xn5ysur4c6x89xvtuuddzccvt8zqrw",
+			Address: "gonka1strn82prjujtuh0dkpt024a4j49qgf37dq83dn",
 			Amount:  282_082_765_324,
 		},
 		// 282_082_765_324 (additional only, already claimed)
@@ -1613,12 +1618,12 @@ var (
 		},
 		// 279_137_585_639 (additional only, already claimed)
 		{
-			Address: "gonka1uw0kpk6hcmm0sh05l27sq6m5max7pg0n2ptsuk",
+			Address: "gonka1yaqxj5hxmme0q7m2wutngne0fdyaajv83p558f",
 			Amount:  279_137_585_639,
 		},
 		// 279_137_585_639 (additional only, already claimed)
 		{
-			Address: "gonka1yaqxj5hxmme0q7m2wutngne0fdyaajv83p558f",
+			Address: "gonka1uw0kpk6hcmm0sh05l27sq6m5max7pg0n2ptsuk",
 			Amount:  279_137_585_639,
 		},
 		// 278_744_895_015 (additional only, already claimed)
@@ -1653,12 +1658,12 @@ var (
 		},
 		// 277_435_926_266 (additional only, already claimed)
 		{
-			Address: "gonka129wh6ap5m5v0skcxvdcgn5nrfa8d0v5jwfz83p",
+			Address: "gonka12gmwdxjwyqs8y2cxjzrnza8jtf2pyp34udp893",
 			Amount:  277_435_926_266,
 		},
 		// 277_435_926_266 (additional only, already claimed)
 		{
-			Address: "gonka12gmwdxjwyqs8y2cxjzrnza8jtf2pyp34udp893",
+			Address: "gonka129wh6ap5m5v0skcxvdcgn5nrfa8d0v5jwfz83p",
 			Amount:  277_435_926_266,
 		},
 		// 276_323_302_829 (additional only, already claimed)
@@ -1728,12 +1733,12 @@ var (
 		},
 		// 271_414_670_023 (additional only, already claimed)
 		{
-			Address: "gonka1uup559m63mjcq6wyewff2su0e2wv5lsyyrcrll",
+			Address: "gonka1j4zdyxve2f9fkj8d2nx2cvg09wv67cy7xucm0h",
 			Amount:  271_414_670_023,
 		},
 		// 271_414_670_023 (additional only, already claimed)
 		{
-			Address: "gonka1j4zdyxve2f9fkj8d2nx2cvg09wv67cy7xucm0h",
+			Address: "gonka1uup559m63mjcq6wyewff2su0e2wv5lsyyrcrll",
 			Amount:  271_414_670_023,
 		},
 		// 271_021_979_397 (additional only, already claimed)
@@ -1853,12 +1858,12 @@ var (
 		},
 		// 261_335_610_658 (additional only, already claimed)
 		{
-			Address: "gonka1c7fjlg6p7l0ynydyzkzzkxdwue7y864tytj02g",
+			Address: "gonka1jve3qdmmea6kgcl4y5r3hhll3lm0zuz7kutqft",
 			Amount:  261_335_610_658,
 		},
 		// 261_335_610_658 (additional only, already claimed)
 		{
-			Address: "gonka1jve3qdmmea6kgcl4y5r3hhll3lm0zuz7kutqft",
+			Address: "gonka1c7fjlg6p7l0ynydyzkzzkxdwue7y864tytj02g",
 			Amount:  261_335_610_658,
 		},
 		// 260_681_126_283 (additional only, already claimed)
@@ -1975,11 +1980,6 @@ var (
 		{
 			Address: "gonka1xk4mz0avlmvzser49tfrcgsjglq4a8u05j55p6",
 			Amount:  227_367_871_632,
-		},
-		// 219_585_144_991 (additional only, already claimed)
-		{
-			Address: "gonka1060g3x0qxkarfvupav5srccyuht95swyl0kpzc",
-			Amount:  219_585_144_991,
 		},
 		// 215_129_013_832 (additional only, already claimed)
 		{
@@ -2178,12 +2178,12 @@ var (
 		},
 		// 76_681_527_459 + 83_067_376_122 (epoch + additional)
 		{
-			Address: "gonka1mc59jg0j8exezfcv6lrgfyfrpzyehwtjvz5nju",
+			Address: "gonka1lrnzluw7jqsyt883z2540882zczlnpa7cm3454",
 			Amount:  159_748_903_582,
 		},
 		// 76_681_527_459 + 83_067_376_122 (epoch + additional)
 		{
-			Address: "gonka1lrnzluw7jqsyt883z2540882zczlnpa7cm3454",
+			Address: "gonka1mc59jg0j8exezfcv6lrgfyfrpzyehwtjvz5nju",
 			Amount:  159_748_903_582,
 		},
 		// 75_918_819_076 + 82_241_151_264 (epoch + additional)
@@ -2298,12 +2298,12 @@ var (
 		},
 		// 138_488_893_602 (additional only, already claimed)
 		{
-			Address: "gonka1qyw37eedekdrhu9937k2ewvh5ql99qlmsv3nj4",
+			Address: "gonka1pp7y8xc4qshmn24k3kkj4ymxwj88aq3hkj60de",
 			Amount:  138_488_893_602,
 		},
 		// 138_488_893_602 (additional only, already claimed)
 		{
-			Address: "gonka1pp7y8xc4qshmn24k3kkj4ymxwj88aq3hkj60de",
+			Address: "gonka1qyw37eedekdrhu9937k2ewvh5ql99qlmsv3nj4",
 			Amount:  138_488_893_602,
 		},
 		// 137_441_718_602 (additional only, already claimed)
@@ -2428,12 +2428,12 @@ var (
 		},
 		// 93_198_574_899 (additional only, already claimed)
 		{
-			Address: "gonka1s49nsfqljwk8er0h8ph720yw9u6u77hqsh8g79",
+			Address: "gonka1lh0danzlvxm5qtaly7myqd3n5sus0fq92n8shx",
 			Amount:  93_198_574_899,
 		},
 		// 93_198_574_899 (additional only, already claimed)
 		{
-			Address: "gonka1lh0danzlvxm5qtaly7myqd3n5sus0fq92n8shx",
+			Address: "gonka1s49nsfqljwk8er0h8ph720yw9u6u77hqsh8g79",
 			Amount:  93_198_574_899,
 		},
 		// 92_085_951_464 (additional only, already claimed)
@@ -2848,12 +2848,12 @@ var (
 		},
 		// 30_171_729_654 (additional only, already claimed)
 		{
-			Address: "gonka17et3ctw6t4d5ylnuc2kwc8xrlwk69y0cggzjqm",
+			Address: "gonka1pzdzdgd3auppy7x8a73suxaucgjcutfevrwzjp",
 			Amount:  30_171_729_654,
 		},
 		// 30_171_729_654 (additional only, already claimed)
 		{
-			Address: "gonka1pzdzdgd3auppy7x8a73suxaucgjcutfevrwzjp",
+			Address: "gonka17et3ctw6t4d5ylnuc2kwc8xrlwk69y0cggzjqm",
 			Amount:  30_171_729_654,
 		},
 		// 29_779_039_030 (additional only, already claimed)
@@ -2863,12 +2863,12 @@ var (
 		},
 		// 29_582_693_718 (additional only, already claimed)
 		{
-			Address: "gonka14p0njxtlnx2c8zn570nvvaf730gnnkwvetlwj8",
+			Address: "gonka185kgdje9wjucxtkdu0nqhpqlwxutc5kc7nss8u",
 			Amount:  29_582_693_718,
 		},
 		// 29_582_693_718 (additional only, already claimed)
 		{
-			Address: "gonka185kgdje9wjucxtkdu0nqhpqlwxutc5kc7nss8u",
+			Address: "gonka14p0njxtlnx2c8zn570nvvaf730gnnkwvetlwj8",
 			Amount:  29_582_693_718,
 		},
 		// 14_077_173_590 + 15_249_485_920 (epoch + additional)
@@ -2903,12 +2903,12 @@ var (
 		},
 		// 28_666_415_593 (additional only, already claimed)
 		{
-			Address: "gonka1myqk82deh6wexqazulwaqm6x340vh8kch44qwl",
+			Address: "gonka16v0ut8km4ccfzr2ste4zeegzpwrvx70z7kpzyn",
 			Amount:  28_666_415_593,
 		},
 		// 28_666_415_593 (additional only, already claimed)
 		{
-			Address: "gonka16v0ut8km4ccfzr2ste4zeegzpwrvx70z7kpzyn",
+			Address: "gonka1myqk82deh6wexqazulwaqm6x340vh8kch44qwl",
 			Amount:  28_666_415_593,
 		},
 		// 28_600_967_156 (additional only, already claimed)
@@ -2928,12 +2928,12 @@ var (
 		},
 		// 27_946_482_782 (additional only, already claimed)
 		{
-			Address: "gonka1a32tfg0a3xe7zer9m3ttuxr57wdffpc82qnacq",
+			Address: "gonka199lgrq8l9xcqqnr0agajzl78c4dpfvwnsc4elm",
 			Amount:  27_946_482_782,
 		},
 		// 27_946_482_782 (additional only, already claimed)
 		{
-			Address: "gonka199lgrq8l9xcqqnr0agajzl78c4dpfvwnsc4elm",
+			Address: "gonka1a32tfg0a3xe7zer9m3ttuxr57wdffpc82qnacq",
 			Amount:  27_946_482_782,
 		},
 		// 27_881_034_345 (additional only, already claimed)
