@@ -3308,7 +3308,7 @@ func setV0_2_7Params(ctx context.Context, k keeper.Keeper) error {
 	if params.GenesisGuardianParams == nil {
 		params.GenesisGuardianParams = &types.GenesisGuardianParams{}
 	}
-	params.GenesisGuardianParams.NetworkMaturityThreshold = 20_000_000
+	params.GenesisGuardianParams.NetworkMaturityThreshold = 15_000_000
 	params.GenesisGuardianParams.NetworkMaturityMinHeight = 3_000_000
 
 	if legacy, found := k.GetGenesisOnlyParams(ctx); found {
