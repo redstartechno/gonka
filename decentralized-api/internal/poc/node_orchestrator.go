@@ -280,6 +280,9 @@ func (o *NodePoCOrchestratorImpl) getNodesForPocValidation(pocStageStartBlockHei
 			return nodes, nil
 		}
 
+		if attempt == POC_VALIDATE_GET_NODES_RETRIES-1 {
+			break
+		}
 		time.Sleep(POC_VALIDATE_GET_NODES_RETRY_DELAY)
 	}
 
