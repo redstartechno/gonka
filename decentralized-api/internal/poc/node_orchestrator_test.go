@@ -98,12 +98,9 @@ func TestGetNodesForPocValidationWithConfig_RetriesThenSuccess(t *testing.T) {
 		nodeBroker: fb,
 	}
 
-	nodes, err := orch.getNodesForPocValidationWithConfig(100, 2, 10*time.Millisecond)
-	if err != nil {
-		t.Fatalf("expected no error, got %v", err)
-	}
-	if len(nodes) != 0 {
-		t.Fatalf("expected no nodes when none are in PoC validation, got %d", len(nodes))
+	_, err := orch.getNodesForPocValidationWithConfig(100, 2, 10*time.Millisecond)
+	if err == nil {
+		t.Fatalf("expected error when no nodes are in PoC validation")
 	}
 
 	// Update state to PoC validating so the next attempt succeeds.
@@ -118,7 +115,7 @@ func TestGetNodesForPocValidationWithConfig_RetriesThenSuccess(t *testing.T) {
 		},
 	})
 
-	nodes, err = orch.getNodesForPocValidationWithConfig(100, 2, 10*time.Millisecond)
+	nodes, err := orch.getNodesForPocValidationWithConfig(100, 2, 10*time.Millisecond)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
