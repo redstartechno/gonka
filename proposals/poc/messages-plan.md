@@ -1,10 +1,28 @@
-# PoC v2 (Artifact-Based Proof of Compute) Integration Plan
+# PoC v2 Messages Design (Base Layer Only)
 
-This document describes the design for integrating PoC v2 across inference-chain, decentralized-api, and testermint.
+> **Scope**: This document covers only the **proto messages and keeper stubs** for PoC v2.
+> It does NOT cover the full PoC v2 switch, end-to-end integration, or migration from v1.
 
-## Overview
+This is the foundational layer for artifact-based proof of compute. The full integration
+(triggering v2 flows, epoch transitions, consensus logic) will be designed separately.
 
-PoC v2 introduces artifact-based proof of compute, where nodes generate vectors (artifacts) tied to nonces. The key design goals are:
+## What This Covers
+
+- Proto message definitions (`PoCArtifactV2`, `PoCArtifactBatchV2`, `PoCValidationV2`)
+- Chain RPCs for submission and querying
+- Keeper storage and retrieval functions
+- decentralized-api callback endpoints and DTOs
+- testermint mock mappings
+
+## What This Does NOT Cover
+
+- When/how v2 is triggered vs v1
+- Epoch-level PoC phase transitions
+- End-to-end validation flow orchestration
+- Migration strategy from v1 to v2
+- Consensus/reward calculation using v2 data
+
+## Design Goals
 
 1. **Minimal on-chain footprint** - Validations carry only `validated_weight`, no arrays
 2. **Batched submissions** - Validators can submit many participant validations in one tx

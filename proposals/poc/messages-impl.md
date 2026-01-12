@@ -1,6 +1,12 @@
-# PoC v2 Implementation Notes
+# PoC v2 Messages Implementation (Base Layer Only)
 
-This document contains concrete implementation details for the PoC v2 (artifact-based) integration.
+> **Scope**: This document covers the **implementation of proto messages and keeper stubs** only.
+> Full PoC v2 integration (flow orchestration, epoch transitions, v1→v2 switch) is NOT included.
+
+This is the foundational layer. The messages and storage are in place, but:
+- No code triggers v2 flows instead of v1
+- No epoch-level logic uses v2 data for consensus/rewards
+- No migration path from v1 to v2 is implemented
 
 ## Files Created/Modified
 
@@ -232,14 +238,25 @@ No changes to `poc_period_validation.go` or antehandler logic required; v2 messa
 
 ---
 
-## Future Work
+## Next Steps (Not Covered Here)
 
-**Off-chain artifacts transition:**
+The following are required for full PoC v2 integration (separate design docs):
+
+1. **Flow orchestration**: When to trigger v2 generation/validation vs v1
+2. **Epoch integration**: Use v2 validations in epoch reward calculations
+3. **v1→v2 migration**: Strategy for transitioning live network
+4. **Off-chain artifacts**: Move artifact storage off-chain (IPFS, S3)
+5. **Consensus logic**: Majority/median algorithm for `validated_weight`
+
+---
+
+## Notes on Off-Chain Transition
+
 The current implementation stores `PoCArtifactBatchV2` on-chain. In a future iteration:
 
-1. Artifact batches will be stored off-chain (e.g., IPFS, S3)
+1. Artifact batches will be stored off-chain
 2. Only `SubmitPocValidationsV2` messages will be submitted on-chain
-3. The `SubmitPocArtifactBatchV2` RPC and related types can be deprecated or removed
-4. Validators will fetch artifact batches from off-chain storage for validation
+3. The `SubmitPocArtifactBatchesV2` RPC can be deprecated
+4. Validators will fetch artifact batches from off-chain storage
 
-The `validated_weight` field in `PoCValidationV2` is designed to support this transition, as it captures the validator's attestation without requiring on-chain access to the original artifacts.
+The `validated_weight` field in `PoCValidationV2` is designed to support this transition.
