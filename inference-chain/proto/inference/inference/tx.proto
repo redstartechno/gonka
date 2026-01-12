@@ -12,6 +12,7 @@ import "inference/inference/training_task.proto";
 import "inference/inference/hardware_node.proto";
 import "inference/inference/network_node.proto";
 import "inference/inference/bridge.proto";
+import "inference/inference/poc_v2.proto";
 
 option go_package = "github.com/productscience/inference/x/inference/types";
 
@@ -32,6 +33,9 @@ service Msg {
   rpc ClaimRewards                     (MsgClaimRewards) returns (MsgClaimRewardsResponse);
   rpc SubmitPocBatch                   (MsgSubmitPocBatch) returns (MsgSubmitPocBatchResponse);
   rpc SubmitPocValidation              (MsgSubmitPocValidation) returns (MsgSubmitPocValidationResponse);
+  // PoC v2 (artifact-based) messages
+  rpc SubmitPocArtifactBatchesV2       (MsgSubmitPocArtifactBatchesV2) returns (MsgSubmitPocArtifactBatchesV2Response);
+  rpc SubmitPocValidationsV2           (MsgSubmitPocValidationsV2) returns (MsgSubmitPocValidationsV2Response);
   rpc SubmitSeed                       (MsgSubmitSeed) returns (MsgSubmitSeedResponse);
   rpc SubmitUnitOfComputePriceProposal (MsgSubmitUnitOfComputePriceProposal) returns (MsgSubmitUnitOfComputePriceProposalResponse);
   rpc RegisterModel                    (MsgRegisterModel) returns (MsgRegisterModelResponse);
@@ -223,6 +227,25 @@ message MsgSubmitPocValidation {
 }
 
 message MsgSubmitPocValidationResponse {}
+
+// PoC v2 (artifact-based) messages
+// Note: Current iteration stores artifacts on-chain; later iteration moves fully off-chain.
+
+message MsgSubmitPocArtifactBatchesV2 {
+  option (cosmos.msg.v1.signer) = "creator";
+  string creator = 1;
+  repeated PoCArtifactBatchV2 batches = 2;
+}
+
+message MsgSubmitPocArtifactBatchesV2Response {}
+
+message MsgSubmitPocValidationsV2 {
+  option (cosmos.msg.v1.signer) = "creator";
+  string creator = 1;
+  repeated PoCValidationV2 validations = 2;
+}
+
+message MsgSubmitPocValidationsV2Response {}
 
 message MsgSubmitSeed {
   option (cosmos.msg.v1.signer) = "creator";

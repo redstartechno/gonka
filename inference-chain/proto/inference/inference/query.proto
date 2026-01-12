@@ -33,6 +33,7 @@ import "inference/inference/mlnode_version.proto";
 import "inference/inference/excluded_participant.proto";
 import "inference/inference/confirmation_poc_event.proto";
 import "inference/inference/liquidity_pool.proto";
+import "inference/inference/poc_v2.proto";
 
 option go_package = "github.com/productscience/inference/x/inference/types";
 
@@ -116,6 +117,17 @@ service Query {
   // Queries a list of PocValidationsForStage items.
   rpc PocValidationsForStage (QueryPocValidationsForStageRequest) returns (QueryPocValidationsForStageResponse) {
     option (google.api.http).get = "/productscience/inference/inference/poc_validations_for_stage/{block_height}";
+
+  }
+
+  // PoC v2 queries
+  rpc PocV2BatchesForStage (QueryPocV2BatchesForStageRequest) returns (QueryPocV2BatchesForStageResponse) {
+    option (google.api.http).get = "/productscience/inference/inference/poc_v2_batches_for_stage/{block_height}";
+
+  }
+
+  rpc PocV2ValidationsForStage (QueryPocV2ValidationsForStageRequest) returns (QueryPocV2ValidationsForStageResponse) {
+    option (google.api.http).get = "/productscience/inference/inference/poc_v2_validations_for_stage/{block_height}";
 
   }
 
@@ -580,6 +592,38 @@ message PoCValidationsWithParticipants {
            string        pub_key        = 2;
            string        hex_pub_key    = 3;
   repeated PoCValidation poc_validation = 4 [(gogoproto.nullable) = false];
+}
+
+// PoC v2 query messages
+
+message QueryPocV2BatchesForStageRequest {
+  int64 block_height = 1;
+}
+
+message QueryPocV2BatchesForStageResponse {
+  repeated PoCBatchesWithParticipantsV2 poc_batch = 1 [(gogoproto.nullable) = false];
+}
+
+message PoCBatchesWithParticipantsV2 {
+           string              participant = 1;
+           string              pub_key     = 2;
+           string              hex_pub_key = 3;
+  repeated PoCArtifactBatchV2  poc_batch   = 4 [(gogoproto.nullable) = false];
+}
+
+message QueryPocV2ValidationsForStageRequest {
+  int64 block_height = 1;
+}
+
+message QueryPocV2ValidationsForStageResponse {
+  repeated PoCValidationsWithParticipantsV2 poc_validation = 1 [(gogoproto.nullable) = false];
+}
+
+message PoCValidationsWithParticipantsV2 {
+           string           participant    = 1;
+           string           pub_key        = 2;
+           string           hex_pub_key    = 3;
+  repeated PoCValidationV2  poc_validation = 4 [(gogoproto.nullable) = false];
 }
 
 message QueryGetCurrentEpochRequest {}

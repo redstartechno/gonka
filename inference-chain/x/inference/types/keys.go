@@ -58,7 +58,10 @@ var (
 	LiquidityPoolPrefix               = collections.NewPrefix(34)
 	LiquidityPoolApprovedTokensPrefix = collections.NewPrefix(35)
 	ParticipantAllowListPrefix        = collections.NewPrefix(36)
-	ParamsKey                         = []byte("p_inference")
+	// PoC v2 prefixes
+	PoCArtifactBatchV2Prefix  = collections.NewPrefix(37)
+	PoCValidationV2Prefix     = collections.NewPrefix(38)
+	ParamsKey                 = []byte("p_inference")
 )
 
 func KeyPrefix(p string) []byte {

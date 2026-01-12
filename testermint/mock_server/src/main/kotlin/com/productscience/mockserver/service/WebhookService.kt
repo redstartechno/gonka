@@ -149,4 +149,104 @@ class WebhookService(private val responseService: ResponseService) {
             logger.error("Error processing validate POC batch webhook: ${e.message}", e)
         }
     }
+
+    // ========== PoC v2 (artifact-based) webhook handlers ==========
+
+    /**
+     * Processes a webhook for PoC v2 init/generate endpoint.
+     * Sends artifact batches to the callback URL.
+     */
+    fun processGeneratePocV2Webhook(requestBody: String, hostName: HostName) {
+        try {
+            val jsonNode = mapper.readTree(requestBody)
+            val url = jsonNode.get("url")?.asText()
+            val publicKey = jsonNode.get("public_key")?.asText()
+            val blockHash = jsonNode.get("block_hash")?.asText()
+            val blockHeight = jsonNode.get("block_height")?.asInt()
+            val nodeId = jsonNode.get("node_id")?.asInt() ?: 0
+
+            logger.info("Processing PoC v2 generate webhook - URL: $url, PublicKey: $publicKey, BlockHeight: $blockHeight, NodeId: $nodeId")
+
+            if (url != null && publicKey != null && blockHash != null && blockHeight != null) {
+                val webhookUrl = "$url/generated"
+
+                // Get the weight from the ResponseService, default to 10 if not set
+                val weight = responseService.getPocResponseWeight(hostName) ?: 10L
+
+                // Generate deterministic artifact vectors (predictable for tests)
+                // Each vector is 24 bytes (12 fp16 values) base64-encoded to 32 chars
+                val artifacts = (1..weight.toInt()).map { nonce ->
+                    val vectorBytes = ByteArray(24) { i -> ((nonce * 2 + i) % 256).toByte() }
+                    val vectorB64 = java.util.Base64.getEncoder().encodeToString(vectorBytes)
+                    """{"nonce": $nonce, "vector_b64": "$vectorB64"}"""
+                }.joinToString(", ")
+
+                val webhookBody = """
+                    {
+                      "public_key": "$publicKey",
+                      "node_id": $nodeId,
+                      "block_hash": "$blockHash",
+                      "block_height": $blockHeight,
+                      "artifacts": [$artifacts],
+                      "encoding": {"dtype": "f16", "k_dim": 12, "endian": "le"}
+                    }
+                """.trimIndent()
+
+                logger.info("Sending PoC v2 generate webhook to $webhookUrl with ${weight.toInt()} artifacts")
+                sendDelayedWebhook(webhookUrl, webhookBody)
+            } else {
+                logger.warn("Missing required fields in PoC v2 generate webhook request: url=$url, publicKey=$publicKey, blockHash=$blockHash, blockHeight=$blockHeight")
+            }
+        } catch (e: Exception) {
+            logger.error("Error processing PoC v2 generate webhook: ${e.message}", e)
+        }
+    }
+
+    /**
+     * Processes a webhook for PoC v2 /generate (validation) endpoint.
+     * Sends validation results to the callback URL.
+     */
+    fun processValidatePocV2Webhook(requestBody: String) {
+        try {
+            val jsonNode = mapper.readTree(requestBody)
+            val url = jsonNode.get("url")?.asText()
+            val publicKey = jsonNode.get("public_key")?.asText()
+            val blockHash = jsonNode.get("block_hash")?.asText()
+            val blockHeight = jsonNode.get("block_height")?.asInt()
+            val nodeId = jsonNode.get("node_id")?.asInt() ?: 0
+            val nonces = jsonNode.get("nonces")
+
+            val nTotal = nonces?.size() ?: 10
+
+            logger.info("Processing PoC v2 validation webhook - PublicKey: $publicKey, BlockHeight: $blockHeight, nTotal: $nTotal")
+
+            // Determine callback URL
+            val webhookUrl = if (url != null) {
+                "$url/validated"
+            } else {
+                val keyName = System.getenv("KEY_NAME") ?: "localhost"
+                "http://$keyName-api:9100/v2/poc-artifacts/validated"
+            }
+
+            // Create validation result (happy path: no fraud)
+            val webhookBody = """
+                {
+                  "public_key": "$publicKey",
+                  "block_hash": "$blockHash",
+                  "block_height": $blockHeight,
+                  "node_id": $nodeId,
+                  "n_total": $nTotal,
+                  "n_mismatch": 0,
+                  "mismatch_nonces": [],
+                  "p_value": 1.0,
+                  "fraud_detected": false
+                }
+            """.trimIndent()
+
+            logger.info("Sending PoC v2 validation webhook to $webhookUrl with delay: ${validationWebhookDelay}ms")
+            sendDelayedWebhook(webhookUrl, webhookBody, delayMillis = validationWebhookDelay)
+        } catch (e: Exception) {
+            logger.error("Error processing PoC v2 validation webhook: ${e.message}", e)
+        }
+    }
 }

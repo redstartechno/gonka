@@ -128,6 +128,18 @@ func (m *MockCosmosMessageClient) SubmitPoCValidation(transaction *inference.Msg
 	return args.Error(0)
 }
 
+// PoC v2 (artifact-based) mock methods
+
+func (m *MockCosmosMessageClient) SubmitPocArtifactBatchesV2(transaction *inference.MsgSubmitPocArtifactBatchesV2) error {
+	args := m.Called(transaction)
+	return args.Error(0)
+}
+
+func (m *MockCosmosMessageClient) SubmitPocValidationsV2(transaction *inference.MsgSubmitPocValidationsV2) error {
+	args := m.Called(transaction)
+	return args.Error(0)
+}
+
 func (m *MockCosmosMessageClient) SubmitSeed(transaction *inference.MsgSubmitSeed) error {
 	args := m.Called(transaction)
 	return args.Error(0)

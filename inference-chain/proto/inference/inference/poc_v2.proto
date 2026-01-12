@@ -1,0 +1,32 @@
+syntax = "proto3";
+package inference.inference;
+
+option go_package = "github.com/productscience/inference/x/inference/types";
+
+// PoCArtifactV2 represents a single artifact from PoC v2 generation.
+// The vector is raw bytes; protocol-level convention: k_dim=12, fp16, little-endian.
+message PoCArtifactV2 {
+  int64 nonce = 1;
+  bytes vector = 2;
+}
+
+// PoCArtifactBatchV2 represents a batch of artifacts from a single node.
+// Note: No batch_id field. Keeper uses internal sequence for uniqueness.
+// Note: Current iteration stores on-chain; later iteration moves fully off-chain.
+message PoCArtifactBatchV2 {
+  string participant_address = 1;
+  int64 poc_stage_start_block_height = 2;
+  string node_id = 3;
+  repeated PoCArtifactV2 artifacts = 4;
+}
+
+// PoCValidationV2 represents a validator's attestation of a participant's PoC work.
+// validated_weight semantics:
+//   - -1 means reject/fraud
+//   - >=0 means accept (chain may derive actual weight from committed nonce count)
+message PoCValidationV2 {
+  string participant_address = 1;
+  string validator_participant_address = 2;
+  int64 poc_stage_start_block_height = 3;
+  int64 validated_weight = 4;
+}

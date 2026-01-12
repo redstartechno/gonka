@@ -207,6 +207,9 @@ type CosmosMessageClient interface {
 	SubmitNewUnfundedParticipant(transaction *inference.MsgSubmitNewUnfundedParticipant) error
 	SubmitPocBatch(transaction *inference.MsgSubmitPocBatch) error
 	SubmitPoCValidation(transaction *inference.MsgSubmitPocValidation) error
+	// PoC v2 (artifact-based) methods
+	SubmitPocArtifactBatchesV2(transaction *inference.MsgSubmitPocArtifactBatchesV2) error
+	SubmitPocValidationsV2(transaction *inference.MsgSubmitPocValidationsV2) error
 	SubmitSeed(transaction *inference.MsgSubmitSeed) error
 	ClaimRewards(transaction *inference.MsgClaimRewards) error
 	CreateTrainingTask(transaction *inference.MsgCreateTrainingTask) (*inference.MsgCreateTrainingTaskResponse, error)
@@ -373,6 +376,20 @@ func (icc *InferenceCosmosClient) SubmitPoCValidation(transaction *inference.Msg
 	if icc.batchingEnabled {
 		return icc.batchConsumer.PublishPocValidation(transaction)
 	}
+	_, err := icc.manager.SendTransactionAsyncWithRetry(transaction)
+	return err
+}
+
+// PoC v2 (artifact-based) methods
+
+func (icc *InferenceCosmosClient) SubmitPocArtifactBatchesV2(transaction *inference.MsgSubmitPocArtifactBatchesV2) error {
+	transaction.Creator = icc.Address
+	_, err := icc.manager.SendTransactionAsyncWithRetry(transaction)
+	return err
+}
+
+func (icc *InferenceCosmosClient) SubmitPocValidationsV2(transaction *inference.MsgSubmitPocValidationsV2) error {
+	transaction.Creator = icc.Address
 	_, err := icc.manager.SendTransactionAsyncWithRetry(transaction)
 	return err
 }
