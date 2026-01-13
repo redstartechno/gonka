@@ -96,6 +96,11 @@
             "exponent": -1
           }
         },
+        "poc_v2_params": {
+          "enabled": true,
+          "model_id": "Qwen/Qwen2.5-7B-Instruct",
+          "seq_len": 256
+        },
         "bandwidth_limits_params": {
           "estimated_limits_per_block_kb": "10752",
           "kb_per_input_token": {
