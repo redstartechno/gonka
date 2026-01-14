@@ -15,7 +15,7 @@ import (
 // Prefer setting via env for ops convenience, but keep the mechanism isolated so it can be removed later.
 const (
 	pocV2StartAllowedPubKeyEnv          = "POC_V2_START_PUBKEY"
-	pocV2StartAllowedPubKeyBase64       = "" // TODO: set in code if you truly want hardcoded-only
+	pocV2StartAllowedPubKeyBase64       = "A5m9wCLDGW4Mnye1YdmeyrWemnnxkrb2jPmVqUk66zMp"
 	pocV2StartSignatureTimestamp  int64 = 0
 )
 

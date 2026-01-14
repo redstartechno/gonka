@@ -2,12 +2,14 @@ package public
 
 import (
 	"decentralized-api/logging"
+	"net/http"
+	"syscall"
+	"time"
+
 	"github.com/cosmos/cosmos-sdk/client/grpc/cmtservice"
 	"github.com/cosmos/cosmos-sdk/version"
 	"github.com/labstack/echo/v4"
 	"github.com/productscience/inference/x/inference/types"
-	"net/http"
-	"time"
 )
 
 const pocApiVersion = "2.0.1"
@@ -23,9 +25,13 @@ func (s *Server) getVersions(ctx echo.Context) error {
 	}
 	nodeVersion := resp.ApplicationVersion
 
+	var rLimit syscall.Rlimit
+	_ = syscall.Getrlimit(syscall.RLIMIT_NOFILE, &rLimit)
+
 	return ctx.JSON(http.StatusOK, map[string]any{
-		"timestamp": time.Now().UTC().Format(time.RFC3339),
+		"timestamp":       time.Now().UTC().Format(time.RFC3339),
 		"poc_api_version": pocApiVersion,
+		"fd_limit":        rLimit.Cur,
 		"api_version": map[string]string{
 			"application_name": version.AppName,
 			"version":          version.Version,

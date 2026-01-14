@@ -34,6 +34,7 @@ type PoCInitGenerateRequestV2 struct {
 	Params PoCParamsV2 `json:"params"`
 
 	URL string `json:"url,omitempty"`
+	// BatchSize int `json:"batch_size,omitempty"`
 	// batch_size is intentionally omitted - MLNode will use its default
 }
 
