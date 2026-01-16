@@ -16,6 +16,7 @@ import (
 	pserver "decentralized-api/internal/server/public"
 	"decentralized-api/mlnodeclient"
 	"decentralized-api/payloadstorage"
+	"decentralized-api/pocartifacts"
 	"net"
 
 	"github.com/productscience/inference/api/inference/inference"
@@ -179,12 +180,20 @@ func main() {
 		3*time.Minute, // cache TTL
 	)
 
-	publicServer := pserver.NewServer(nodeBroker, config, recorder, trainingExecutor, blockQueue, chainPhaseTracker, payloadStore)
+	// Shared managed artifact store for off-chain PoC (used by both mlnode and public servers)
+	// Manages per-epoch directories with automatic pruning (retains last 3 epochs)
+	artifactStore := pocartifacts.NewManagedArtifactStore("/root/.dapi/data/poc-artifacts", 3)
+	defer artifactStore.Close()
+
+	// Flush artifacts to disk every 5 seconds
+	artifactStore.StartPeriodicFlush(ctx, 5*time.Second)
+
+	publicServer := pserver.NewServer(nodeBroker, config, recorder, trainingExecutor, blockQueue, chainPhaseTracker, payloadStore, pserver.WithArtifactStore(artifactStore))
 	publicServer.Start(addr)
 
 	addr = fmt.Sprintf(":%v", config.GetApiConfig().MLServerPort)
 	logging.Info("start ml server on addr", types.Server, "addr", addr)
-	mlServer := mlserver.NewServer(recorder, nodeBroker)
+	mlServer := mlserver.NewServer(recorder, nodeBroker, mlserver.WithArtifactStore(artifactStore))
 	mlServer.Start(addr)
 
 	addr = fmt.Sprintf(":%v", config.GetApiConfig().AdminServerPort)

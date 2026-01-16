@@ -64,25 +64,32 @@ func (s *Server) postGeneratedArtifactsV2(ctx echo.Context) error {
 
 	// Store artifacts locally if artifact store is configured (dual-write mode)
 	if s.artifactStore != nil {
-		storedCount := 0
-		for _, a := range body.Artifacts {
-			vectorBytes, _ := base64.StdEncoding.DecodeString(a.VectorB64)
-			err := s.artifactStore.Add(int32(a.Nonce), vectorBytes)
-			if err != nil {
-				if errors.Is(err, pocartifacts.ErrDuplicateNonce) {
-					logging.Debug("ArtifactBatchV2-callback. Duplicate nonce skipped", types.PoC,
-						"nonce", a.Nonce)
-					continue
+		epochStore, err := s.artifactStore.GetOrCreateStore(body.BlockHeight)
+		if err != nil {
+			logging.Error("ArtifactBatchV2-callback. Failed to get epoch store", types.PoC,
+				"blockHeight", body.BlockHeight, "error", err)
+		} else {
+			storedCount := 0
+			for _, a := range body.Artifacts {
+				vectorBytes, _ := base64.StdEncoding.DecodeString(a.VectorB64)
+				err := epochStore.Add(int32(a.Nonce), vectorBytes)
+				if err != nil {
+					if errors.Is(err, pocartifacts.ErrDuplicateNonce) {
+						logging.Debug("ArtifactBatchV2-callback. Duplicate nonce skipped", types.PoC,
+							"nonce", a.Nonce)
+						continue
+					}
+					logging.Error("ArtifactBatchV2-callback. Failed to store artifact locally", types.PoC,
+						"nonce", a.Nonce, "error", err)
+				} else {
+					storedCount++
 				}
-				logging.Error("ArtifactBatchV2-callback. Failed to store artifact locally", types.PoC,
-					"nonce", a.Nonce, "error", err)
-			} else {
-				storedCount++
 			}
+			logging.Debug("ArtifactBatchV2-callback. Stored artifacts locally", types.PoC,
+				"blockHeight", body.BlockHeight,
+				"storedCount", storedCount,
+				"totalCount", epochStore.Count())
 		}
-		logging.Debug("ArtifactBatchV2-callback. Stored artifacts locally", types.PoC,
-			"storedCount", storedCount,
-			"totalCount", s.artifactStore.Count())
 	}
 
 	// Use batch submission (wrapping single batch from this callback)

@@ -13,14 +13,14 @@ type Server struct {
 	e             *echo.Echo
 	recorder      cosmos_client.CosmosMessageClient
 	broker        *broker.Broker
-	artifactStore *pocartifacts.ArtifactStore // Optional: for off-chain PoC artifacts
+	artifactStore *pocartifacts.ManagedArtifactStore // Optional: for off-chain PoC artifacts
 }
 
 // ServerOption configures optional Server dependencies.
 type ServerOption func(*Server)
 
 // WithArtifactStore enables local artifact storage for off-chain PoC.
-func WithArtifactStore(store *pocartifacts.ArtifactStore) ServerOption {
+func WithArtifactStore(store *pocartifacts.ManagedArtifactStore) ServerOption {
 	return func(s *Server) {
 		s.artifactStore = store
 	}

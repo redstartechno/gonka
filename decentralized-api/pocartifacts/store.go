@@ -191,6 +191,11 @@ func (s *ArtifactStore) Flush() error {
 		return ErrStoreClosed
 	}
 
+	return s.flushLocked()
+}
+
+// flushLocked flushes buffered artifacts to disk. Caller must hold s.mu.
+func (s *ArtifactStore) flushLocked() error {
 	if len(s.buffer) == 0 {
 		return nil
 	}
@@ -315,12 +320,10 @@ func (s *ArtifactStore) Close() error {
 
 	s.closed = true
 
-	s.mu.Unlock()
-	if err := s.Flush(); err != nil {
-		s.mu.Lock()
+	// Use internal flush (no lock) since we already hold the lock
+	if err := s.flushLocked(); err != nil {
 		return fmt.Errorf("flush on close: %w", err)
 	}
-	s.mu.Lock()
 
 	var errs []error
 	if err := s.dataFile.Close(); err != nil {
