@@ -288,14 +288,9 @@ func createIntegrationTestSetup(reconcilialtionConfig *MlNodeReconciliationConfi
 		TimestampExpiration: 10,
 		TimestampAdvance:    10,
 	}
-	// v2 params disabled by default in tests (v1 flow)
-	pocV2Params := &types.PoCv2Params{
-		Enabled: false,
-	}
 	mockQueryClient.On("Params", mock.Anything, mock.Anything).Return(&types.QueryParamsResponse{
 		Params: types.Params{
 			ValidationParams: validationParams,
-			PocV2Params:      pocV2Params,
 		},
 	}, nil)
 
@@ -387,15 +382,12 @@ func (setup *IntegrationTestSetup) setLatestEpoch(blockHeight int64, epoch types
 		},
 		LatestEpoch: epoch,
 	}, nil)
-	// Re-add Params mock (needed for isPocV2Enabled check)
+	// Re-add Params mock
 	setup.MockQueryClient.On("Params", mock.Anything, mock.Anything).Return(&types.QueryParamsResponse{
 		Params: types.Params{
 			ValidationParams: &types.ValidationParams{
 				TimestampExpiration: 10,
 				TimestampAdvance:    10,
-			},
-			PocV2Params: &types.PoCv2Params{
-				Enabled: false,
 			},
 		},
 	}, nil)

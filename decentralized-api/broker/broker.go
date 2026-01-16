@@ -133,10 +133,10 @@ func (b *Broker) GetParticipantAddress() string {
 	return b.participantInfo.GetAddress()
 }
 
-const PoCv2ArtifactsBasePath = "/v2/poc-batches"
+const PoCv2BatchesBasePath = "/v2/poc-batches"
 
-func GetPocArtifactsV2GeneratedCallbackUrl(callbackUrl string) string {
-	return fmt.Sprintf("%s%s", callbackUrl, PoCv2ArtifactsBasePath)
+func GetPoCv2CallbackBaseURL(callbackUrl string) string {
+	return fmt.Sprintf("%s%s", callbackUrl, PoCv2BatchesBasePath)
 }
 
 type ModelArgs struct {
@@ -796,9 +796,8 @@ func hardwareEquals(a *types.HardwareNode, b *types.HardwareNode) bool {
 type pocParams struct {
 	startPoCBlockHeight int64
 	startPoCBlockHash   string
-	modelParams         *types.PoCModelParams
-	v2ModelId           string
-	v2SeqLen            int64
+	modelId             string
+	seqLen              int64
 }
 
 const reconciliationInterval = 30 * time.Second
@@ -1079,7 +1078,7 @@ func (b *Broker) prefetchPocParams(epochState chainphase.EpochState, nodesToDisp
 				startPoCBlockHeight: event.TriggerHeight,
 				startPoCBlockHash:   event.PocSeedBlockHash,
 			}
-			b.enrichWithV2Params(params)
+			b.enrichWithPocParams(params)
 			return params, nil
 		}
 
@@ -1094,19 +1093,19 @@ func (b *Broker) prefetchPocParams(epochState chainphase.EpochState, nodesToDisp
 	}
 }
 
-// enrichWithV2Params fetches PoCv2Params from chain and enriches pocParams if v2 is enabled.
-func (b *Broker) enrichWithV2Params(params *pocParams) {
+// enrichWithPocParams fetches PoC params from chain and enriches pocParams.
+func (b *Broker) enrichWithPocParams(params *pocParams) {
 	paramsResp, err := b.chainBridge.GetParams()
 	if err != nil {
-		logging.Warn("Failed to query chain params for v2 check", types.Nodes, "error", err)
+		logging.Warn("Failed to query chain params", types.Nodes, "error", err)
 		return
 	}
 
-	if paramsResp.Params.PocV2Params != nil {
-		params.v2ModelId = paramsResp.Params.PocV2Params.ModelId
-		params.v2SeqLen = paramsResp.Params.PocV2Params.SeqLen
-		logging.Info("PoC v2 is enabled, using v2 params", types.PoC,
-			"model_id", params.v2ModelId, "seq_len", params.v2SeqLen)
+	if paramsResp.Params.PocParams != nil {
+		params.modelId = paramsResp.Params.PocParams.ModelId
+		params.seqLen = paramsResp.Params.PocParams.SeqLen
+		logging.Info("Using PoC params", types.PoC,
+			"model_id", params.modelId, "seq_len", params.seqLen)
 	}
 }
 
@@ -1122,10 +1121,10 @@ func (b *Broker) getCommandForState(nodeState *NodeState, pocGenParams *pocParam
 					BlockHeight: pocGenParams.startPoCBlockHeight,
 					BlockHash:   pocGenParams.startPoCBlockHash,
 					PubKey:      b.participantInfo.GetPubKey(),
-					CallbackUrl: GetPocArtifactsV2GeneratedCallbackUrl(b.callbackUrl),
+					CallbackUrl: GetPoCv2CallbackBaseURL(b.callbackUrl),
 					TotalNodes:  totalNodes,
-					Model:       pocGenParams.v2ModelId,
-					SeqLen:      pocGenParams.v2SeqLen,
+					Model:       pocGenParams.modelId,
+					SeqLen:      pocGenParams.seqLen,
 				}
 			}
 			logging.Error("Cannot create StartPoCNodeCommand: missing PoC parameters", types.Nodes, "error", pocGenErr)
@@ -1167,28 +1166,12 @@ func (b *Broker) queryCurrentPoCParams(epochPoCStartHeight int64) (*pocParams, e
 		return nil, err
 	}
 
-	paramsResp, err := b.chainBridge.GetParams()
-	var modelParams *types.PoCModelParams
-	if err != nil {
-		logging.Warn("Failed to query chain params, will use default model params", types.Nodes, "error", err)
-	} else if paramsResp.Params.PocParams != nil {
-		modelParams = paramsResp.Params.PocParams.ModelParams
-	}
-
 	params := &pocParams{
 		startPoCBlockHeight: epochPoCStartHeight,
 		startPoCBlockHash:   hash,
-		modelParams:         modelParams,
 	}
 
-	// Check and enrich with v2 params if enabled
-	if paramsResp != nil && paramsResp.Params.PocV2Params != nil {
-		params.v2ModelId = paramsResp.Params.PocV2Params.ModelId
-		params.v2SeqLen = paramsResp.Params.PocV2Params.SeqLen
-		logging.Info("PoC v2 is enabled, using v2 params", types.PoC,
-			"model_id", params.v2ModelId, "seq_len", params.v2SeqLen)
-	}
-
+	b.enrichWithPocParams(params)
 	return params, nil
 }
 

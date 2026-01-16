@@ -13,8 +13,7 @@ import (
 )
 
 // postGeneratedArtifactsV2 handles PoC v2 artifact batch callbacks from MLNode.
-// Receives artifact batches and submits them to chain via MsgSubmitPocArtifactBatchesV2.
-// Note: Current iteration stores on-chain; later iteration moves fully off-chain.
+// Receives artifact batches and submits them to chain via MsgSubmitPocBatchesV2.
 func (s *Server) postGeneratedArtifactsV2(ctx echo.Context) error {
 	var body mlnodeclient.GeneratedArtifactBatchV2
 
@@ -29,28 +28,30 @@ func (s *Server) postGeneratedArtifactsV2(ctx echo.Context) error {
 		"nodeId", body.NodeId,
 		"artifactsCount", len(body.Artifacts))
 
-	// Look up node_id string from node number
-	var nodeId string
+	// Look up node_id string from node number (chain requires non-empty nodeId)
 	node, found := s.broker.GetNodeByNodeNum(uint64(body.NodeId))
-	if found {
-		nodeId = node.Id
-		logging.Info("ArtifactBatchV2-callback. Found node by node num", types.PoC,
-			"nodeId", nodeId,
-			"nodeNum", body.NodeId)
-	} else {
-		logging.Warn("ArtifactBatchV2-callback. Unknown NodeNum. Sending with empty nodeId",
-			types.PoC, "node_num", body.NodeId)
+	if !found {
+		logging.Error("ArtifactBatchV2-callback. Unknown NodeNum", types.PoC, "node_num", body.NodeId)
+		return echo.NewHTTPError(http.StatusBadRequest, "unknown node_num")
 	}
+	nodeId := node.Id
+	logging.Info("ArtifactBatchV2-callback. Found node by node num", types.PoC,
+		"nodeId", nodeId,
+		"nodeNum", body.NodeId)
 
 	// Convert artifacts from JSON format to proto format
 	protoArtifacts := make([]*inference.PoCArtifactV2, 0, len(body.Artifacts))
 	for _, a := range body.Artifacts {
-		// Decode base64 vector to bytes
 		vectorBytes, err := base64.StdEncoding.DecodeString(a.VectorB64)
 		if err != nil {
-			logging.Warn("ArtifactBatchV2-callback. Failed to decode artifact vector", types.PoC,
+			logging.Error("ArtifactBatchV2-callback. Failed to decode artifact vector", types.PoC,
 				"nonce", a.Nonce, "error", err)
-			continue
+			return echo.NewHTTPError(http.StatusBadRequest, "invalid base64 in artifact vector")
+		}
+		if len(vectorBytes) == 0 {
+			logging.Error("ArtifactBatchV2-callback. Empty artifact vector", types.PoC,
+				"nonce", a.Nonce)
+			return echo.NewHTTPError(http.StatusBadRequest, "empty artifact vector")
 		}
 		protoArtifacts = append(protoArtifacts, &inference.PoCArtifactV2{
 			Nonce:  a.Nonce,
@@ -59,8 +60,8 @@ func (s *Server) postGeneratedArtifactsV2(ctx echo.Context) error {
 	}
 
 	// Use batch submission (wrapping single batch from this callback)
-	msg := &inference.MsgSubmitPocArtifactBatchesV2{
-		Batches: []*inference.PoCArtifactBatchV2{
+	msg := &inference.MsgSubmitPocBatchesV2{
+		Batches: []*inference.PoCBatchV2{
 			{
 				PocStageStartBlockHeight: body.BlockHeight,
 				NodeId:                   nodeId,
@@ -69,12 +70,12 @@ func (s *Server) postGeneratedArtifactsV2(ctx echo.Context) error {
 		},
 	}
 
-	if err := s.recorder.SubmitPocArtifactBatchesV2(msg); err != nil {
-		logging.Error("ArtifactBatchV2-callback. Failed to submit MsgSubmitPocArtifactBatchesV2", types.PoC, "error", err)
+	if err := s.recorder.SubmitPocBatchesV2(msg); err != nil {
+		logging.Error("BatchV2-callback. Failed to submit MsgSubmitPocBatchesV2", types.PoC, "error", err)
 		return err
 	}
 
-	logging.Info("ArtifactBatchV2-callback. Submitted artifact batch", types.PoC,
+	logging.Info("BatchV2-callback. Submitted batch", types.PoC,
 		"blockHeight", body.BlockHeight,
 		"nodeId", nodeId,
 		"artifactsCount", len(protoArtifacts))
@@ -99,7 +100,8 @@ func (s *Server) postValidatedArtifactsV2(ctx echo.Context) error {
 		"fraudDetected", body.FraudDetected)
 
 	// Convert public key to bech32 address
-	address, err := cosmos_client.PubKeyToAddress(body.PublicKey)
+	// PoC validation provides hex-encoded public keys
+	address, err := cosmos_client.PubKeyHexToAddress(body.PublicKey)
 	if err != nil {
 		logging.Error("ValidatedArtifactsV2-callback. Failed to convert public key to address", types.PoC,
 			"publicKey", body.PublicKey,

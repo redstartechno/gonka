@@ -32,13 +32,11 @@ func NewServer(recorder cosmos_client.CosmosMessageClient, broker *broker.Broker
 	// keep old paths too for backward compatibility
 	g.POST("poc-batches/generated", s.postGeneratedBatches)
 	e.POST("/v1/poc-batches/generated", s.postGeneratedBatches)
+	e.POST("/v2/poc-batches/generated", s.postGeneratedArtifactsV2)
 
 	g.POST("poc-batches/validated", s.postValidatedBatches)
 	e.POST("/v1/poc-batches/validated", s.postValidatedBatches)
-
-	// PoC v2 (artifact-based) callback endpoints
-	e.POST("/v2/poc-artifacts/generated", s.postGeneratedArtifactsV2)
-	e.POST("/v2/poc-artifacts/validated", s.postValidatedArtifactsV2)
+	e.POST("/v2/poc-batches/validated", s.postValidatedArtifactsV2)
 	return s
 }
 

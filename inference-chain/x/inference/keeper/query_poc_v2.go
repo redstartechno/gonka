@@ -18,7 +18,7 @@ func (k Keeper) PocV2BatchesForStage(goCtx context.Context, req *types.QueryPocV
 
 	ctx := sdk.UnwrapSDKContext(goCtx)
 
-	pocBatches, err := k.GetPoCArtifactBatchesV2ByStage(ctx, req.BlockHeight)
+	pocBatches, err := k.GetPoCBatchesV2ByStage(ctx, req.BlockHeight)
 	if err != nil {
 		k.LogError("failed to get PoC v2 batches", types.PoC, "err", err)
 		return nil, status.Error(codes.Internal, "failed to get PoC v2 batches")

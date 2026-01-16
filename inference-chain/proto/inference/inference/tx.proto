@@ -33,8 +33,8 @@ service Msg {
   rpc ClaimRewards                     (MsgClaimRewards) returns (MsgClaimRewardsResponse);
   rpc SubmitPocBatch                   (MsgSubmitPocBatch) returns (MsgSubmitPocBatchResponse);
   rpc SubmitPocValidation              (MsgSubmitPocValidation) returns (MsgSubmitPocValidationResponse);
-  // PoC v2 (artifact-based) messages
-  rpc SubmitPocArtifactBatchesV2       (MsgSubmitPocArtifactBatchesV2) returns (MsgSubmitPocArtifactBatchesV2Response);
+  // PoC v2 (batch-based) messages
+  rpc SubmitPocBatchesV2               (MsgSubmitPocBatchesV2) returns (MsgSubmitPocBatchesV2Response);
   rpc SubmitPocValidationsV2           (MsgSubmitPocValidationsV2) returns (MsgSubmitPocValidationsV2Response);
   rpc SubmitSeed                       (MsgSubmitSeed) returns (MsgSubmitSeedResponse);
   rpc SubmitUnitOfComputePriceProposal (MsgSubmitUnitOfComputePriceProposal) returns (MsgSubmitUnitOfComputePriceProposalResponse);
@@ -228,16 +228,16 @@ message MsgSubmitPocValidation {
 
 message MsgSubmitPocValidationResponse {}
 
-// PoC v2 (artifact-based) messages
+// PoC v2 (batch-based) messages
 // Note: Current iteration stores artifacts on-chain; later iteration moves fully off-chain.
 
-message MsgSubmitPocArtifactBatchesV2 {
+message MsgSubmitPocBatchesV2 {
   option (cosmos.msg.v1.signer) = "creator";
   string creator = 1;
-  repeated PoCArtifactBatchV2 batches = 2;
+  repeated PoCBatchV2 batches = 2;
 }
 
-message MsgSubmitPocArtifactBatchesV2Response {}
+message MsgSubmitPocBatchesV2Response {}
 
 message MsgSubmitPocValidationsV2 {
   option (cosmos.msg.v1.signer) = "creator";

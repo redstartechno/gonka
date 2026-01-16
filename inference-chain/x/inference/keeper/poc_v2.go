@@ -8,18 +8,17 @@ import (
 	"github.com/productscience/inference/x/inference/types"
 )
 
-// SetPocArtifactBatchV2 stores a PoC v2 artifact batch.
-// Note: Current iteration stores on-chain; later iteration moves fully off-chain.
-func (k Keeper) SetPocArtifactBatchV2(ctx context.Context, batch types.PoCArtifactBatchV2) {
+// SetPocBatchV2 stores a PoC v2 batch.
+func (k Keeper) SetPocBatchV2(ctx context.Context, batch types.PoCBatchV2) {
 	addr := sdk.MustAccAddressFromBech32(batch.ParticipantAddress)
 	// Use node_id as the third key component (similar to batch_id in v1)
 	pk := collections.Join3(batch.PocStageStartBlockHeight, addr, batch.NodeId)
-	k.LogInfo("PoC v2: Storing artifact batch", types.PoC,
+	k.LogInfo("PoC v2: Storing batch", types.PoC,
 		"epoch", batch.PocStageStartBlockHeight,
 		"participant", batch.ParticipantAddress,
 		"node_id", batch.NodeId,
 		"artifacts_count", len(batch.Artifacts))
-	if err := k.PoCArtifactBatchesV2.Set(ctx, pk, batch); err != nil {
+	if err := k.PoCBatchesV2.Set(ctx, pk, batch); err != nil {
 		panic(err)
 	}
 }
@@ -39,11 +38,11 @@ func (k Keeper) SetPocValidationV2(ctx context.Context, validation types.PoCVali
 	}
 }
 
-// GetPoCArtifactBatchesV2ByStage collects all PoCArtifactBatchV2 grouped by participant for a specific epoch.
-func (k Keeper) GetPoCArtifactBatchesV2ByStage(ctx context.Context, pocStageStartBlockHeight int64) (map[string][]types.PoCArtifactBatchV2, error) {
-	result := make(map[string][]types.PoCArtifactBatchV2)
+// GetPoCBatchesV2ByStage collects all PoCBatchV2 grouped by participant for a specific epoch.
+func (k Keeper) GetPoCBatchesV2ByStage(ctx context.Context, pocStageStartBlockHeight int64) (map[string][]types.PoCBatchV2, error) {
+	result := make(map[string][]types.PoCBatchV2)
 
-	iter, err := k.PoCArtifactBatchesV2.Iterate(ctx, collections.NewPrefixedTripleRange[int64, sdk.AccAddress, string](pocStageStartBlockHeight))
+	iter, err := k.PoCBatchesV2.Iterate(ctx, collections.NewPrefixedTripleRange[int64, sdk.AccAddress, string](pocStageStartBlockHeight))
 	if err != nil {
 		return nil, err
 	}

@@ -457,7 +457,6 @@ func (d *OnNewBlockDispatcher) handlePhaseTransitions(epochState chainphase.Epoc
 				"trigger_height", event.TriggerHeight)
 
 			go func() {
-				logging.Info("Routing confirmation PoC to v2 validation orchestrator", types.PoC, "triggerHeight", event.TriggerHeight)
 				d.nodePocOrchestratorV2.ValidateReceivedArtifacts(event.TriggerHeight)
 			}()
 		}

@@ -27,15 +27,10 @@ func TestParticipantAccess_SubmitNewParticipant_NewRegistrationClosed(t *testing
 	require.ErrorIs(t, err, types.ErrNewParticipantRegistrationClosed)
 }
 
-func TestParticipantAccess_SubmitPocBatch_BlockedParticipant(t *testing.T) {
-	k, ms, ctx := setupMsgServer(t)
+// TestParticipantAccess_SubmitPocBatch_Deprecated verifies V1 PoC batch submission is deprecated
+func TestParticipantAccess_SubmitPocBatch_Deprecated(t *testing.T) {
+	_, ms, ctx := setupMsgServer(t)
 	sdkCtx := sdk.UnwrapSDKContext(ctx).WithBlockHeight(100)
-
-	params := k.GetParams(sdkCtx)
-	params.ParticipantAccessParams = &types.ParticipantAccessParams{
-		BlockedParticipantAddresses: []string{testutil.Executor},
-	}
-	require.NoError(t, k.SetParams(sdkCtx, params))
 
 	_, err := ms.SubmitPocBatch(sdkCtx, &types.MsgSubmitPocBatch{
 		Creator:                  testutil.Executor,
@@ -46,18 +41,13 @@ func TestParticipantAccess_SubmitPocBatch_BlockedParticipant(t *testing.T) {
 		NodeId:                   "node1",
 	})
 	require.Error(t, err)
-	require.ErrorIs(t, err, types.ErrParticipantBlocked)
+	require.ErrorIs(t, err, types.ErrDeprecated)
 }
 
-func TestParticipantAccess_SubmitPocValidation_BlockedValidatorOrParticipant(t *testing.T) {
-	k, ms, ctx := setupMsgServer(t)
+// TestParticipantAccess_SubmitPocValidation_Deprecated verifies V1 PoC validation submission is deprecated
+func TestParticipantAccess_SubmitPocValidation_Deprecated(t *testing.T) {
+	_, ms, ctx := setupMsgServer(t)
 	sdkCtx := sdk.UnwrapSDKContext(ctx).WithBlockHeight(100)
-
-	params := k.GetParams(sdkCtx)
-	params.ParticipantAccessParams = &types.ParticipantAccessParams{
-		BlockedParticipantAddresses: []string{testutil.Creator}, // validator in this msg
-	}
-	require.NoError(t, k.SetParams(sdkCtx, params))
 
 	_, err := ms.SubmitPocValidation(sdkCtx, &types.MsgSubmitPocValidation{
 		Creator:                  testutil.Creator,
@@ -68,5 +58,5 @@ func TestParticipantAccess_SubmitPocValidation_BlockedValidatorOrParticipant(t *
 		ReceivedDist:             []float64{0.1},
 	})
 	require.Error(t, err)
-	require.ErrorIs(t, err, types.ErrParticipantBlocked)
+	require.ErrorIs(t, err, types.ErrDeprecated)
 }

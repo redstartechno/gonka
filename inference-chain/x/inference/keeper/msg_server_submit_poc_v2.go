@@ -8,9 +8,8 @@ import (
 	"github.com/productscience/inference/x/inference/types"
 )
 
-// SubmitPocArtifactBatchesV2 handles submission of PoC v2 artifact batches from multiple nodes.
-// Note: Current iteration stores on-chain; later iteration moves fully off-chain.
-func (k msgServer) SubmitPocArtifactBatchesV2(goCtx context.Context, msg *types.MsgSubmitPocArtifactBatchesV2) (*types.MsgSubmitPocArtifactBatchesV2Response, error) {
+// SubmitPocBatchesV2 handles submission of PoC v2 batches from multiple nodes.
+func (k msgServer) SubmitPocBatchesV2(goCtx context.Context, msg *types.MsgSubmitPocBatchesV2) (*types.MsgSubmitPocBatchesV2Response, error) {
 	ctx := sdk.UnwrapSDKContext(goCtx)
 
 	// Participant access gating: blocklisted accounts cannot participate in PoC.
@@ -23,10 +22,22 @@ func (k msgServer) SubmitPocArtifactBatchesV2(goCtx context.Context, msg *types.
 
 	for i, batch := range msg.Batches {
 		if batch.NodeId == "" {
-			k.LogError(PocFailureTag+"[SubmitPocArtifactBatchesV2] NodeId is empty", types.PoC,
+			k.LogError(PocFailureTag+"[SubmitPocBatchesV2] NodeId is empty", types.PoC,
 				"participant", msg.Creator,
 				"batchIndex", i)
 			return nil, sdkerrors.Wrap(types.ErrPocNodeIdEmpty, "NodeId is empty")
+		}
+
+		// Validate artifact vectors are non-empty
+		for j, artifact := range batch.Artifacts {
+			if len(artifact.Vector) == 0 {
+				k.LogError(PocFailureTag+"[SubmitPocBatchesV2] Artifact vector is empty", types.PoC,
+					"participant", msg.Creator,
+					"batchIndex", i,
+					"artifactIndex", j,
+					"nonce", artifact.Nonce)
+				return nil, sdkerrors.Wrap(types.ErrPocArtifactVectorEmpty, "artifact vector is empty")
+			}
 		}
 
 		startBlockHeight := batch.PocStageStartBlockHeight
@@ -35,7 +46,7 @@ func (k msgServer) SubmitPocArtifactBatchesV2(goCtx context.Context, msg *types.
 		epochParams := k.Keeper.GetParams(goCtx).EpochParams
 		upcomingEpoch, found := k.Keeper.GetUpcomingEpoch(ctx)
 		if !found {
-			k.LogError(PocFailureTag+"[SubmitPocArtifactBatchesV2] Failed to get upcoming epoch", types.PoC,
+			k.LogError(PocFailureTag+"[SubmitPocBatchesV2] Failed to get upcoming epoch", types.PoC,
 				"participant", msg.Creator,
 				"batchIndex", i)
 			return nil, sdkerrors.Wrap(types.ErrUpcomingEpochNotFound, "Failed to get upcoming epoch")
@@ -43,7 +54,7 @@ func (k msgServer) SubmitPocArtifactBatchesV2(goCtx context.Context, msg *types.
 		epochContext := types.NewEpochContext(*upcomingEpoch, *epochParams)
 
 		if !epochContext.IsStartOfPocStage(startBlockHeight) {
-			k.LogError(PocFailureTag+"[SubmitPocArtifactBatchesV2] start block height mismatch", types.PoC,
+			k.LogError(PocFailureTag+"[SubmitPocBatchesV2] start block height mismatch", types.PoC,
 				"participant", msg.Creator,
 				"batchIndex", i,
 				"batch.PocStageStartBlockHeight", startBlockHeight,
@@ -52,7 +63,7 @@ func (k msgServer) SubmitPocArtifactBatchesV2(goCtx context.Context, msg *types.
 		}
 
 		if !epochContext.IsPoCExchangeWindow(currentBlockHeight) {
-			k.LogError(PocFailureTag+"[SubmitPocArtifactBatchesV2] PoC exchange window is closed", types.PoC,
+			k.LogError(PocFailureTag+"[SubmitPocBatchesV2] PoC exchange window is closed", types.PoC,
 				"participant", msg.Creator,
 				"batchIndex", i,
 				"currentBlockHeight", currentBlockHeight)
@@ -60,23 +71,23 @@ func (k msgServer) SubmitPocArtifactBatchesV2(goCtx context.Context, msg *types.
 		}
 
 		// Store the v2 batch with creator as participant
-		storedBatch := types.PoCArtifactBatchV2{
+		storedBatch := types.PoCBatchV2{
 			ParticipantAddress:       msg.Creator,
 			PocStageStartBlockHeight: startBlockHeight,
 			NodeId:                   batch.NodeId,
 			Artifacts:                batch.Artifacts,
 		}
 
-		k.SetPocArtifactBatchV2(ctx, storedBatch)
+		k.SetPocBatchV2(ctx, storedBatch)
 
-		k.LogInfo("[SubmitPocArtifactBatchesV2] Artifact batch stored", types.PoC,
+		k.LogInfo("[SubmitPocBatchesV2] Batch stored", types.PoC,
 			"participant", msg.Creator,
 			"startBlockHeight", startBlockHeight,
 			"nodeId", batch.NodeId,
 			"artifactsCount", len(batch.Artifacts))
 	}
 
-	return &types.MsgSubmitPocArtifactBatchesV2Response{}, nil
+	return &types.MsgSubmitPocBatchesV2Response{}, nil
 }
 
 // SubmitPocValidationsV2 handles batch submission of PoC v2 validations.

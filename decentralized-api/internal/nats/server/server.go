@@ -12,12 +12,12 @@ import (
 )
 
 const (
-	TxsToSendStream             = "txs_to_send"
-	TxsToObserveStream          = "txs_to_observe"
-	TxsBatchStartStream         = "txs_batch_start"
-	TxsBatchFinishStream        = "txs_batch_finish"
-	TxsBatchPocBatchStream      = "txs_batch_poc_batch"
-	TxsBatchPocValidationStream = "txs_batch_poc_validation"
+	TxsToSendStream            = "txs_to_send"
+	TxsToObserveStream         = "txs_to_observe"
+	TxsBatchStartStream        = "txs_batch_start"
+	TxsBatchFinishStream       = "txs_batch_finish"
+	TxsBatchPocV2Stream        = "txs_batch_poc_v2"
+	TxsBatchValidationV2Stream = "txs_batch_validation_v2"
 
 	storageDir    = "/root/.dapi/.nats"
 	defaultMaxAge = 24 * 60 * 60 // 24 hours
@@ -86,8 +86,8 @@ func (s *server) Start() error {
 		TxsToObserveStream,
 		TxsBatchStartStream,
 		TxsBatchFinishStream,
-		TxsBatchPocBatchStream,
-		TxsBatchPocValidationStream,
+		TxsBatchPocV2Stream,
+		TxsBatchValidationV2Stream,
 	})
 }
 

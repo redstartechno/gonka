@@ -482,83 +482,83 @@ func (x *fastReflection_PoCArtifactV2) ProtoMethods() *protoiface.Methods {
 	}
 }
 
-var _ protoreflect.List = (*_PoCArtifactBatchV2_4_list)(nil)
+var _ protoreflect.List = (*_PoCBatchV2_4_list)(nil)
 
-type _PoCArtifactBatchV2_4_list struct {
+type _PoCBatchV2_4_list struct {
 	list *[]*PoCArtifactV2
 }
 
-func (x *_PoCArtifactBatchV2_4_list) Len() int {
+func (x *_PoCBatchV2_4_list) Len() int {
 	if x.list == nil {
 		return 0
 	}
 	return len(*x.list)
 }
 
-func (x *_PoCArtifactBatchV2_4_list) Get(i int) protoreflect.Value {
+func (x *_PoCBatchV2_4_list) Get(i int) protoreflect.Value {
 	return protoreflect.ValueOfMessage((*x.list)[i].ProtoReflect())
 }
 
-func (x *_PoCArtifactBatchV2_4_list) Set(i int, value protoreflect.Value) {
+func (x *_PoCBatchV2_4_list) Set(i int, value protoreflect.Value) {
 	valueUnwrapped := value.Message()
 	concreteValue := valueUnwrapped.Interface().(*PoCArtifactV2)
 	(*x.list)[i] = concreteValue
 }
 
-func (x *_PoCArtifactBatchV2_4_list) Append(value protoreflect.Value) {
+func (x *_PoCBatchV2_4_list) Append(value protoreflect.Value) {
 	valueUnwrapped := value.Message()
 	concreteValue := valueUnwrapped.Interface().(*PoCArtifactV2)
 	*x.list = append(*x.list, concreteValue)
 }
 
-func (x *_PoCArtifactBatchV2_4_list) AppendMutable() protoreflect.Value {
+func (x *_PoCBatchV2_4_list) AppendMutable() protoreflect.Value {
 	v := new(PoCArtifactV2)
 	*x.list = append(*x.list, v)
 	return protoreflect.ValueOfMessage(v.ProtoReflect())
 }
 
-func (x *_PoCArtifactBatchV2_4_list) Truncate(n int) {
+func (x *_PoCBatchV2_4_list) Truncate(n int) {
 	for i := n; i < len(*x.list); i++ {
 		(*x.list)[i] = nil
 	}
 	*x.list = (*x.list)[:n]
 }
 
-func (x *_PoCArtifactBatchV2_4_list) NewElement() protoreflect.Value {
+func (x *_PoCBatchV2_4_list) NewElement() protoreflect.Value {
 	v := new(PoCArtifactV2)
 	return protoreflect.ValueOfMessage(v.ProtoReflect())
 }
 
-func (x *_PoCArtifactBatchV2_4_list) IsValid() bool {
+func (x *_PoCBatchV2_4_list) IsValid() bool {
 	return x.list != nil
 }
 
 var (
-	md_PoCArtifactBatchV2                              protoreflect.MessageDescriptor
-	fd_PoCArtifactBatchV2_participant_address          protoreflect.FieldDescriptor
-	fd_PoCArtifactBatchV2_poc_stage_start_block_height protoreflect.FieldDescriptor
-	fd_PoCArtifactBatchV2_node_id                      protoreflect.FieldDescriptor
-	fd_PoCArtifactBatchV2_artifacts                    protoreflect.FieldDescriptor
+	md_PoCBatchV2                              protoreflect.MessageDescriptor
+	fd_PoCBatchV2_participant_address          protoreflect.FieldDescriptor
+	fd_PoCBatchV2_poc_stage_start_block_height protoreflect.FieldDescriptor
+	fd_PoCBatchV2_node_id                      protoreflect.FieldDescriptor
+	fd_PoCBatchV2_artifacts                    protoreflect.FieldDescriptor
 )
 
 func init() {
 	file_inference_inference_poc_v2_proto_init()
-	md_PoCArtifactBatchV2 = File_inference_inference_poc_v2_proto.Messages().ByName("PoCArtifactBatchV2")
-	fd_PoCArtifactBatchV2_participant_address = md_PoCArtifactBatchV2.Fields().ByName("participant_address")
-	fd_PoCArtifactBatchV2_poc_stage_start_block_height = md_PoCArtifactBatchV2.Fields().ByName("poc_stage_start_block_height")
-	fd_PoCArtifactBatchV2_node_id = md_PoCArtifactBatchV2.Fields().ByName("node_id")
-	fd_PoCArtifactBatchV2_artifacts = md_PoCArtifactBatchV2.Fields().ByName("artifacts")
+	md_PoCBatchV2 = File_inference_inference_poc_v2_proto.Messages().ByName("PoCBatchV2")
+	fd_PoCBatchV2_participant_address = md_PoCBatchV2.Fields().ByName("participant_address")
+	fd_PoCBatchV2_poc_stage_start_block_height = md_PoCBatchV2.Fields().ByName("poc_stage_start_block_height")
+	fd_PoCBatchV2_node_id = md_PoCBatchV2.Fields().ByName("node_id")
+	fd_PoCBatchV2_artifacts = md_PoCBatchV2.Fields().ByName("artifacts")
 }
 
-var _ protoreflect.Message = (*fastReflection_PoCArtifactBatchV2)(nil)
+var _ protoreflect.Message = (*fastReflection_PoCBatchV2)(nil)
 
-type fastReflection_PoCArtifactBatchV2 PoCArtifactBatchV2
+type fastReflection_PoCBatchV2 PoCBatchV2
 
-func (x *PoCArtifactBatchV2) ProtoReflect() protoreflect.Message {
-	return (*fastReflection_PoCArtifactBatchV2)(x)
+func (x *PoCBatchV2) ProtoReflect() protoreflect.Message {
+	return (*fastReflection_PoCBatchV2)(x)
 }
 
-func (x *PoCArtifactBatchV2) slowProtoReflect() protoreflect.Message {
+func (x *PoCBatchV2) slowProtoReflect() protoreflect.Message {
 	mi := &file_inference_inference_poc_v2_proto_msgTypes[1]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -570,43 +570,43 @@ func (x *PoCArtifactBatchV2) slowProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-var _fastReflection_PoCArtifactBatchV2_messageType fastReflection_PoCArtifactBatchV2_messageType
-var _ protoreflect.MessageType = fastReflection_PoCArtifactBatchV2_messageType{}
+var _fastReflection_PoCBatchV2_messageType fastReflection_PoCBatchV2_messageType
+var _ protoreflect.MessageType = fastReflection_PoCBatchV2_messageType{}
 
-type fastReflection_PoCArtifactBatchV2_messageType struct{}
+type fastReflection_PoCBatchV2_messageType struct{}
 
-func (x fastReflection_PoCArtifactBatchV2_messageType) Zero() protoreflect.Message {
-	return (*fastReflection_PoCArtifactBatchV2)(nil)
+func (x fastReflection_PoCBatchV2_messageType) Zero() protoreflect.Message {
+	return (*fastReflection_PoCBatchV2)(nil)
 }
-func (x fastReflection_PoCArtifactBatchV2_messageType) New() protoreflect.Message {
-	return new(fastReflection_PoCArtifactBatchV2)
+func (x fastReflection_PoCBatchV2_messageType) New() protoreflect.Message {
+	return new(fastReflection_PoCBatchV2)
 }
-func (x fastReflection_PoCArtifactBatchV2_messageType) Descriptor() protoreflect.MessageDescriptor {
-	return md_PoCArtifactBatchV2
+func (x fastReflection_PoCBatchV2_messageType) Descriptor() protoreflect.MessageDescriptor {
+	return md_PoCBatchV2
 }
 
 // Descriptor returns message descriptor, which contains only the protobuf
 // type information for the message.
-func (x *fastReflection_PoCArtifactBatchV2) Descriptor() protoreflect.MessageDescriptor {
-	return md_PoCArtifactBatchV2
+func (x *fastReflection_PoCBatchV2) Descriptor() protoreflect.MessageDescriptor {
+	return md_PoCBatchV2
 }
 
 // Type returns the message type, which encapsulates both Go and protobuf
 // type information. If the Go type information is not needed,
 // it is recommended that the message descriptor be used instead.
-func (x *fastReflection_PoCArtifactBatchV2) Type() protoreflect.MessageType {
-	return _fastReflection_PoCArtifactBatchV2_messageType
+func (x *fastReflection_PoCBatchV2) Type() protoreflect.MessageType {
+	return _fastReflection_PoCBatchV2_messageType
 }
 
 // New returns a newly allocated and mutable empty message.
-func (x *fastReflection_PoCArtifactBatchV2) New() protoreflect.Message {
-	return new(fastReflection_PoCArtifactBatchV2)
+func (x *fastReflection_PoCBatchV2) New() protoreflect.Message {
+	return new(fastReflection_PoCBatchV2)
 }
 
 // Interface unwraps the message reflection interface and
 // returns the underlying ProtoMessage interface.
-func (x *fastReflection_PoCArtifactBatchV2) Interface() protoreflect.ProtoMessage {
-	return (*PoCArtifactBatchV2)(x)
+func (x *fastReflection_PoCBatchV2) Interface() protoreflect.ProtoMessage {
+	return (*PoCBatchV2)(x)
 }
 
 // Range iterates over every populated field in an undefined order,
@@ -614,28 +614,28 @@ func (x *fastReflection_PoCArtifactBatchV2) Interface() protoreflect.ProtoMessag
 // Range returns immediately if f returns false.
 // While iterating, mutating operations may only be performed
 // on the current field descriptor.
-func (x *fastReflection_PoCArtifactBatchV2) Range(f func(protoreflect.FieldDescriptor, protoreflect.Value) bool) {
+func (x *fastReflection_PoCBatchV2) Range(f func(protoreflect.FieldDescriptor, protoreflect.Value) bool) {
 	if x.ParticipantAddress != "" {
 		value := protoreflect.ValueOfString(x.ParticipantAddress)
-		if !f(fd_PoCArtifactBatchV2_participant_address, value) {
+		if !f(fd_PoCBatchV2_participant_address, value) {
 			return
 		}
 	}
 	if x.PocStageStartBlockHeight != int64(0) {
 		value := protoreflect.ValueOfInt64(x.PocStageStartBlockHeight)
-		if !f(fd_PoCArtifactBatchV2_poc_stage_start_block_height, value) {
+		if !f(fd_PoCBatchV2_poc_stage_start_block_height, value) {
 			return
 		}
 	}
 	if x.NodeId != "" {
 		value := protoreflect.ValueOfString(x.NodeId)
-		if !f(fd_PoCArtifactBatchV2_node_id, value) {
+		if !f(fd_PoCBatchV2_node_id, value) {
 			return
 		}
 	}
 	if len(x.Artifacts) != 0 {
-		value := protoreflect.ValueOfList(&_PoCArtifactBatchV2_4_list{list: &x.Artifacts})
-		if !f(fd_PoCArtifactBatchV2_artifacts, value) {
+		value := protoreflect.ValueOfList(&_PoCBatchV2_4_list{list: &x.Artifacts})
+		if !f(fd_PoCBatchV2_artifacts, value) {
 			return
 		}
 	}
@@ -652,21 +652,21 @@ func (x *fastReflection_PoCArtifactBatchV2) Range(f func(protoreflect.FieldDescr
 // In other cases (aside from the nullable cases above),
 // a proto3 scalar field is populated if it contains a non-zero value, and
 // a repeated field is populated if it is non-empty.
-func (x *fastReflection_PoCArtifactBatchV2) Has(fd protoreflect.FieldDescriptor) bool {
+func (x *fastReflection_PoCBatchV2) Has(fd protoreflect.FieldDescriptor) bool {
 	switch fd.FullName() {
-	case "inference.inference.PoCArtifactBatchV2.participant_address":
+	case "inference.inference.PoCBatchV2.participant_address":
 		return x.ParticipantAddress != ""
-	case "inference.inference.PoCArtifactBatchV2.poc_stage_start_block_height":
+	case "inference.inference.PoCBatchV2.poc_stage_start_block_height":
 		return x.PocStageStartBlockHeight != int64(0)
-	case "inference.inference.PoCArtifactBatchV2.node_id":
+	case "inference.inference.PoCBatchV2.node_id":
 		return x.NodeId != ""
-	case "inference.inference.PoCArtifactBatchV2.artifacts":
+	case "inference.inference.PoCBatchV2.artifacts":
 		return len(x.Artifacts) != 0
 	default:
 		if fd.IsExtension() {
-			panic(fmt.Errorf("proto3 declared messages do not support extensions: inference.inference.PoCArtifactBatchV2"))
+			panic(fmt.Errorf("proto3 declared messages do not support extensions: inference.inference.PoCBatchV2"))
 		}
-		panic(fmt.Errorf("message inference.inference.PoCArtifactBatchV2 does not contain field %s", fd.FullName()))
+		panic(fmt.Errorf("message inference.inference.PoCBatchV2 does not contain field %s", fd.FullName()))
 	}
 }
 
@@ -676,21 +676,21 @@ func (x *fastReflection_PoCArtifactBatchV2) Has(fd protoreflect.FieldDescriptor)
 // associated with the given field number.
 //
 // Clear is a mutating operation and unsafe for concurrent use.
-func (x *fastReflection_PoCArtifactBatchV2) Clear(fd protoreflect.FieldDescriptor) {
+func (x *fastReflection_PoCBatchV2) Clear(fd protoreflect.FieldDescriptor) {
 	switch fd.FullName() {
-	case "inference.inference.PoCArtifactBatchV2.participant_address":
+	case "inference.inference.PoCBatchV2.participant_address":
 		x.ParticipantAddress = ""
-	case "inference.inference.PoCArtifactBatchV2.poc_stage_start_block_height":
+	case "inference.inference.PoCBatchV2.poc_stage_start_block_height":
 		x.PocStageStartBlockHeight = int64(0)
-	case "inference.inference.PoCArtifactBatchV2.node_id":
+	case "inference.inference.PoCBatchV2.node_id":
 		x.NodeId = ""
-	case "inference.inference.PoCArtifactBatchV2.artifacts":
+	case "inference.inference.PoCBatchV2.artifacts":
 		x.Artifacts = nil
 	default:
 		if fd.IsExtension() {
-			panic(fmt.Errorf("proto3 declared messages do not support extensions: inference.inference.PoCArtifactBatchV2"))
+			panic(fmt.Errorf("proto3 declared messages do not support extensions: inference.inference.PoCBatchV2"))
 		}
-		panic(fmt.Errorf("message inference.inference.PoCArtifactBatchV2 does not contain field %s", fd.FullName()))
+		panic(fmt.Errorf("message inference.inference.PoCBatchV2 does not contain field %s", fd.FullName()))
 	}
 }
 
@@ -700,28 +700,28 @@ func (x *fastReflection_PoCArtifactBatchV2) Clear(fd protoreflect.FieldDescripto
 // the default value of a bytes scalar is guaranteed to be a copy.
 // For unpopulated composite types, it returns an empty, read-only view
 // of the value; to obtain a mutable reference, use Mutable.
-func (x *fastReflection_PoCArtifactBatchV2) Get(descriptor protoreflect.FieldDescriptor) protoreflect.Value {
+func (x *fastReflection_PoCBatchV2) Get(descriptor protoreflect.FieldDescriptor) protoreflect.Value {
 	switch descriptor.FullName() {
-	case "inference.inference.PoCArtifactBatchV2.participant_address":
+	case "inference.inference.PoCBatchV2.participant_address":
 		value := x.ParticipantAddress
 		return protoreflect.ValueOfString(value)
-	case "inference.inference.PoCArtifactBatchV2.poc_stage_start_block_height":
+	case "inference.inference.PoCBatchV2.poc_stage_start_block_height":
 		value := x.PocStageStartBlockHeight
 		return protoreflect.ValueOfInt64(value)
-	case "inference.inference.PoCArtifactBatchV2.node_id":
+	case "inference.inference.PoCBatchV2.node_id":
 		value := x.NodeId
 		return protoreflect.ValueOfString(value)
-	case "inference.inference.PoCArtifactBatchV2.artifacts":
+	case "inference.inference.PoCBatchV2.artifacts":
 		if len(x.Artifacts) == 0 {
-			return protoreflect.ValueOfList(&_PoCArtifactBatchV2_4_list{})
+			return protoreflect.ValueOfList(&_PoCBatchV2_4_list{})
 		}
-		listValue := &_PoCArtifactBatchV2_4_list{list: &x.Artifacts}
+		listValue := &_PoCBatchV2_4_list{list: &x.Artifacts}
 		return protoreflect.ValueOfList(listValue)
 	default:
 		if descriptor.IsExtension() {
-			panic(fmt.Errorf("proto3 declared messages do not support extensions: inference.inference.PoCArtifactBatchV2"))
+			panic(fmt.Errorf("proto3 declared messages do not support extensions: inference.inference.PoCBatchV2"))
 		}
-		panic(fmt.Errorf("message inference.inference.PoCArtifactBatchV2 does not contain field %s", descriptor.FullName()))
+		panic(fmt.Errorf("message inference.inference.PoCBatchV2 does not contain field %s", descriptor.FullName()))
 	}
 }
 
@@ -735,23 +735,23 @@ func (x *fastReflection_PoCArtifactBatchV2) Get(descriptor protoreflect.FieldDes
 // empty, read-only value, then it panics.
 //
 // Set is a mutating operation and unsafe for concurrent use.
-func (x *fastReflection_PoCArtifactBatchV2) Set(fd protoreflect.FieldDescriptor, value protoreflect.Value) {
+func (x *fastReflection_PoCBatchV2) Set(fd protoreflect.FieldDescriptor, value protoreflect.Value) {
 	switch fd.FullName() {
-	case "inference.inference.PoCArtifactBatchV2.participant_address":
+	case "inference.inference.PoCBatchV2.participant_address":
 		x.ParticipantAddress = value.Interface().(string)
-	case "inference.inference.PoCArtifactBatchV2.poc_stage_start_block_height":
+	case "inference.inference.PoCBatchV2.poc_stage_start_block_height":
 		x.PocStageStartBlockHeight = value.Int()
-	case "inference.inference.PoCArtifactBatchV2.node_id":
+	case "inference.inference.PoCBatchV2.node_id":
 		x.NodeId = value.Interface().(string)
-	case "inference.inference.PoCArtifactBatchV2.artifacts":
+	case "inference.inference.PoCBatchV2.artifacts":
 		lv := value.List()
-		clv := lv.(*_PoCArtifactBatchV2_4_list)
+		clv := lv.(*_PoCBatchV2_4_list)
 		x.Artifacts = *clv.list
 	default:
 		if fd.IsExtension() {
-			panic(fmt.Errorf("proto3 declared messages do not support extensions: inference.inference.PoCArtifactBatchV2"))
+			panic(fmt.Errorf("proto3 declared messages do not support extensions: inference.inference.PoCBatchV2"))
 		}
-		panic(fmt.Errorf("message inference.inference.PoCArtifactBatchV2 does not contain field %s", fd.FullName()))
+		panic(fmt.Errorf("message inference.inference.PoCBatchV2 does not contain field %s", fd.FullName()))
 	}
 }
 
@@ -765,57 +765,57 @@ func (x *fastReflection_PoCArtifactBatchV2) Set(fd protoreflect.FieldDescriptor,
 // It panics if the field does not contain a composite type.
 //
 // Mutable is a mutating operation and unsafe for concurrent use.
-func (x *fastReflection_PoCArtifactBatchV2) Mutable(fd protoreflect.FieldDescriptor) protoreflect.Value {
+func (x *fastReflection_PoCBatchV2) Mutable(fd protoreflect.FieldDescriptor) protoreflect.Value {
 	switch fd.FullName() {
-	case "inference.inference.PoCArtifactBatchV2.artifacts":
+	case "inference.inference.PoCBatchV2.artifacts":
 		if x.Artifacts == nil {
 			x.Artifacts = []*PoCArtifactV2{}
 		}
-		value := &_PoCArtifactBatchV2_4_list{list: &x.Artifacts}
+		value := &_PoCBatchV2_4_list{list: &x.Artifacts}
 		return protoreflect.ValueOfList(value)
-	case "inference.inference.PoCArtifactBatchV2.participant_address":
-		panic(fmt.Errorf("field participant_address of message inference.inference.PoCArtifactBatchV2 is not mutable"))
-	case "inference.inference.PoCArtifactBatchV2.poc_stage_start_block_height":
-		panic(fmt.Errorf("field poc_stage_start_block_height of message inference.inference.PoCArtifactBatchV2 is not mutable"))
-	case "inference.inference.PoCArtifactBatchV2.node_id":
-		panic(fmt.Errorf("field node_id of message inference.inference.PoCArtifactBatchV2 is not mutable"))
+	case "inference.inference.PoCBatchV2.participant_address":
+		panic(fmt.Errorf("field participant_address of message inference.inference.PoCBatchV2 is not mutable"))
+	case "inference.inference.PoCBatchV2.poc_stage_start_block_height":
+		panic(fmt.Errorf("field poc_stage_start_block_height of message inference.inference.PoCBatchV2 is not mutable"))
+	case "inference.inference.PoCBatchV2.node_id":
+		panic(fmt.Errorf("field node_id of message inference.inference.PoCBatchV2 is not mutable"))
 	default:
 		if fd.IsExtension() {
-			panic(fmt.Errorf("proto3 declared messages do not support extensions: inference.inference.PoCArtifactBatchV2"))
+			panic(fmt.Errorf("proto3 declared messages do not support extensions: inference.inference.PoCBatchV2"))
 		}
-		panic(fmt.Errorf("message inference.inference.PoCArtifactBatchV2 does not contain field %s", fd.FullName()))
+		panic(fmt.Errorf("message inference.inference.PoCBatchV2 does not contain field %s", fd.FullName()))
 	}
 }
 
 // NewField returns a new value that is assignable to the field
 // for the given descriptor. For scalars, this returns the default value.
 // For lists, maps, and messages, this returns a new, empty, mutable value.
-func (x *fastReflection_PoCArtifactBatchV2) NewField(fd protoreflect.FieldDescriptor) protoreflect.Value {
+func (x *fastReflection_PoCBatchV2) NewField(fd protoreflect.FieldDescriptor) protoreflect.Value {
 	switch fd.FullName() {
-	case "inference.inference.PoCArtifactBatchV2.participant_address":
+	case "inference.inference.PoCBatchV2.participant_address":
 		return protoreflect.ValueOfString("")
-	case "inference.inference.PoCArtifactBatchV2.poc_stage_start_block_height":
+	case "inference.inference.PoCBatchV2.poc_stage_start_block_height":
 		return protoreflect.ValueOfInt64(int64(0))
-	case "inference.inference.PoCArtifactBatchV2.node_id":
+	case "inference.inference.PoCBatchV2.node_id":
 		return protoreflect.ValueOfString("")
-	case "inference.inference.PoCArtifactBatchV2.artifacts":
+	case "inference.inference.PoCBatchV2.artifacts":
 		list := []*PoCArtifactV2{}
-		return protoreflect.ValueOfList(&_PoCArtifactBatchV2_4_list{list: &list})
+		return protoreflect.ValueOfList(&_PoCBatchV2_4_list{list: &list})
 	default:
 		if fd.IsExtension() {
-			panic(fmt.Errorf("proto3 declared messages do not support extensions: inference.inference.PoCArtifactBatchV2"))
+			panic(fmt.Errorf("proto3 declared messages do not support extensions: inference.inference.PoCBatchV2"))
 		}
-		panic(fmt.Errorf("message inference.inference.PoCArtifactBatchV2 does not contain field %s", fd.FullName()))
+		panic(fmt.Errorf("message inference.inference.PoCBatchV2 does not contain field %s", fd.FullName()))
 	}
 }
 
 // WhichOneof reports which field within the oneof is populated,
 // returning nil if none are populated.
 // It panics if the oneof descriptor does not belong to this message.
-func (x *fastReflection_PoCArtifactBatchV2) WhichOneof(d protoreflect.OneofDescriptor) protoreflect.FieldDescriptor {
+func (x *fastReflection_PoCBatchV2) WhichOneof(d protoreflect.OneofDescriptor) protoreflect.FieldDescriptor {
 	switch d.FullName() {
 	default:
-		panic(fmt.Errorf("%s is not a oneof field in inference.inference.PoCArtifactBatchV2", d.FullName()))
+		panic(fmt.Errorf("%s is not a oneof field in inference.inference.PoCBatchV2", d.FullName()))
 	}
 	panic("unreachable")
 }
@@ -823,7 +823,7 @@ func (x *fastReflection_PoCArtifactBatchV2) WhichOneof(d protoreflect.OneofDescr
 // GetUnknown retrieves the entire list of unknown fields.
 // The caller may only mutate the contents of the RawFields
 // if the mutated bytes are stored back into the message with SetUnknown.
-func (x *fastReflection_PoCArtifactBatchV2) GetUnknown() protoreflect.RawFields {
+func (x *fastReflection_PoCBatchV2) GetUnknown() protoreflect.RawFields {
 	return x.unknownFields
 }
 
@@ -834,7 +834,7 @@ func (x *fastReflection_PoCArtifactBatchV2) GetUnknown() protoreflect.RawFields 
 // An empty RawFields may be passed to clear the fields.
 //
 // SetUnknown is a mutating operation and unsafe for concurrent use.
-func (x *fastReflection_PoCArtifactBatchV2) SetUnknown(fields protoreflect.RawFields) {
+func (x *fastReflection_PoCBatchV2) SetUnknown(fields protoreflect.RawFields) {
 	x.unknownFields = fields
 }
 
@@ -846,7 +846,7 @@ func (x *fastReflection_PoCArtifactBatchV2) SetUnknown(fields protoreflect.RawFi
 // message type, but the details are implementation dependent.
 // Validity is not part of the protobuf data model, and may not
 // be preserved in marshaling or other operations.
-func (x *fastReflection_PoCArtifactBatchV2) IsValid() bool {
+func (x *fastReflection_PoCBatchV2) IsValid() bool {
 	return x != nil
 }
 
@@ -856,9 +856,9 @@ func (x *fastReflection_PoCArtifactBatchV2) IsValid() bool {
 // The returned methods type is identical to
 // "google.golang.org/protobuf/runtime/protoiface".Methods.
 // Consult the protoiface package documentation for details.
-func (x *fastReflection_PoCArtifactBatchV2) ProtoMethods() *protoiface.Methods {
+func (x *fastReflection_PoCBatchV2) ProtoMethods() *protoiface.Methods {
 	size := func(input protoiface.SizeInput) protoiface.SizeOutput {
-		x := input.Message.Interface().(*PoCArtifactBatchV2)
+		x := input.Message.Interface().(*PoCBatchV2)
 		if x == nil {
 			return protoiface.SizeOutput{
 				NoUnkeyedLiterals: input.NoUnkeyedLiterals,
@@ -897,7 +897,7 @@ func (x *fastReflection_PoCArtifactBatchV2) ProtoMethods() *protoiface.Methods {
 	}
 
 	marshal := func(input protoiface.MarshalInput) (protoiface.MarshalOutput, error) {
-		x := input.Message.Interface().(*PoCArtifactBatchV2)
+		x := input.Message.Interface().(*PoCBatchV2)
 		if x == nil {
 			return protoiface.MarshalOutput{
 				NoUnkeyedLiterals: input.NoUnkeyedLiterals,
@@ -962,7 +962,7 @@ func (x *fastReflection_PoCArtifactBatchV2) ProtoMethods() *protoiface.Methods {
 		}, nil
 	}
 	unmarshal := func(input protoiface.UnmarshalInput) (protoiface.UnmarshalOutput, error) {
-		x := input.Message.Interface().(*PoCArtifactBatchV2)
+		x := input.Message.Interface().(*PoCBatchV2)
 		if x == nil {
 			return protoiface.UnmarshalOutput{
 				NoUnkeyedLiterals: input.NoUnkeyedLiterals,
@@ -994,10 +994,10 @@ func (x *fastReflection_PoCArtifactBatchV2) ProtoMethods() *protoiface.Methods {
 			fieldNum := int32(wire >> 3)
 			wireType := int(wire & 0x7)
 			if wireType == 4 {
-				return protoiface.UnmarshalOutput{NoUnkeyedLiterals: input.NoUnkeyedLiterals, Flags: input.Flags}, fmt.Errorf("proto: PoCArtifactBatchV2: wiretype end group for non-group")
+				return protoiface.UnmarshalOutput{NoUnkeyedLiterals: input.NoUnkeyedLiterals, Flags: input.Flags}, fmt.Errorf("proto: PoCBatchV2: wiretype end group for non-group")
 			}
 			if fieldNum <= 0 {
-				return protoiface.UnmarshalOutput{NoUnkeyedLiterals: input.NoUnkeyedLiterals, Flags: input.Flags}, fmt.Errorf("proto: PoCArtifactBatchV2: illegal tag %d (wire type %d)", fieldNum, wire)
+				return protoiface.UnmarshalOutput{NoUnkeyedLiterals: input.NoUnkeyedLiterals, Flags: input.Flags}, fmt.Errorf("proto: PoCBatchV2: illegal tag %d (wire type %d)", fieldNum, wire)
 			}
 			switch fieldNum {
 			case 1:
@@ -1746,14 +1746,13 @@ const (
 )
 
 // PoCArtifactV2 represents a single artifact from PoC v2 generation.
-// The vector is raw bytes; protocol-level convention: k_dim=12, fp16, little-endian.
 type PoCArtifactV2 struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
 	Nonce  int64  `protobuf:"varint,1,opt,name=nonce,proto3" json:"nonce,omitempty"`
-	Vector []byte `protobuf:"bytes,2,opt,name=vector,proto3" json:"vector,omitempty"`
+	Vector []byte `protobuf:"bytes,2,opt,name=vector,proto3" json:"vector,omitempty"` // Opaque bytes (encoding defined at application level)
 }
 
 func (x *PoCArtifactV2) Reset() {
@@ -1790,10 +1789,8 @@ func (x *PoCArtifactV2) GetVector() []byte {
 	return nil
 }
 
-// PoCArtifactBatchV2 represents a batch of artifacts from a single node.
-// Note: No batch_id field. Keeper uses internal sequence for uniqueness.
-// Note: Current iteration stores on-chain; later iteration moves fully off-chain.
-type PoCArtifactBatchV2 struct {
+// PoCBatchV2 represents a batch of artifacts from a single node.
+type PoCBatchV2 struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
@@ -1804,8 +1801,8 @@ type PoCArtifactBatchV2 struct {
 	Artifacts                []*PoCArtifactV2 `protobuf:"bytes,4,rep,name=artifacts,proto3" json:"artifacts,omitempty"`
 }
 
-func (x *PoCArtifactBatchV2) Reset() {
-	*x = PoCArtifactBatchV2{}
+func (x *PoCBatchV2) Reset() {
+	*x = PoCBatchV2{}
 	if protoimpl.UnsafeEnabled {
 		mi := &file_inference_inference_poc_v2_proto_msgTypes[1]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -1813,39 +1810,39 @@ func (x *PoCArtifactBatchV2) Reset() {
 	}
 }
 
-func (x *PoCArtifactBatchV2) String() string {
+func (x *PoCBatchV2) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*PoCArtifactBatchV2) ProtoMessage() {}
+func (*PoCBatchV2) ProtoMessage() {}
 
-// Deprecated: Use PoCArtifactBatchV2.ProtoReflect.Descriptor instead.
-func (*PoCArtifactBatchV2) Descriptor() ([]byte, []int) {
+// Deprecated: Use PoCBatchV2.ProtoReflect.Descriptor instead.
+func (*PoCBatchV2) Descriptor() ([]byte, []int) {
 	return file_inference_inference_poc_v2_proto_rawDescGZIP(), []int{1}
 }
 
-func (x *PoCArtifactBatchV2) GetParticipantAddress() string {
+func (x *PoCBatchV2) GetParticipantAddress() string {
 	if x != nil {
 		return x.ParticipantAddress
 	}
 	return ""
 }
 
-func (x *PoCArtifactBatchV2) GetPocStageStartBlockHeight() int64 {
+func (x *PoCBatchV2) GetPocStageStartBlockHeight() int64 {
 	if x != nil {
 		return x.PocStageStartBlockHeight
 	}
 	return 0
 }
 
-func (x *PoCArtifactBatchV2) GetNodeId() string {
+func (x *PoCBatchV2) GetNodeId() string {
 	if x != nil {
 		return x.NodeId
 	}
 	return ""
 }
 
-func (x *PoCArtifactBatchV2) GetArtifacts() []*PoCArtifactV2 {
+func (x *PoCBatchV2) GetArtifacts() []*PoCArtifactV2 {
 	if x != nil {
 		return x.Artifacts
 	}
@@ -1853,9 +1850,7 @@ func (x *PoCArtifactBatchV2) GetArtifacts() []*PoCArtifactV2 {
 }
 
 // PoCValidationV2 represents a validator's attestation of a participant's PoC work.
-// validated_weight semantics:
-//   - -1 means reject/fraud
-//   - >=0 means accept (chain may derive actual weight from committed nonce count)
+// validated_weight: -1 = reject/fraud, >=0 = accept
 type PoCValidationV2 struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
@@ -1925,48 +1920,48 @@ var file_inference_inference_poc_v2_proto_rawDesc = []byte{
 	0x74, 0x69, 0x66, 0x61, 0x63, 0x74, 0x56, 0x32, 0x12, 0x14, 0x0a, 0x05, 0x6e, 0x6f, 0x6e, 0x63,
 	0x65, 0x18, 0x01, 0x20, 0x01, 0x28, 0x03, 0x52, 0x05, 0x6e, 0x6f, 0x6e, 0x63, 0x65, 0x12, 0x16,
 	0x0a, 0x06, 0x76, 0x65, 0x63, 0x74, 0x6f, 0x72, 0x18, 0x02, 0x20, 0x01, 0x28, 0x0c, 0x52, 0x06,
-	0x76, 0x65, 0x63, 0x74, 0x6f, 0x72, 0x22, 0xe0, 0x01, 0x0a, 0x12, 0x50, 0x6f, 0x43, 0x41, 0x72,
-	0x74, 0x69, 0x66, 0x61, 0x63, 0x74, 0x42, 0x61, 0x74, 0x63, 0x68, 0x56, 0x32, 0x12, 0x2f, 0x0a,
-	0x13, 0x70, 0x61, 0x72, 0x74, 0x69, 0x63, 0x69, 0x70, 0x61, 0x6e, 0x74, 0x5f, 0x61, 0x64, 0x64,
-	0x72, 0x65, 0x73, 0x73, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x12, 0x70, 0x61, 0x72, 0x74,
-	0x69, 0x63, 0x69, 0x70, 0x61, 0x6e, 0x74, 0x41, 0x64, 0x64, 0x72, 0x65, 0x73, 0x73, 0x12, 0x3e,
-	0x0a, 0x1c, 0x70, 0x6f, 0x63, 0x5f, 0x73, 0x74, 0x61, 0x67, 0x65, 0x5f, 0x73, 0x74, 0x61, 0x72,
-	0x74, 0x5f, 0x62, 0x6c, 0x6f, 0x63, 0x6b, 0x5f, 0x68, 0x65, 0x69, 0x67, 0x68, 0x74, 0x18, 0x02,
-	0x20, 0x01, 0x28, 0x03, 0x52, 0x18, 0x70, 0x6f, 0x63, 0x53, 0x74, 0x61, 0x67, 0x65, 0x53, 0x74,
-	0x61, 0x72, 0x74, 0x42, 0x6c, 0x6f, 0x63, 0x6b, 0x48, 0x65, 0x69, 0x67, 0x68, 0x74, 0x12, 0x17,
-	0x0a, 0x07, 0x6e, 0x6f, 0x64, 0x65, 0x5f, 0x69, 0x64, 0x18, 0x03, 0x20, 0x01, 0x28, 0x09, 0x52,
-	0x06, 0x6e, 0x6f, 0x64, 0x65, 0x49, 0x64, 0x12, 0x40, 0x0a, 0x09, 0x61, 0x72, 0x74, 0x69, 0x66,
-	0x61, 0x63, 0x74, 0x73, 0x18, 0x04, 0x20, 0x03, 0x28, 0x0b, 0x32, 0x22, 0x2e, 0x69, 0x6e, 0x66,
-	0x65, 0x72, 0x65, 0x6e, 0x63, 0x65, 0x2e, 0x69, 0x6e, 0x66, 0x65, 0x72, 0x65, 0x6e, 0x63, 0x65,
-	0x2e, 0x50, 0x6f, 0x43, 0x41, 0x72, 0x74, 0x69, 0x66, 0x61, 0x63, 0x74, 0x56, 0x32, 0x52, 0x09,
-	0x61, 0x72, 0x74, 0x69, 0x66, 0x61, 0x63, 0x74, 0x73, 0x22, 0xf1, 0x01, 0x0a, 0x0f, 0x50, 0x6f,
-	0x43, 0x56, 0x61, 0x6c, 0x69, 0x64, 0x61, 0x74, 0x69, 0x6f, 0x6e, 0x56, 0x32, 0x12, 0x2f, 0x0a,
-	0x13, 0x70, 0x61, 0x72, 0x74, 0x69, 0x63, 0x69, 0x70, 0x61, 0x6e, 0x74, 0x5f, 0x61, 0x64, 0x64,
-	0x72, 0x65, 0x73, 0x73, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x12, 0x70, 0x61, 0x72, 0x74,
-	0x69, 0x63, 0x69, 0x70, 0x61, 0x6e, 0x74, 0x41, 0x64, 0x64, 0x72, 0x65, 0x73, 0x73, 0x12, 0x42,
-	0x0a, 0x1d, 0x76, 0x61, 0x6c, 0x69, 0x64, 0x61, 0x74, 0x6f, 0x72, 0x5f, 0x70, 0x61, 0x72, 0x74,
-	0x69, 0x63, 0x69, 0x70, 0x61, 0x6e, 0x74, 0x5f, 0x61, 0x64, 0x64, 0x72, 0x65, 0x73, 0x73, 0x18,
-	0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x1b, 0x76, 0x61, 0x6c, 0x69, 0x64, 0x61, 0x74, 0x6f, 0x72,
-	0x50, 0x61, 0x72, 0x74, 0x69, 0x63, 0x69, 0x70, 0x61, 0x6e, 0x74, 0x41, 0x64, 0x64, 0x72, 0x65,
-	0x73, 0x73, 0x12, 0x3e, 0x0a, 0x1c, 0x70, 0x6f, 0x63, 0x5f, 0x73, 0x74, 0x61, 0x67, 0x65, 0x5f,
-	0x73, 0x74, 0x61, 0x72, 0x74, 0x5f, 0x62, 0x6c, 0x6f, 0x63, 0x6b, 0x5f, 0x68, 0x65, 0x69, 0x67,
-	0x68, 0x74, 0x18, 0x03, 0x20, 0x01, 0x28, 0x03, 0x52, 0x18, 0x70, 0x6f, 0x63, 0x53, 0x74, 0x61,
-	0x67, 0x65, 0x53, 0x74, 0x61, 0x72, 0x74, 0x42, 0x6c, 0x6f, 0x63, 0x6b, 0x48, 0x65, 0x69, 0x67,
-	0x68, 0x74, 0x12, 0x29, 0x0a, 0x10, 0x76, 0x61, 0x6c, 0x69, 0x64, 0x61, 0x74, 0x65, 0x64, 0x5f,
-	0x77, 0x65, 0x69, 0x67, 0x68, 0x74, 0x18, 0x04, 0x20, 0x01, 0x28, 0x03, 0x52, 0x0f, 0x76, 0x61,
-	0x6c, 0x69, 0x64, 0x61, 0x74, 0x65, 0x64, 0x57, 0x65, 0x69, 0x67, 0x68, 0x74, 0x42, 0xb8, 0x01,
-	0x0a, 0x17, 0x63, 0x6f, 0x6d, 0x2e, 0x69, 0x6e, 0x66, 0x65, 0x72, 0x65, 0x6e, 0x63, 0x65, 0x2e,
-	0x69, 0x6e, 0x66, 0x65, 0x72, 0x65, 0x6e, 0x63, 0x65, 0x42, 0x0a, 0x50, 0x6f, 0x63, 0x56, 0x32,
-	0x50, 0x72, 0x6f, 0x74, 0x6f, 0x50, 0x01, 0x5a, 0x24, 0x63, 0x6f, 0x73, 0x6d, 0x6f, 0x73, 0x73,
-	0x64, 0x6b, 0x2e, 0x69, 0x6f, 0x2f, 0x61, 0x70, 0x69, 0x2f, 0x69, 0x6e, 0x66, 0x65, 0x72, 0x65,
-	0x6e, 0x63, 0x65, 0x2f, 0x69, 0x6e, 0x66, 0x65, 0x72, 0x65, 0x6e, 0x63, 0x65, 0xa2, 0x02, 0x03,
-	0x49, 0x49, 0x58, 0xaa, 0x02, 0x13, 0x49, 0x6e, 0x66, 0x65, 0x72, 0x65, 0x6e, 0x63, 0x65, 0x2e,
-	0x49, 0x6e, 0x66, 0x65, 0x72, 0x65, 0x6e, 0x63, 0x65, 0xca, 0x02, 0x13, 0x49, 0x6e, 0x66, 0x65,
-	0x72, 0x65, 0x6e, 0x63, 0x65, 0x5c, 0x49, 0x6e, 0x66, 0x65, 0x72, 0x65, 0x6e, 0x63, 0x65, 0xe2,
-	0x02, 0x1f, 0x49, 0x6e, 0x66, 0x65, 0x72, 0x65, 0x6e, 0x63, 0x65, 0x5c, 0x49, 0x6e, 0x66, 0x65,
-	0x72, 0x65, 0x6e, 0x63, 0x65, 0x5c, 0x47, 0x50, 0x42, 0x4d, 0x65, 0x74, 0x61, 0x64, 0x61, 0x74,
-	0x61, 0xea, 0x02, 0x14, 0x49, 0x6e, 0x66, 0x65, 0x72, 0x65, 0x6e, 0x63, 0x65, 0x3a, 0x3a, 0x49,
-	0x6e, 0x66, 0x65, 0x72, 0x65, 0x6e, 0x63, 0x65, 0x62, 0x06, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x33,
+	0x76, 0x65, 0x63, 0x74, 0x6f, 0x72, 0x22, 0xd8, 0x01, 0x0a, 0x0a, 0x50, 0x6f, 0x43, 0x42, 0x61,
+	0x74, 0x63, 0x68, 0x56, 0x32, 0x12, 0x2f, 0x0a, 0x13, 0x70, 0x61, 0x72, 0x74, 0x69, 0x63, 0x69,
+	0x70, 0x61, 0x6e, 0x74, 0x5f, 0x61, 0x64, 0x64, 0x72, 0x65, 0x73, 0x73, 0x18, 0x01, 0x20, 0x01,
+	0x28, 0x09, 0x52, 0x12, 0x70, 0x61, 0x72, 0x74, 0x69, 0x63, 0x69, 0x70, 0x61, 0x6e, 0x74, 0x41,
+	0x64, 0x64, 0x72, 0x65, 0x73, 0x73, 0x12, 0x3e, 0x0a, 0x1c, 0x70, 0x6f, 0x63, 0x5f, 0x73, 0x74,
+	0x61, 0x67, 0x65, 0x5f, 0x73, 0x74, 0x61, 0x72, 0x74, 0x5f, 0x62, 0x6c, 0x6f, 0x63, 0x6b, 0x5f,
+	0x68, 0x65, 0x69, 0x67, 0x68, 0x74, 0x18, 0x02, 0x20, 0x01, 0x28, 0x03, 0x52, 0x18, 0x70, 0x6f,
+	0x63, 0x53, 0x74, 0x61, 0x67, 0x65, 0x53, 0x74, 0x61, 0x72, 0x74, 0x42, 0x6c, 0x6f, 0x63, 0x6b,
+	0x48, 0x65, 0x69, 0x67, 0x68, 0x74, 0x12, 0x17, 0x0a, 0x07, 0x6e, 0x6f, 0x64, 0x65, 0x5f, 0x69,
+	0x64, 0x18, 0x03, 0x20, 0x01, 0x28, 0x09, 0x52, 0x06, 0x6e, 0x6f, 0x64, 0x65, 0x49, 0x64, 0x12,
+	0x40, 0x0a, 0x09, 0x61, 0x72, 0x74, 0x69, 0x66, 0x61, 0x63, 0x74, 0x73, 0x18, 0x04, 0x20, 0x03,
+	0x28, 0x0b, 0x32, 0x22, 0x2e, 0x69, 0x6e, 0x66, 0x65, 0x72, 0x65, 0x6e, 0x63, 0x65, 0x2e, 0x69,
+	0x6e, 0x66, 0x65, 0x72, 0x65, 0x6e, 0x63, 0x65, 0x2e, 0x50, 0x6f, 0x43, 0x41, 0x72, 0x74, 0x69,
+	0x66, 0x61, 0x63, 0x74, 0x56, 0x32, 0x52, 0x09, 0x61, 0x72, 0x74, 0x69, 0x66, 0x61, 0x63, 0x74,
+	0x73, 0x22, 0xf1, 0x01, 0x0a, 0x0f, 0x50, 0x6f, 0x43, 0x56, 0x61, 0x6c, 0x69, 0x64, 0x61, 0x74,
+	0x69, 0x6f, 0x6e, 0x56, 0x32, 0x12, 0x2f, 0x0a, 0x13, 0x70, 0x61, 0x72, 0x74, 0x69, 0x63, 0x69,
+	0x70, 0x61, 0x6e, 0x74, 0x5f, 0x61, 0x64, 0x64, 0x72, 0x65, 0x73, 0x73, 0x18, 0x01, 0x20, 0x01,
+	0x28, 0x09, 0x52, 0x12, 0x70, 0x61, 0x72, 0x74, 0x69, 0x63, 0x69, 0x70, 0x61, 0x6e, 0x74, 0x41,
+	0x64, 0x64, 0x72, 0x65, 0x73, 0x73, 0x12, 0x42, 0x0a, 0x1d, 0x76, 0x61, 0x6c, 0x69, 0x64, 0x61,
+	0x74, 0x6f, 0x72, 0x5f, 0x70, 0x61, 0x72, 0x74, 0x69, 0x63, 0x69, 0x70, 0x61, 0x6e, 0x74, 0x5f,
+	0x61, 0x64, 0x64, 0x72, 0x65, 0x73, 0x73, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x1b, 0x76,
+	0x61, 0x6c, 0x69, 0x64, 0x61, 0x74, 0x6f, 0x72, 0x50, 0x61, 0x72, 0x74, 0x69, 0x63, 0x69, 0x70,
+	0x61, 0x6e, 0x74, 0x41, 0x64, 0x64, 0x72, 0x65, 0x73, 0x73, 0x12, 0x3e, 0x0a, 0x1c, 0x70, 0x6f,
+	0x63, 0x5f, 0x73, 0x74, 0x61, 0x67, 0x65, 0x5f, 0x73, 0x74, 0x61, 0x72, 0x74, 0x5f, 0x62, 0x6c,
+	0x6f, 0x63, 0x6b, 0x5f, 0x68, 0x65, 0x69, 0x67, 0x68, 0x74, 0x18, 0x03, 0x20, 0x01, 0x28, 0x03,
+	0x52, 0x18, 0x70, 0x6f, 0x63, 0x53, 0x74, 0x61, 0x67, 0x65, 0x53, 0x74, 0x61, 0x72, 0x74, 0x42,
+	0x6c, 0x6f, 0x63, 0x6b, 0x48, 0x65, 0x69, 0x67, 0x68, 0x74, 0x12, 0x29, 0x0a, 0x10, 0x76, 0x61,
+	0x6c, 0x69, 0x64, 0x61, 0x74, 0x65, 0x64, 0x5f, 0x77, 0x65, 0x69, 0x67, 0x68, 0x74, 0x18, 0x04,
+	0x20, 0x01, 0x28, 0x03, 0x52, 0x0f, 0x76, 0x61, 0x6c, 0x69, 0x64, 0x61, 0x74, 0x65, 0x64, 0x57,
+	0x65, 0x69, 0x67, 0x68, 0x74, 0x42, 0xb8, 0x01, 0x0a, 0x17, 0x63, 0x6f, 0x6d, 0x2e, 0x69, 0x6e,
+	0x66, 0x65, 0x72, 0x65, 0x6e, 0x63, 0x65, 0x2e, 0x69, 0x6e, 0x66, 0x65, 0x72, 0x65, 0x6e, 0x63,
+	0x65, 0x42, 0x0a, 0x50, 0x6f, 0x63, 0x56, 0x32, 0x50, 0x72, 0x6f, 0x74, 0x6f, 0x50, 0x01, 0x5a,
+	0x24, 0x63, 0x6f, 0x73, 0x6d, 0x6f, 0x73, 0x73, 0x64, 0x6b, 0x2e, 0x69, 0x6f, 0x2f, 0x61, 0x70,
+	0x69, 0x2f, 0x69, 0x6e, 0x66, 0x65, 0x72, 0x65, 0x6e, 0x63, 0x65, 0x2f, 0x69, 0x6e, 0x66, 0x65,
+	0x72, 0x65, 0x6e, 0x63, 0x65, 0xa2, 0x02, 0x03, 0x49, 0x49, 0x58, 0xaa, 0x02, 0x13, 0x49, 0x6e,
+	0x66, 0x65, 0x72, 0x65, 0x6e, 0x63, 0x65, 0x2e, 0x49, 0x6e, 0x66, 0x65, 0x72, 0x65, 0x6e, 0x63,
+	0x65, 0xca, 0x02, 0x13, 0x49, 0x6e, 0x66, 0x65, 0x72, 0x65, 0x6e, 0x63, 0x65, 0x5c, 0x49, 0x6e,
+	0x66, 0x65, 0x72, 0x65, 0x6e, 0x63, 0x65, 0xe2, 0x02, 0x1f, 0x49, 0x6e, 0x66, 0x65, 0x72, 0x65,
+	0x6e, 0x63, 0x65, 0x5c, 0x49, 0x6e, 0x66, 0x65, 0x72, 0x65, 0x6e, 0x63, 0x65, 0x5c, 0x47, 0x50,
+	0x42, 0x4d, 0x65, 0x74, 0x61, 0x64, 0x61, 0x74, 0x61, 0xea, 0x02, 0x14, 0x49, 0x6e, 0x66, 0x65,
+	0x72, 0x65, 0x6e, 0x63, 0x65, 0x3a, 0x3a, 0x49, 0x6e, 0x66, 0x65, 0x72, 0x65, 0x6e, 0x63, 0x65,
+	0x62, 0x06, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x33,
 }
 
 var (
@@ -1983,12 +1978,12 @@ func file_inference_inference_poc_v2_proto_rawDescGZIP() []byte {
 
 var file_inference_inference_poc_v2_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
 var file_inference_inference_poc_v2_proto_goTypes = []interface{}{
-	(*PoCArtifactV2)(nil),      // 0: inference.inference.PoCArtifactV2
-	(*PoCArtifactBatchV2)(nil), // 1: inference.inference.PoCArtifactBatchV2
-	(*PoCValidationV2)(nil),    // 2: inference.inference.PoCValidationV2
+	(*PoCArtifactV2)(nil),   // 0: inference.inference.PoCArtifactV2
+	(*PoCBatchV2)(nil),      // 1: inference.inference.PoCBatchV2
+	(*PoCValidationV2)(nil), // 2: inference.inference.PoCValidationV2
 }
 var file_inference_inference_poc_v2_proto_depIdxs = []int32{
-	0, // 0: inference.inference.PoCArtifactBatchV2.artifacts:type_name -> inference.inference.PoCArtifactV2
+	0, // 0: inference.inference.PoCBatchV2.artifacts:type_name -> inference.inference.PoCArtifactV2
 	1, // [1:1] is the sub-list for method output_type
 	1, // [1:1] is the sub-list for method input_type
 	1, // [1:1] is the sub-list for extension type_name
@@ -2015,7 +2010,7 @@ func file_inference_inference_poc_v2_proto_init() {
 			}
 		}
 		file_inference_inference_poc_v2_proto_msgTypes[1].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*PoCArtifactBatchV2); i {
+			switch v := v.(*PoCBatchV2); i {
 			case 0:
 				return &v.state
 			case 1:

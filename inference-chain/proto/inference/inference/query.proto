@@ -608,7 +608,7 @@ message PoCBatchesWithParticipantsV2 {
            string              participant = 1;
            string              pub_key     = 2;
            string              hex_pub_key = 3;
-  repeated PoCArtifactBatchV2  poc_batch   = 4 [(gogoproto.nullable) = false];
+  repeated PoCBatchV2  poc_batch   = 4 [(gogoproto.nullable) = false];
 }
 
 message QueryPocV2ValidationsForStageRequest {

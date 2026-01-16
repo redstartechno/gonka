@@ -35,27 +35,26 @@ type NodePoCOrchestratorV2Impl struct {
 
 // OrchestratorChainBridgeV2 provides chain queries for PoC v2.
 type OrchestratorChainBridgeV2 interface {
-	PoCv2ArtifactBatchesForStage(startPoCBlockHeight int64) (*PoCArtifactBatchesV2Response, error)
+	PoCv2BatchesForStage(startPoCBlockHeight int64) (*PoCBatchesV2Response, error)
 	GetBlockHash(height int64) (string, error)
 	GetPocParams() (*types.PocParams, error)
-	GetPoCv2Params() (*types.PoCv2Params, error)
 }
 
-// PoCArtifactBatchesV2Response is the response from querying v2 artifact batches.
-// TODO: Replace with types.QueryPocArtifactBatchesV2ForStageResponse once query is added to chain.
-type PoCArtifactBatchesV2Response struct {
-	ArtifactBatches []*PoCArtifactBatchesV2ForParticipant
+// PoCBatchesV2Response is the response from querying v2 artifact batches.
+// TODO: Replace with types.QueryPocBatchesV2ForStageResponse once query is added to chain.
+type PoCBatchesV2Response struct {
+	Batches []*PoCBatchesV2ForParticipant
 }
 
-// PoCArtifactBatchesV2ForParticipant groups artifact batches by participant.
-type PoCArtifactBatchesV2ForParticipant struct {
+// PoCBatchesV2ForParticipant groups artifact batches by participant.
+type PoCBatchesV2ForParticipant struct {
 	ParticipantAddress string
 	PublicKey          string
-	Batches            []*PoCArtifactBatchV2
+	Batches            []*PoCBatchV2
 }
 
-// PoCArtifactBatchV2 represents a single artifact batch.
-type PoCArtifactBatchV2 struct {
+// PoCBatchV2 represents a single artifact batch.
+type PoCBatchV2 struct {
 	NodeId    string
 	Artifacts []*ArtifactV2
 }
@@ -71,25 +70,25 @@ type OrchestratorChainBridgeV2Impl struct {
 	chainNodeUrl string
 }
 
-func (b *OrchestratorChainBridgeV2Impl) PoCv2ArtifactBatchesForStage(startPoCBlockHeight int64) (*PoCArtifactBatchesV2Response, error) {
+func (b *OrchestratorChainBridgeV2Impl) PoCv2BatchesForStage(startPoCBlockHeight int64) (*PoCBatchesV2Response, error) {
 	// Query the chain for v2 artifact batches
 	queryClient := b.cosmosClient.NewInferenceQueryClient()
 	resp, err := queryClient.PocV2BatchesForStage(b.cosmosClient.GetContext(), &types.QueryPocV2BatchesForStageRequest{
 		BlockHeight: startPoCBlockHeight,
 	})
 	if err != nil {
-		logging.Error("PoCv2ArtifactBatchesForStage: Failed to query chain", types.PoC,
+		logging.Error("PoCv2BatchesForStage: Failed to query chain", types.PoC,
 			"startPoCBlockHeight", startPoCBlockHeight, "error", err)
 		return nil, err
 	}
 
 	// Transform chain response to orchestrator response format
-	result := &PoCArtifactBatchesV2Response{
-		ArtifactBatches: make([]*PoCArtifactBatchesV2ForParticipant, 0, len(resp.PocBatch)),
+	result := &PoCBatchesV2Response{
+		Batches: make([]*PoCBatchesV2ForParticipant, 0, len(resp.PocBatch)),
 	}
 
 	for _, participantBatches := range resp.PocBatch {
-		batches := make([]*PoCArtifactBatchV2, 0, len(participantBatches.PocBatch))
+		batches := make([]*PoCBatchV2, 0, len(participantBatches.PocBatch))
 		for _, chainBatch := range participantBatches.PocBatch {
 			artifacts := make([]*ArtifactV2, 0, len(chainBatch.Artifacts))
 			for _, artifact := range chainBatch.Artifacts {
@@ -98,23 +97,23 @@ func (b *OrchestratorChainBridgeV2Impl) PoCv2ArtifactBatchesForStage(startPoCBlo
 					VectorB64: base64.StdEncoding.EncodeToString(artifact.Vector), // Chain stores as bytes, convert to base64 string
 				})
 			}
-			batches = append(batches, &PoCArtifactBatchV2{
+			batches = append(batches, &PoCBatchV2{
 				NodeId:    chainBatch.NodeId,
 				Artifacts: artifacts,
 			})
 		}
 
-		result.ArtifactBatches = append(result.ArtifactBatches, &PoCArtifactBatchesV2ForParticipant{
+		result.Batches = append(result.Batches, &PoCBatchesV2ForParticipant{
 			ParticipantAddress: participantBatches.Participant,
 			PublicKey:          participantBatches.HexPubKey,
 			Batches:            batches,
 		})
-		logging.Info("PoCv2ArtifactBatchesForStage: Fetched batches from chain", types.PoC, "participant", participantBatches.Participant, "publicKey", participantBatches.HexPubKey, "numBatches", len(batches))
+		logging.Info("PoCv2BatchesForStage: Fetched batches from chain", types.PoC, "participant", participantBatches.Participant, "publicKey", participantBatches.HexPubKey, "numBatches", len(batches))
 	}
 
-	logging.Info("PoCv2ArtifactBatchesForStage: Fetched batches from chain", types.PoC,
+	logging.Info("PoCv2BatchesForStage: Fetched batches from chain", types.PoC,
 		"startPoCBlockHeight", startPoCBlockHeight,
-		"numParticipants", len(result.ArtifactBatches))
+		"numParticipants", len(result.Batches))
 	return result, nil
 }
 
@@ -125,15 +124,6 @@ func (b *OrchestratorChainBridgeV2Impl) GetPocParams() (*types.PocParams, error)
 		return nil, err
 	}
 	return response.Params.PocParams, nil
-}
-
-func (b *OrchestratorChainBridgeV2Impl) GetPoCv2Params() (*types.PoCv2Params, error) {
-	response, err := b.cosmosClient.NewInferenceQueryClient().Params(b.cosmosClient.GetContext(), &types.QueryParamsRequest{})
-	if err != nil {
-		logging.Error("Failed to query params", types.PoC, "error", err)
-		return nil, err
-	}
-	return response.Params.PocV2Params, nil
 }
 
 func (b *OrchestratorChainBridgeV2Impl) GetBlockHash(height int64) (string, error) {
@@ -223,15 +213,15 @@ func (o *NodePoCOrchestratorV2Impl) ValidateReceivedArtifacts(pocStageStartBlock
 	}
 
 	// Get v2 artifact batches from chain
-	allArtifactBatches, err := o.chainBridge.PoCv2ArtifactBatchesForStage(pocStageStartBlockHeight)
+	allBatches, err := o.chainBridge.PoCv2BatchesForStage(pocStageStartBlockHeight)
 	if err != nil {
 		logging.Error("ValidateReceivedArtifacts (v2). Failed to get PoC v2 artifact batches", types.PoC,
 			"pocStageStartBlockHeight", pocStageStartBlockHeight, "error", err)
 		return
 	}
 
-	participants := make([]string, len(allArtifactBatches.ArtifactBatches))
-	for i, batch := range allArtifactBatches.ArtifactBatches {
+	participants := make([]string, len(allBatches.Batches))
+	for i, batch := range allBatches.Batches {
 		participants[i] = batch.ParticipantAddress
 	}
 	logging.Info("ValidateReceivedArtifacts (v2). Got artifact batches.", types.PoC,
@@ -273,11 +263,12 @@ func (o *NodePoCOrchestratorV2Impl) ValidateReceivedArtifacts(pocStageStartBlock
 		samplesPerBatch = 200
 	}
 
-	// Get PoC v2 params for model info
-	pocV2Params, err := o.chainBridge.GetPoCv2Params()
-	if err != nil || pocV2Params == nil {
-		logging.Error("ValidateReceivedArtifacts (v2). Failed to get PoC v2 params", types.PoC,
-			"pocStageStartBlockHeight", pocStageStartBlockHeight, "error", err)
+	// Get PoC params for model info
+	if pocParams.ModelId == "" || pocParams.SeqLen <= 0 {
+		logging.Error("ValidateReceivedArtifacts (v2). PoC params missing model_id or seq_len", types.PoC,
+			"pocStageStartBlockHeight", pocStageStartBlockHeight,
+			"modelId", pocParams.ModelId,
+			"seqLen", pocParams.SeqLen)
 		return
 	}
 
@@ -292,7 +283,7 @@ func (o *NodePoCOrchestratorV2Impl) ValidateReceivedArtifacts(pocStageStartBlock
 	failedValidations := 0
 
 	// Iterate over participants' artifact batches
-	for _, participantBatches := range allArtifactBatches.ArtifactBatches {
+	for _, participantBatches := range allBatches.Batches {
 		// Collect all unique artifacts from this participant
 		allArtifacts := collectUniqueArtifacts(participantBatches)
 		if len(allArtifacts) == 0 {
@@ -311,8 +302,8 @@ func (o *NodePoCOrchestratorV2Impl) ValidateReceivedArtifacts(pocStageStartBlock
 		}
 
 		// Build validation request
-		// Note: MLNode appends /validated to the URL, so we provide the v2 base path
-		validationCallbackUrl := o.callbackUrl + "/v2/poc-artifacts"
+		// MLNode appends /validated to the URL, so we provide the v2 base path
+		validationCallbackUrl := o.callbackUrl + "/v2/poc-batches"
 		validationReq := mlnodeclient.PoCGenerateRequestV2{
 			BlockHash:   blockHash,
 			BlockHeight: pocStageStartBlockHeight,
@@ -320,8 +311,8 @@ func (o *NodePoCOrchestratorV2Impl) ValidateReceivedArtifacts(pocStageStartBlock
 			NodeCount:   len(nodes),
 			Nonces:      nonces,
 			Params: mlnodeclient.PoCParamsV2{
-				Model:  pocV2Params.ModelId,
-				SeqLen: pocV2Params.SeqLen,
+				Model:  pocParams.ModelId,
+				SeqLen: pocParams.SeqLen,
 			},
 			URL: validationCallbackUrl,
 			Validation: &mlnodeclient.ValidationV2{
@@ -371,13 +362,13 @@ func (o *NodePoCOrchestratorV2Impl) ValidateReceivedArtifacts(pocStageStartBlock
 
 	logging.Info("ValidateReceivedArtifacts (v2). Finished.", types.PoC,
 		"pocStageStartBlockHeight", pocStageStartBlockHeight,
-		"totalParticipants", len(allArtifactBatches.ArtifactBatches),
+		"totalParticipants", len(allBatches.Batches),
 		"successfulValidations", successfulValidations,
 		"failedValidations", failedValidations)
 }
 
 // collectUniqueArtifacts collects all unique artifacts from a participant's batches.
-func collectUniqueArtifacts(batches *PoCArtifactBatchesV2ForParticipant) []mlnodeclient.ArtifactV2 {
+func collectUniqueArtifacts(batches *PoCBatchesV2ForParticipant) []mlnodeclient.ArtifactV2 {
 	uniqueNonces := make(map[int64]mlnodeclient.ArtifactV2)
 
 	for _, batch := range batches.Batches {

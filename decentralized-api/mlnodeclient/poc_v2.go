@@ -17,7 +17,7 @@ type EncodingV2 struct {
 	Endian string `json:"endian"` // e.g., "le"
 }
 
-// GeneratedArtifactBatchV2 is received from MLNode via /v2/poc-artifacts/generated callback.
+// GeneratedArtifactBatchV2 is received from MLNode via /v2/poc-batches/generated callback.
 type GeneratedArtifactBatchV2 struct {
 	BlockHash   string       `json:"block_hash"`
 	BlockHeight int64        `json:"block_height"`
@@ -28,7 +28,7 @@ type GeneratedArtifactBatchV2 struct {
 	RequestId   string       `json:"request_id,omitempty"`
 }
 
-// ValidatedResultV2 is received from MLNode via /v2/poc-artifacts/validated callback.
+// ValidatedResultV2 is received from MLNode via /v2/poc-batches/validated callback.
 type ValidatedResultV2 struct {
 	RequestId      string  `json:"request_id,omitempty"`
 	BlockHash      string  `json:"block_hash,omitempty"`

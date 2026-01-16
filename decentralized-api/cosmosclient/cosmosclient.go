@@ -205,10 +205,7 @@ type CosmosMessageClient interface {
 	FinishInference(transaction *inference.MsgFinishInference) error
 	ReportValidation(transaction *inference.MsgValidation) error
 	SubmitNewUnfundedParticipant(transaction *inference.MsgSubmitNewUnfundedParticipant) error
-	SubmitPocBatch(transaction *inference.MsgSubmitPocBatch) error
-	SubmitPoCValidation(transaction *inference.MsgSubmitPocValidation) error
-	// PoC v2 (artifact-based) methods
-	SubmitPocArtifactBatchesV2(transaction *inference.MsgSubmitPocArtifactBatchesV2) error
+	SubmitPocBatchesV2(transaction *inference.MsgSubmitPocBatchesV2) error
 	SubmitPocValidationsV2(transaction *inference.MsgSubmitPocValidationsV2) error
 	SubmitSeed(transaction *inference.MsgSubmitSeed) error
 	ClaimRewards(transaction *inference.MsgClaimRewards) error
@@ -362,34 +359,20 @@ func (icc *InferenceCosmosClient) BankBalances(ctx context.Context, address stri
 	return icc.manager.BankBalances(ctx, address)
 }
 
-func (icc *InferenceCosmosClient) SubmitPocBatch(transaction *inference.MsgSubmitPocBatch) error {
+func (icc *InferenceCosmosClient) SubmitPocBatchesV2(transaction *inference.MsgSubmitPocBatchesV2) error {
 	transaction.Creator = icc.Address
 	if icc.batchingEnabled {
-		return icc.batchConsumer.PublishPocBatch(transaction)
+		return icc.batchConsumer.PublishPocBatchV2(transaction)
 	}
-	_, err := icc.manager.SendTransactionAsyncWithRetry(transaction)
-	return err
-}
-
-func (icc *InferenceCosmosClient) SubmitPoCValidation(transaction *inference.MsgSubmitPocValidation) error {
-	transaction.Creator = icc.Address
-	if icc.batchingEnabled {
-		return icc.batchConsumer.PublishPocValidation(transaction)
-	}
-	_, err := icc.manager.SendTransactionAsyncWithRetry(transaction)
-	return err
-}
-
-// PoC v2 (artifact-based) methods
-
-func (icc *InferenceCosmosClient) SubmitPocArtifactBatchesV2(transaction *inference.MsgSubmitPocArtifactBatchesV2) error {
-	transaction.Creator = icc.Address
 	_, err := icc.manager.SendTransactionAsyncWithRetry(transaction)
 	return err
 }
 
 func (icc *InferenceCosmosClient) SubmitPocValidationsV2(transaction *inference.MsgSubmitPocValidationsV2) error {
 	transaction.Creator = icc.Address
+	if icc.batchingEnabled {
+		return icc.batchConsumer.PublishPocValidationV2(transaction)
+	}
 	_, err := icc.manager.SendTransactionAsyncWithRetry(transaction)
 	return err
 }
