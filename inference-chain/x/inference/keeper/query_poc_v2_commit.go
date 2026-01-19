@@ -7,6 +7,7 @@ import (
 	"cosmossdk.io/collections"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/productscience/inference/x/inference/types"
+	"github.com/productscience/inference/x/inference/utils"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -37,6 +38,58 @@ func (k Keeper) PoCV2StoreCommit(goCtx context.Context, req *types.QueryPoCV2Sto
 		Count:    commit.Count,
 		RootHash: commit.RootHash,
 		Found:    true,
+	}, nil
+}
+
+// AllPoCV2StoreCommitsForStage returns all store commits for a given PoC stage.
+func (k Keeper) AllPoCV2StoreCommitsForStage(goCtx context.Context, req *types.QueryAllPoCV2StoreCommitsForStageRequest) (*types.QueryAllPoCV2StoreCommitsForStageResponse, error) {
+	if req == nil {
+		return nil, status.Error(codes.InvalidArgument, "invalid request")
+	}
+
+	ctx := sdk.UnwrapSDKContext(goCtx)
+
+	var commits []*types.PoCV2StoreCommitWithAddress
+
+	iter, err := k.PoCV2StoreCommits.Iterate(ctx, collections.NewPrefixedPairRange[int64, sdk.AccAddress](req.PocStageStartBlockHeight))
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to iterate commits: %v", err)
+	}
+	defer iter.Close()
+
+	for ; iter.Valid(); iter.Next() {
+		key, err := iter.Key()
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "failed to get key: %v", err)
+		}
+		value, err := iter.Value()
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "failed to get value: %v", err)
+		}
+
+		addr := key.K2()
+		acc := k.AccountKeeper.GetAccount(ctx, addr)
+		if acc == nil {
+			k.LogError("AllPoCV2StoreCommitsForStage. Account not found", types.PoC, "address", addr.String())
+			continue
+		}
+
+		pubKey := acc.GetPubKey()
+		if pubKey == nil {
+			k.LogError("AllPoCV2StoreCommitsForStage. PubKey not found", types.PoC, "address", addr.String())
+			continue
+		}
+
+		commits = append(commits, &types.PoCV2StoreCommitWithAddress{
+			ParticipantAddress: addr.String(),
+			Count:              value.Count,
+			RootHash:           value.RootHash,
+			HexPubKey:          utils.PubKeyToHexString(pubKey),
+		})
+	}
+
+	return &types.QueryAllPoCV2StoreCommitsForStageResponse{
+		Commits: commits,
 	}, nil
 }
 

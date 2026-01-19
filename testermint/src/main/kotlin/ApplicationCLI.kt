@@ -762,6 +762,18 @@ data class ApplicationCLI(
             )
         }
 
+    fun getAllPoCV2StoreCommitsForStage(epochStartHeight: Long): AllPoCV2StoreCommitsResponse =
+        wrapLog("getAllPoCV2StoreCommitsForStage", infoLevel = false) {
+            execAndParse(
+                listOf(
+                    "query",
+                    "inference",
+                    "all-poc-v2-store-commits",
+                    epochStartHeight.toString()
+                )
+            )
+        }
+
     fun getColdPrivateKey(): String = wrapLog("getColdPrivateKey", infoLevel = false) {
         val accountName = this.getColdAccountName()
         exec(
@@ -831,6 +843,18 @@ data class ApplicationCLI(
     data class MLNodeWeightDistributionResponse(
         val weights: List<MLNodeWeightResponse> = emptyList(),
         val found: Boolean = false
+    )
+
+    data class PoCV2StoreCommitWithAddress(
+        @JsonProperty("participant_address")
+        val participantAddress: String = "",
+        val count: Long = 0,
+        @JsonProperty("root_hash")
+        val rootHash: String? = null
+    )
+
+    data class AllPoCV2StoreCommitsResponse(
+        val commits: List<PoCV2StoreCommitWithAddress> = emptyList()
     )
 }
 

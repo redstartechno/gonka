@@ -332,6 +332,12 @@ func (am AppModule) AutoCLIOptions() *autocliv1.ModuleOptions {
 					Short:          "Query MLNode weight distribution for a participant",
 					PositionalArgs: []*autocliv1.PositionalArgDescriptor{{ProtoField: "poc_stage_start_block_height"}, {ProtoField: "participant_address"}},
 				},
+				{
+					RpcMethod:      "AllPoCV2StoreCommitsForStage",
+					Use:            "all-poc-v2-store-commits [poc-stage-start-block-height]",
+					Short:          "Query all PoC v2 store commits for a stage",
+					PositionalArgs: []*autocliv1.PositionalArgDescriptor{{ProtoField: "poc_stage_start_block_height"}},
+				},
 				// this line is used by ignite scaffolding # autocli/query
 			},
 		},

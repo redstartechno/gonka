@@ -19,7 +19,7 @@ class PoCOffChainTests : TestermintTest() {
         logSection("=== TEST: PoC Off-Chain Artifacts ===")
 
         // Initialize cluster with default configuration
-        val (cluster, genesis) = initCluster(reboot = true)
+        val (cluster, genesis) = initCluster(reboot = true, config = bandwidthConfig)
         cluster.allPairs.forEach { it.waitForMlNodesToLoad() }
 
         // Wait for PoC generation phase to end
@@ -117,6 +117,56 @@ class PoCOffChainTests : TestermintTest() {
         logSection("TEST PASSED: PoC off-chain artifacts workflow complete")
     }
 
+    @Test
+    fun `poc offchain validation - query all store commits for stage`() {
+        logSection("=== TEST: PoC Off-Chain Validation - All Store Commits Query ===")
+
+        // Initialize cluster
+        val (cluster, genesis) = initCluster(reboot = true)
+        cluster.allPairs.forEach { it.waitForMlNodesToLoad() }
+
+        // Wait for PoC generation to complete and some artifacts to be generated
+        genesis.waitForStage(EpochStage.END_OF_POC, offset = 1)
+        genesis.node.waitForNextBlock(3)
+
+        val epochData = genesis.getEpochData()
+        val pocStartHeight = epochData.latestEpoch.pocStartBlockHeight
+        val participantAddress = genesis.node.getColdAddress()
+
+        // First verify individual store commit works
+        logSection("Verifying individual store commit query")
+        val storeCommit = genesis.node.getPoCV2StoreCommit(pocStartHeight, participantAddress)
+        Logger.info("Individual store commit: found=${storeCommit.found}, count=${storeCommit.count}")
+
+        // Query all store commits for the stage using the new endpoint
+        logSection("Querying all store commits for stage using new endpoint")
+        val allCommits = genesis.node.getAllPoCV2StoreCommitsForStage(pocStartHeight)
+        Logger.info("All commits for stage: ${allCommits.commits.size} participants")
+
+        // Verify results
+        if (storeCommit.found) {
+            // If we have an individual commit, it should appear in all commits
+            assertThat(allCommits.commits).isNotEmpty()
+            
+            // Find our participant in the list
+            val ourCommit = allCommits.commits.find { it.participantAddress == participantAddress }
+            if (ourCommit != null) {
+                Logger.info("Found our commit in all commits: count=${ourCommit.count}")
+                assertThat(ourCommit.count).isEqualTo(storeCommit.count)
+            } else {
+                Logger.warn("Our participant not found in all commits (may have been filtered)")
+            }
+        }
+
+        allCommits.commits.forEach { commit ->
+            Logger.info("Commit: participant=${commit.participantAddress}, count=${commit.count}")
+            assertThat(commit.participantAddress).isNotEmpty()
+            assertThat(commit.count).isGreaterThanOrEqualTo(0)
+        }
+
+        logSection("TEST PASSED: All store commits query works correctly")
+    }
+
     companion object {
         /**
          * Builds the binary payload for PoC proofs signature verification.
@@ -152,4 +202,19 @@ class PoCOffChainTests : TestermintTest() {
             return digest.digest(buffer.array())
         }
     }
+
+    val offChainPoCSpec = spec {
+        this[AppState::inference] = spec<InferenceState> {
+            this[InferenceState::params] = spec<InferenceParams> {
+                this[InferenceParams::epochParams] = spec<EpochParams> {
+                    this[EpochParams::pocStageDuration] = 3L
+                    this[EpochParams::pocValidationDuration] = 4L
+                }
+            }
+        }
+    }
+
+    val bandwidthConfig = inferenceConfig.copy(
+        genesisSpec = inferenceConfig.genesisSpec?.merge(offChainPoCSpec) ?: offChainPoCSpec,
+    )
 }

@@ -26,11 +26,12 @@ type NodePoCOrchestratorV2 interface {
 }
 
 type NodePoCOrchestratorV2Impl struct {
-	pubKey       string
-	nodeBroker   *broker.Broker
-	callbackUrl  string
-	chainBridge  OrchestratorChainBridgeV2
-	phaseTracker *chainphase.ChainPhaseTracker
+	pubKey            string
+	nodeBroker        *broker.Broker
+	callbackUrl       string
+	chainBridge       OrchestratorChainBridgeV2
+	phaseTracker      *chainphase.ChainPhaseTracker
+	offChainValidator *OffChainValidator
 }
 
 // OrchestratorChainBridgeV2 provides chain queries for PoC v2.
@@ -157,6 +158,15 @@ func NewNodePoCOrchestratorV2ForCosmosChain(
 			chainNodeUrl: chainNodeUrl,
 		},
 		phaseTracker: phaseTracker,
+		offChainValidator: NewOffChainValidator(
+			cosmosClient,
+			nodeBroker,
+			phaseTracker,
+			callbackUrl,
+			pubKey,
+			chainNodeUrl,
+			DefaultValidationConfig(),
+		),
 	}
 }
 
@@ -176,195 +186,13 @@ func NewNodePoCOrchestratorV2(
 	}
 }
 
-// ValidateReceivedArtifacts validates PoC v2 artifacts from all participants.
-// It samples artifacts from each participant and sends validation requests to MLNodes.
+// ValidateReceivedArtifacts validates artifacts from all participants using off-chain proofs.
+// It fetches MMR proofs from participant APIs, verifies them, and sends to ML nodes for validation.
 func (o *NodePoCOrchestratorV2Impl) ValidateReceivedArtifacts(pocStageStartBlockHeight int64) {
-	logging.Info("ValidateReceivedArtifacts (v2). Starting.", types.PoC, "pocStageStartBlockHeight", pocStageStartBlockHeight)
-	epochState := o.phaseTracker.GetCurrentEpochState()
+	logging.Info("ValidateReceivedArtifacts (v2): delegating to off-chain validator", types.PoC,
+		"pocStageStartBlockHeight", pocStageStartBlockHeight)
 
-	logging.Info("ValidateReceivedArtifacts (v2). Current epoch state.", types.PoC,
-		"pocStageStartBlockHeight", pocStageStartBlockHeight,
-		"epochState.CurrentBlock.Height", epochState.CurrentBlock.Height,
-		"epochState.CurrentPhase", epochState.CurrentPhase,
-		"epochState.LatestEpoch.PocStartBlockHeight", epochState.LatestEpoch.PocStartBlockHeight,
-		"epochState.LatestEpoch.EpochIndex", epochState.LatestEpoch.EpochIndex)
-
-	// Determine block hash based on PoC type
-	var blockHash string
-	if epochState.CurrentPhase == types.InferencePhase && epochState.ActiveConfirmationPoCEvent != nil {
-		// Confirmation PoC - use hash from event
-		blockHash = epochState.ActiveConfirmationPoCEvent.PocSeedBlockHash
-		logging.Info("ValidateReceivedArtifacts (v2). Using confirmation PoC block hash from event.", types.PoC,
-			"pocStageStartBlockHeight", pocStageStartBlockHeight,
-			"triggerHeight", epochState.ActiveConfirmationPoCEvent.TriggerHeight,
-			"blockHash", blockHash)
-	} else {
-		// Regular PoC - query hash at start height
-		var err error
-		blockHash, err = o.chainBridge.GetBlockHash(pocStageStartBlockHeight)
-		if err != nil {
-			logging.Error("ValidateReceivedArtifacts (v2). Failed to get block hash", types.PoC,
-				"pocStageStartBlockHeight", pocStageStartBlockHeight, "error", err)
-			return
-		}
-		logging.Info("ValidateReceivedArtifacts (v2). Got start of PoC block hash.", types.PoC,
-			"pocStageStartBlockHeight", pocStageStartBlockHeight,
-			"blockHash", blockHash)
-	}
-
-	// Get v2 artifact batches from chain
-	allBatches, err := o.chainBridge.PoCv2BatchesForStage(pocStageStartBlockHeight)
-	if err != nil {
-		logging.Error("ValidateReceivedArtifacts (v2). Failed to get PoC v2 artifact batches", types.PoC,
-			"pocStageStartBlockHeight", pocStageStartBlockHeight, "error", err)
-		return
-	}
-
-	participants := make([]string, len(allBatches.Batches))
-	for i, batch := range allBatches.Batches {
-		participants[i] = batch.ParticipantAddress
-	}
-	logging.Info("ValidateReceivedArtifacts (v2). Got artifact batches.", types.PoC,
-		"pocStageStartBlockHeight", pocStageStartBlockHeight,
-		"numParticipants", len(participants),
-		"participants", participants)
-
-	// Get available nodes for validation
-	nodes, err := o.nodeBroker.GetNodes()
-	if err != nil {
-		logging.Error("ValidateReceivedArtifacts (v2). Failed to get nodes", types.PoC,
-			"pocStageStartBlockHeight", pocStageStartBlockHeight, "error", err)
-		return
-	}
-	nodes = filterNodesForV2Validation(nodes)
-	logging.Info("ValidateReceivedArtifacts (v2). Filtered nodes available for validation.", types.PoC,
-		"numNodes", len(nodes))
-
-	if len(nodes) == 0 {
-		logging.Error("ValidateReceivedArtifacts (v2). No nodes available to validate artifacts", types.PoC,
-			"pocStageStartBlockHeight", pocStageStartBlockHeight)
-		return
-	}
-
-	// Stop PoC v2 generation on all nodes before starting validation.
-	// This is called once per validation stage transition (not per batch).
-	o.stopGenerationOnAllNodes(nodes)
-
-	// Get PoC params for sample size
-	pocParams, err := o.chainBridge.GetPocParams()
-	if err != nil {
-		logging.Error("ValidateReceivedArtifacts (v2). Failed to get PoC params", types.PoC,
-			"pocStageStartBlockHeight", pocStageStartBlockHeight, "error", err)
-		return
-	}
-	samplesPerBatch := int64(pocParams.ValidationSampleSize)
-	if samplesPerBatch == 0 {
-		logging.Info("ValidateReceivedArtifacts (v2). Defaulting to 200 samples per batch", types.PoC)
-		samplesPerBatch = 200
-	}
-
-	// Get PoC params for model info
-	if pocParams.ModelId == "" || pocParams.SeqLen <= 0 {
-		logging.Error("ValidateReceivedArtifacts (v2). PoC params missing model_id or seq_len", types.PoC,
-			"pocStageStartBlockHeight", pocStageStartBlockHeight,
-			"modelId", pocParams.ModelId,
-			"seqLen", pocParams.SeqLen)
-		return
-	}
-
-	samplingBlockHash := epochState.CurrentBlock.Hash
-	if samplingBlockHash == "" {
-		logging.Warn("ValidateReceivedArtifacts (v2). Current block hash unavailable, falling back to PoC start hash", types.PoC)
-		samplingBlockHash = blockHash
-	}
-
-	attemptCounter := 0
-	successfulValidations := 0
-	failedValidations := 0
-
-	// Iterate over participants' artifact batches
-	for _, participantBatches := range allBatches.Batches {
-		// Collect all unique artifacts from this participant
-		allArtifacts := collectUniqueArtifacts(participantBatches)
-		if len(allArtifacts) == 0 {
-			logging.Warn("ValidateReceivedArtifacts (v2). No artifacts found for participant", types.PoC,
-				"participant", participantBatches.ParticipantAddress)
-			continue
-		}
-
-		// Sample artifacts for validation
-		sampledArtifacts := sampleArtifactsV2(allArtifacts, o.pubKey, samplingBlockHash, pocStageStartBlockHeight, samplesPerBatch)
-
-		// Extract nonces from sampled artifacts
-		nonces := make([]int64, len(sampledArtifacts))
-		for i, art := range sampledArtifacts {
-			nonces[i] = art.Nonce
-		}
-
-		// Build validation request
-		// MLNode appends /validated to the URL, so we provide the v2 base path
-		validationCallbackUrl := o.callbackUrl + "/v2/poc-batches"
-		validationReq := mlnodeclient.PoCGenerateRequestV2{
-			BlockHash:   blockHash,
-			BlockHeight: pocStageStartBlockHeight,
-			PublicKey:   participantBatches.PublicKey,
-			NodeCount:   len(nodes),
-			Nonces:      nonces,
-			Params: mlnodeclient.PoCParamsV2{
-				Model:  pocParams.ModelId,
-				SeqLen: pocParams.SeqLen,
-			},
-			URL: validationCallbackUrl,
-			Validation: &mlnodeclient.ValidationV2{
-				Artifacts: sampledArtifacts,
-			},
-			StatTest: mlnodeclient.DefaultStatTestParamsV2(),
-		}
-		logging.Info("ValidateReceivedArtifacts (v2). Validation request", types.PoC, "validationReq", validationReq, "blockHash", blockHash, "blockHeight", pocStageStartBlockHeight, "pubKey", participantBatches.PublicKey)
-
-		validationSucceeded := false
-		for attempt := range POC_V2_VALIDATE_BATCH_RETRIES {
-			node := nodes[attemptCounter%len(nodes)]
-			attemptCounter++
-
-			validationReq.NodeId = int(node.Node.NodeNum)
-
-			logging.Info("ValidateReceivedArtifacts (v2). Sending sampled artifacts for validation.", types.PoC,
-				"attempt", attempt,
-				"artifactCount", len(sampledArtifacts),
-				"pocStageStartBlockHeight", pocStageStartBlockHeight,
-				"node.Id", node.Node.Id, "node.Host", node.Node.Host,
-				"participant", participantBatches.ParticipantAddress)
-
-			nodeClient := o.nodeBroker.NewNodeClient(&node.Node)
-			_, err = nodeClient.GenerateV2(context.Background(), validationReq)
-			if err != nil {
-				logging.Error("ValidateReceivedArtifacts (v2). Failed to send validate request to node", types.PoC,
-					"pocStageStartBlockHeight", pocStageStartBlockHeight,
-					"node", node.Node.Host, "error", err)
-				continue
-			}
-
-			validationSucceeded = true
-			break
-		}
-
-		if validationSucceeded {
-			successfulValidations++
-		} else {
-			failedValidations++
-			logging.Error("ValidateReceivedArtifacts (v2). Failed to validate artifacts after all retry attempts", types.PoC,
-				"pocStageStartBlockHeight", pocStageStartBlockHeight,
-				"participant", participantBatches.ParticipantAddress,
-				"maxAttempts", POC_V2_VALIDATE_BATCH_RETRIES)
-		}
-	}
-
-	logging.Info("ValidateReceivedArtifacts (v2). Finished.", types.PoC,
-		"pocStageStartBlockHeight", pocStageStartBlockHeight,
-		"totalParticipants", len(allBatches.Batches),
-		"successfulValidations", successfulValidations,
-		"failedValidations", failedValidations)
+	o.offChainValidator.ValidateAll(pocStageStartBlockHeight)
 }
 
 // collectUniqueArtifacts collects all unique artifacts from a participant's batches.
