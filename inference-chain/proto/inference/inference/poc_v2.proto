@@ -5,7 +5,7 @@ option go_package = "github.com/productscience/inference/x/inference/types";
 
 // PoCArtifactV2 represents a single artifact from PoC v2 generation.
 message PoCArtifactV2 {
-  int64 nonce = 1;
+  int32 nonce = 1;
   bytes vector = 2; // Opaque bytes (encoding defined at application level)
 }
 
@@ -52,6 +52,7 @@ message PoCV2StoreCommit {
   int64 poc_stage_start_block_height = 2;
   uint32 count = 3;
   bytes root_hash = 4;
+  int64 commit_block_height = 5; // block when this commit was recorded
 }
 
 // MLNodeWeightDistribution stores per-node weight distribution.

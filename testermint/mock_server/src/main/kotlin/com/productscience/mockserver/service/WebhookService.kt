@@ -6,6 +6,7 @@ import io.ktor.client.request.*
 import io.ktor.http.*
 import kotlinx.coroutines.*
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
+import com.productscience.mockserver.model.latestNonce
 import org.slf4j.LoggerFactory
 
 /**
@@ -178,10 +179,12 @@ class WebhookService(private val responseService: ResponseService) {
                 // Get the weight from the ResponseService, default to 10 if not set
                 val weight = responseService.getPocResponseWeight(hostName) ?: 10L
 
-                // Generate deterministic artifact vectors (predictable for tests)
-                // Each vector is 24 bytes (12 fp16 values) base64-encoded to 32 chars
-                val artifacts = (1..weight.toInt()).map { nonce ->
-                    val vectorBytes = ByteArray(24) { i -> ((nonce * 2 + i) % 256).toByte() }
+                // Generate unique nonces using the shared atomic counter (same as v1)
+                // This ensures multi-node participants get unique nonces across all their nodes
+                val start = latestNonce.getAndAdd(weight)
+                val artifacts = (0 until weight.toInt()).map { i ->
+                    val nonce = start + i
+                    val vectorBytes = ByteArray(24) { j -> ((nonce * 2 + j) % 256).toByte() }
                     val vectorB64 = java.util.Base64.getEncoder().encodeToString(vectorBytes)
                     """{"nonce": $nonce, "vector_b64": "$vectorB64"}"""
                 }.joinToString(", ")

@@ -95,11 +95,11 @@ message PoCV2StoreCommit {
 }
 ```
 
-**Chain acceptance rules:**
+**Chain acceptance rules (enforced on-chain):**
 1. Must be within the PoC exchange window (same gating as `MsgSubmitPocBatchesV2`).
    - Use existing `CheckPoCMessageTooLate(ctx, startBlockHeight, PoCWindowBatch)`.
-2. `count > last_recorded.count` for this `(creator, poc_stage_start_block_height)`.
-3. Rate limit: at most one accepted commit per participant per N blocks (e.g., N=1 or N=5).
+2. **Strict count increase:** `count > last_recorded.count` for this `(creator, poc_stage_start_block_height)`. Reject if equal or lower.
+3. **Rate limit:** At most one accepted commit per participant per N blocks (e.g., N=1 or N=5). Track `last_commit_block` per participant.
 
 **Code reference:** Window validation logic is in `inference-chain/x/inference/keeper/poc_period_validation.go`.
 
@@ -121,8 +121,8 @@ message MLNodeWeightDistribution {
 }
 ```
 
-**Chain acceptance rules:**
-1. Sum of `weight` values must equal `last_commit.count` for this participant/stage.
+**Chain acceptance rules (enforced on-chain):**
+1. **Exact match:** Sum of `weight` values must equal `last_commit.count` for this participant/stage. Chain queries the last `PoCV2StoreCommit` and rejects if sum differs.
 2. `node_id` values are self-reported (same trust model as current `PoCBatchV2.node_id`).
 
 **Purpose:** This message is **information-only** for analytics and weight attribution. It is not enforced on-chain beyond the sum check. Validators do not verify individual node weights during validation.
@@ -285,13 +285,13 @@ To prevent adaptive cheating:
 
 ## 8. Implementation Phases
 
-### Phase 1: Storage & MMR ✅
+### Phase 1: Storage & MMR 
 **Status:** Complete (see `offchain-phase1.md`)
 - Single-file storage layout with in-memory MMR
 - 40+ unit tests covering proofs, recovery, tamper detection
 - Dual-write integration in artifact handler
 
-### Phase 2: Proof API ✅
+### Phase 2: Proof API 
 **Status:** Complete (see `offchain-phase2.md`)
 - `POST /v1/poc/proofs` endpoint with signature verification
 - `GET /v1/poc/artifacts/state` endpoint for validators
@@ -300,7 +300,7 @@ To prevent adaptive cheating:
 - Rate limiting (100 req/min per IP)
 - Integration tests with testermint
 
-### Phase 3: New Chain Messages ✅
+### Phase 3: New Chain Messages 
 **Status:** Complete (see `offchain-phase3.md`)
 - `MsgPoCV2StoreCommit` proto, handler, and query endpoint
 - `MsgMLNodeWeightDistribution` proto, handler, and query endpoint
@@ -309,13 +309,13 @@ To prevent adaptive cheating:
 - Distribution submission from dispatcher (at end of generation)
 - Testermint verification
 
-### Phase 3.5: PoC Package Consolidation
-**Status:** Planned (see `manager-v5.md`)
-- Consolidate all PoC logic into `poc/` package
-- Block-driven commit worker with PhaseTracker subscription
-- Single owner for flush, commits, and distribution
-- Pure phase predicates (`poc/phase/`)
-- Move orchestrator to `poc/orchestrator.go`
+### Phase 3.5: PoC Package Consolidation 
+**Status:** Complete (see `offchain-phase35.md`)
+- CommitWorker sends commits every 5s (not per `/generated` request)
+- Distribution queries chain for last commit and validates exact match (`sum(weights) == last_commit.count`)
+- Chain enforces strict `count` increase (`new_count > last_count`)
+- Chain enforces same-block rate limit (at most 1 commit per block)
+- Nonce type changed from `int64` to `int32`
 
 ### Phase 4: Validation Switchover
 - Update `node_orchestrator.go` to fetch from off-chain API instead of chain.
@@ -334,8 +334,8 @@ To prevent adaptive cheating:
 ### Normalize Weight by Block Duration
 We must saving `poc_generation_start_block` and `poc_generation_end_block` to normalize weight. Protects against inflated weight if blocks are slow.
 
-### Nonce Type Change
-`PoCArtifactV2.nonce` must be changed from `int64` to `int32`:
+### Nonce Type Change 
+`PoCArtifactV2.nonce` changed from `int64` to `int32` in Phase 3.5:
 ```protobuf
 message PoCArtifactV2 {
   int32 nonce = 1;  // changed from int64

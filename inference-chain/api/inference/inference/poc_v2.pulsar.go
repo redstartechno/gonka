@@ -90,8 +90,8 @@ func (x *fastReflection_PoCArtifactV2) Interface() protoreflect.ProtoMessage {
 // While iterating, mutating operations may only be performed
 // on the current field descriptor.
 func (x *fastReflection_PoCArtifactV2) Range(f func(protoreflect.FieldDescriptor, protoreflect.Value) bool) {
-	if x.Nonce != int64(0) {
-		value := protoreflect.ValueOfInt64(x.Nonce)
+	if x.Nonce != int32(0) {
+		value := protoreflect.ValueOfInt32(x.Nonce)
 		if !f(fd_PoCArtifactV2_nonce, value) {
 			return
 		}
@@ -118,7 +118,7 @@ func (x *fastReflection_PoCArtifactV2) Range(f func(protoreflect.FieldDescriptor
 func (x *fastReflection_PoCArtifactV2) Has(fd protoreflect.FieldDescriptor) bool {
 	switch fd.FullName() {
 	case "inference.inference.PoCArtifactV2.nonce":
-		return x.Nonce != int64(0)
+		return x.Nonce != int32(0)
 	case "inference.inference.PoCArtifactV2.vector":
 		return len(x.Vector) != 0
 	default:
@@ -138,7 +138,7 @@ func (x *fastReflection_PoCArtifactV2) Has(fd protoreflect.FieldDescriptor) bool
 func (x *fastReflection_PoCArtifactV2) Clear(fd protoreflect.FieldDescriptor) {
 	switch fd.FullName() {
 	case "inference.inference.PoCArtifactV2.nonce":
-		x.Nonce = int64(0)
+		x.Nonce = int32(0)
 	case "inference.inference.PoCArtifactV2.vector":
 		x.Vector = nil
 	default:
@@ -159,7 +159,7 @@ func (x *fastReflection_PoCArtifactV2) Get(descriptor protoreflect.FieldDescript
 	switch descriptor.FullName() {
 	case "inference.inference.PoCArtifactV2.nonce":
 		value := x.Nonce
-		return protoreflect.ValueOfInt64(value)
+		return protoreflect.ValueOfInt32(value)
 	case "inference.inference.PoCArtifactV2.vector":
 		value := x.Vector
 		return protoreflect.ValueOfBytes(value)
@@ -184,7 +184,7 @@ func (x *fastReflection_PoCArtifactV2) Get(descriptor protoreflect.FieldDescript
 func (x *fastReflection_PoCArtifactV2) Set(fd protoreflect.FieldDescriptor, value protoreflect.Value) {
 	switch fd.FullName() {
 	case "inference.inference.PoCArtifactV2.nonce":
-		x.Nonce = value.Int()
+		x.Nonce = int32(value.Int())
 	case "inference.inference.PoCArtifactV2.vector":
 		x.Vector = value.Bytes()
 	default:
@@ -225,7 +225,7 @@ func (x *fastReflection_PoCArtifactV2) Mutable(fd protoreflect.FieldDescriptor) 
 func (x *fastReflection_PoCArtifactV2) NewField(fd protoreflect.FieldDescriptor) protoreflect.Value {
 	switch fd.FullName() {
 	case "inference.inference.PoCArtifactV2.nonce":
-		return protoreflect.ValueOfInt64(int64(0))
+		return protoreflect.ValueOfInt32(int32(0))
 	case "inference.inference.PoCArtifactV2.vector":
 		return protoreflect.ValueOfBytes(nil)
 	default:
@@ -408,7 +408,7 @@ func (x *fastReflection_PoCArtifactV2) ProtoMethods() *protoiface.Methods {
 					}
 					b := dAtA[iNdEx]
 					iNdEx++
-					x.Nonce |= int64(b&0x7F) << shift
+					x.Nonce |= int32(b&0x7F) << shift
 					if b < 0x80 {
 						break
 					}
@@ -3232,6 +3232,7 @@ var (
 	fd_PoCV2StoreCommit_poc_stage_start_block_height protoreflect.FieldDescriptor
 	fd_PoCV2StoreCommit_count                        protoreflect.FieldDescriptor
 	fd_PoCV2StoreCommit_root_hash                    protoreflect.FieldDescriptor
+	fd_PoCV2StoreCommit_commit_block_height          protoreflect.FieldDescriptor
 )
 
 func init() {
@@ -3241,6 +3242,7 @@ func init() {
 	fd_PoCV2StoreCommit_poc_stage_start_block_height = md_PoCV2StoreCommit.Fields().ByName("poc_stage_start_block_height")
 	fd_PoCV2StoreCommit_count = md_PoCV2StoreCommit.Fields().ByName("count")
 	fd_PoCV2StoreCommit_root_hash = md_PoCV2StoreCommit.Fields().ByName("root_hash")
+	fd_PoCV2StoreCommit_commit_block_height = md_PoCV2StoreCommit.Fields().ByName("commit_block_height")
 }
 
 var _ protoreflect.Message = (*fastReflection_PoCV2StoreCommit)(nil)
@@ -3332,6 +3334,12 @@ func (x *fastReflection_PoCV2StoreCommit) Range(f func(protoreflect.FieldDescrip
 			return
 		}
 	}
+	if x.CommitBlockHeight != int64(0) {
+		value := protoreflect.ValueOfInt64(x.CommitBlockHeight)
+		if !f(fd_PoCV2StoreCommit_commit_block_height, value) {
+			return
+		}
+	}
 }
 
 // Has reports whether a field is populated.
@@ -3355,6 +3363,8 @@ func (x *fastReflection_PoCV2StoreCommit) Has(fd protoreflect.FieldDescriptor) b
 		return x.Count != uint32(0)
 	case "inference.inference.PoCV2StoreCommit.root_hash":
 		return len(x.RootHash) != 0
+	case "inference.inference.PoCV2StoreCommit.commit_block_height":
+		return x.CommitBlockHeight != int64(0)
 	default:
 		if fd.IsExtension() {
 			panic(fmt.Errorf("proto3 declared messages do not support extensions: inference.inference.PoCV2StoreCommit"))
@@ -3379,6 +3389,8 @@ func (x *fastReflection_PoCV2StoreCommit) Clear(fd protoreflect.FieldDescriptor)
 		x.Count = uint32(0)
 	case "inference.inference.PoCV2StoreCommit.root_hash":
 		x.RootHash = nil
+	case "inference.inference.PoCV2StoreCommit.commit_block_height":
+		x.CommitBlockHeight = int64(0)
 	default:
 		if fd.IsExtension() {
 			panic(fmt.Errorf("proto3 declared messages do not support extensions: inference.inference.PoCV2StoreCommit"))
@@ -3407,6 +3419,9 @@ func (x *fastReflection_PoCV2StoreCommit) Get(descriptor protoreflect.FieldDescr
 	case "inference.inference.PoCV2StoreCommit.root_hash":
 		value := x.RootHash
 		return protoreflect.ValueOfBytes(value)
+	case "inference.inference.PoCV2StoreCommit.commit_block_height":
+		value := x.CommitBlockHeight
+		return protoreflect.ValueOfInt64(value)
 	default:
 		if descriptor.IsExtension() {
 			panic(fmt.Errorf("proto3 declared messages do not support extensions: inference.inference.PoCV2StoreCommit"))
@@ -3435,6 +3450,8 @@ func (x *fastReflection_PoCV2StoreCommit) Set(fd protoreflect.FieldDescriptor, v
 		x.Count = uint32(value.Uint())
 	case "inference.inference.PoCV2StoreCommit.root_hash":
 		x.RootHash = value.Bytes()
+	case "inference.inference.PoCV2StoreCommit.commit_block_height":
+		x.CommitBlockHeight = value.Int()
 	default:
 		if fd.IsExtension() {
 			panic(fmt.Errorf("proto3 declared messages do not support extensions: inference.inference.PoCV2StoreCommit"))
@@ -3463,6 +3480,8 @@ func (x *fastReflection_PoCV2StoreCommit) Mutable(fd protoreflect.FieldDescripto
 		panic(fmt.Errorf("field count of message inference.inference.PoCV2StoreCommit is not mutable"))
 	case "inference.inference.PoCV2StoreCommit.root_hash":
 		panic(fmt.Errorf("field root_hash of message inference.inference.PoCV2StoreCommit is not mutable"))
+	case "inference.inference.PoCV2StoreCommit.commit_block_height":
+		panic(fmt.Errorf("field commit_block_height of message inference.inference.PoCV2StoreCommit is not mutable"))
 	default:
 		if fd.IsExtension() {
 			panic(fmt.Errorf("proto3 declared messages do not support extensions: inference.inference.PoCV2StoreCommit"))
@@ -3484,6 +3503,8 @@ func (x *fastReflection_PoCV2StoreCommit) NewField(fd protoreflect.FieldDescript
 		return protoreflect.ValueOfUint32(uint32(0))
 	case "inference.inference.PoCV2StoreCommit.root_hash":
 		return protoreflect.ValueOfBytes(nil)
+	case "inference.inference.PoCV2StoreCommit.commit_block_height":
+		return protoreflect.ValueOfInt64(int64(0))
 	default:
 		if fd.IsExtension() {
 			panic(fmt.Errorf("proto3 declared messages do not support extensions: inference.inference.PoCV2StoreCommit"))
@@ -3567,6 +3588,9 @@ func (x *fastReflection_PoCV2StoreCommit) ProtoMethods() *protoiface.Methods {
 		if l > 0 {
 			n += 1 + l + runtime.Sov(uint64(l))
 		}
+		if x.CommitBlockHeight != 0 {
+			n += 1 + runtime.Sov(uint64(x.CommitBlockHeight))
+		}
 		if x.unknownFields != nil {
 			n += len(x.unknownFields)
 		}
@@ -3595,6 +3619,11 @@ func (x *fastReflection_PoCV2StoreCommit) ProtoMethods() *protoiface.Methods {
 		if x.unknownFields != nil {
 			i -= len(x.unknownFields)
 			copy(dAtA[i:], x.unknownFields)
+		}
+		if x.CommitBlockHeight != 0 {
+			i = runtime.EncodeVarint(dAtA, i, uint64(x.CommitBlockHeight))
+			i--
+			dAtA[i] = 0x28
 		}
 		if len(x.RootHash) > 0 {
 			i -= len(x.RootHash)
@@ -3773,6 +3802,25 @@ func (x *fastReflection_PoCV2StoreCommit) ProtoMethods() *protoiface.Methods {
 					x.RootHash = []byte{}
 				}
 				iNdEx = postIndex
+			case 5:
+				if wireType != 0 {
+					return protoiface.UnmarshalOutput{NoUnkeyedLiterals: input.NoUnkeyedLiterals, Flags: input.Flags}, fmt.Errorf("proto: wrong wireType = %d for field CommitBlockHeight", wireType)
+				}
+				x.CommitBlockHeight = 0
+				for shift := uint(0); ; shift += 7 {
+					if shift >= 64 {
+						return protoiface.UnmarshalOutput{NoUnkeyedLiterals: input.NoUnkeyedLiterals, Flags: input.Flags}, runtime.ErrIntOverflow
+					}
+					if iNdEx >= l {
+						return protoiface.UnmarshalOutput{NoUnkeyedLiterals: input.NoUnkeyedLiterals, Flags: input.Flags}, io.ErrUnexpectedEOF
+					}
+					b := dAtA[iNdEx]
+					iNdEx++
+					x.CommitBlockHeight |= int64(b&0x7F) << shift
+					if b < 0x80 {
+						break
+					}
+				}
 			default:
 				iNdEx = preIndex
 				skippy, err := runtime.Skip(dAtA[iNdEx:])
@@ -4433,7 +4481,7 @@ type PoCArtifactV2 struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	Nonce  int64  `protobuf:"varint,1,opt,name=nonce,proto3" json:"nonce,omitempty"`
+	Nonce  int32  `protobuf:"varint,1,opt,name=nonce,proto3" json:"nonce,omitempty"`
 	Vector []byte `protobuf:"bytes,2,opt,name=vector,proto3" json:"vector,omitempty"` // Opaque bytes (encoding defined at application level)
 }
 
@@ -4457,7 +4505,7 @@ func (*PoCArtifactV2) Descriptor() ([]byte, []int) {
 	return file_inference_inference_poc_v2_proto_rawDescGZIP(), []int{0}
 }
 
-func (x *PoCArtifactV2) GetNonce() int64 {
+func (x *PoCArtifactV2) GetNonce() int32 {
 	if x != nil {
 		return x.Nonce
 	}
@@ -4736,6 +4784,7 @@ type PoCV2StoreCommit struct {
 	PocStageStartBlockHeight int64  `protobuf:"varint,2,opt,name=poc_stage_start_block_height,json=pocStageStartBlockHeight,proto3" json:"poc_stage_start_block_height,omitempty"`
 	Count                    uint32 `protobuf:"varint,3,opt,name=count,proto3" json:"count,omitempty"`
 	RootHash                 []byte `protobuf:"bytes,4,opt,name=root_hash,json=rootHash,proto3" json:"root_hash,omitempty"`
+	CommitBlockHeight        int64  `protobuf:"varint,5,opt,name=commit_block_height,json=commitBlockHeight,proto3" json:"commit_block_height,omitempty"` // block when this commit was recorded
 }
 
 func (x *PoCV2StoreCommit) Reset() {
@@ -4784,6 +4833,13 @@ func (x *PoCV2StoreCommit) GetRootHash() []byte {
 		return x.RootHash
 	}
 	return nil
+}
+
+func (x *PoCV2StoreCommit) GetCommitBlockHeight() int64 {
+	if x != nil {
+		return x.CommitBlockHeight
+	}
+	return 0
 }
 
 // MLNodeWeightDistribution stores per-node weight distribution.
@@ -4846,7 +4902,7 @@ var file_inference_inference_poc_v2_proto_rawDesc = []byte{
 	0x74, 0x6f, 0x12, 0x13, 0x69, 0x6e, 0x66, 0x65, 0x72, 0x65, 0x6e, 0x63, 0x65, 0x2e, 0x69, 0x6e,
 	0x66, 0x65, 0x72, 0x65, 0x6e, 0x63, 0x65, 0x22, 0x3d, 0x0a, 0x0d, 0x50, 0x6f, 0x43, 0x41, 0x72,
 	0x74, 0x69, 0x66, 0x61, 0x63, 0x74, 0x56, 0x32, 0x12, 0x14, 0x0a, 0x05, 0x6e, 0x6f, 0x6e, 0x63,
-	0x65, 0x18, 0x01, 0x20, 0x01, 0x28, 0x03, 0x52, 0x05, 0x6e, 0x6f, 0x6e, 0x63, 0x65, 0x12, 0x16,
+	0x65, 0x18, 0x01, 0x20, 0x01, 0x28, 0x05, 0x52, 0x05, 0x6e, 0x6f, 0x6e, 0x63, 0x65, 0x12, 0x16,
 	0x0a, 0x06, 0x76, 0x65, 0x63, 0x74, 0x6f, 0x72, 0x18, 0x02, 0x20, 0x01, 0x28, 0x0c, 0x52, 0x06,
 	0x76, 0x65, 0x63, 0x74, 0x6f, 0x72, 0x22, 0xd8, 0x01, 0x0a, 0x0a, 0x50, 0x6f, 0x43, 0x42, 0x61,
 	0x74, 0x63, 0x68, 0x56, 0x32, 0x12, 0x2f, 0x0a, 0x13, 0x70, 0x61, 0x72, 0x74, 0x69, 0x63, 0x69,
@@ -4895,7 +4951,7 @@ var file_inference_inference_poc_v2_proto_rawDesc = []byte{
 	0x4c, 0x4e, 0x6f, 0x64, 0x65, 0x57, 0x65, 0x69, 0x67, 0x68, 0x74, 0x12, 0x17, 0x0a, 0x07, 0x6e,
 	0x6f, 0x64, 0x65, 0x5f, 0x69, 0x64, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x06, 0x6e, 0x6f,
 	0x64, 0x65, 0x49, 0x64, 0x12, 0x16, 0x0a, 0x06, 0x77, 0x65, 0x69, 0x67, 0x68, 0x74, 0x18, 0x02,
-	0x20, 0x01, 0x28, 0x0d, 0x52, 0x06, 0x77, 0x65, 0x69, 0x67, 0x68, 0x74, 0x22, 0xb6, 0x01, 0x0a,
+	0x20, 0x01, 0x28, 0x0d, 0x52, 0x06, 0x77, 0x65, 0x69, 0x67, 0x68, 0x74, 0x22, 0xe6, 0x01, 0x0a,
 	0x10, 0x50, 0x6f, 0x43, 0x56, 0x32, 0x53, 0x74, 0x6f, 0x72, 0x65, 0x43, 0x6f, 0x6d, 0x6d, 0x69,
 	0x74, 0x12, 0x2f, 0x0a, 0x13, 0x70, 0x61, 0x72, 0x74, 0x69, 0x63, 0x69, 0x70, 0x61, 0x6e, 0x74,
 	0x5f, 0x61, 0x64, 0x64, 0x72, 0x65, 0x73, 0x73, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x12,
@@ -4907,7 +4963,10 @@ var file_inference_inference_poc_v2_proto_rawDesc = []byte{
 	0x68, 0x74, 0x12, 0x14, 0x0a, 0x05, 0x63, 0x6f, 0x75, 0x6e, 0x74, 0x18, 0x03, 0x20, 0x01, 0x28,
 	0x0d, 0x52, 0x05, 0x63, 0x6f, 0x75, 0x6e, 0x74, 0x12, 0x1b, 0x0a, 0x09, 0x72, 0x6f, 0x6f, 0x74,
 	0x5f, 0x68, 0x61, 0x73, 0x68, 0x18, 0x04, 0x20, 0x01, 0x28, 0x0c, 0x52, 0x08, 0x72, 0x6f, 0x6f,
-	0x74, 0x48, 0x61, 0x73, 0x68, 0x22, 0xc8, 0x01, 0x0a, 0x18, 0x4d, 0x4c, 0x4e, 0x6f, 0x64, 0x65,
+	0x74, 0x48, 0x61, 0x73, 0x68, 0x12, 0x2e, 0x0a, 0x13, 0x63, 0x6f, 0x6d, 0x6d, 0x69, 0x74, 0x5f,
+	0x62, 0x6c, 0x6f, 0x63, 0x6b, 0x5f, 0x68, 0x65, 0x69, 0x67, 0x68, 0x74, 0x18, 0x05, 0x20, 0x01,
+	0x28, 0x03, 0x52, 0x11, 0x63, 0x6f, 0x6d, 0x6d, 0x69, 0x74, 0x42, 0x6c, 0x6f, 0x63, 0x6b, 0x48,
+	0x65, 0x69, 0x67, 0x68, 0x74, 0x22, 0xc8, 0x01, 0x0a, 0x18, 0x4d, 0x4c, 0x4e, 0x6f, 0x64, 0x65,
 	0x57, 0x65, 0x69, 0x67, 0x68, 0x74, 0x44, 0x69, 0x73, 0x74, 0x72, 0x69, 0x62, 0x75, 0x74, 0x69,
 	0x6f, 0x6e, 0x12, 0x2f, 0x0a, 0x13, 0x70, 0x61, 0x72, 0x74, 0x69, 0x63, 0x69, 0x70, 0x61, 0x6e,
 	0x74, 0x5f, 0x61, 0x64, 0x64, 0x72, 0x65, 0x73, 0x73, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52,

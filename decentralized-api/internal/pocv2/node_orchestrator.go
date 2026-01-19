@@ -93,7 +93,7 @@ func (b *OrchestratorChainBridgeV2Impl) PoCv2BatchesForStage(startPoCBlockHeight
 			artifacts := make([]*ArtifactV2, 0, len(chainBatch.Artifacts))
 			for _, artifact := range chainBatch.Artifacts {
 				artifacts = append(artifacts, &ArtifactV2{
-					Nonce:     artifact.Nonce,
+					Nonce:     int64(artifact.Nonce),
 					VectorB64: base64.StdEncoding.EncodeToString(artifact.Vector), // Chain stores as bytes, convert to base64 string
 				})
 			}

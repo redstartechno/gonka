@@ -3,6 +3,7 @@ package pocv2
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -282,21 +283,12 @@ func (w *CommitWorker) submitWeightDistribution(pocHeight int64) {
 		return
 	}
 
-	// 4. Validate sum matches committed count (best-effort, chain accepts anyway)
-	var sum uint32
-	weights := make([]*inference.MLNodeWeight, 0, len(distribution))
-	for nodeId, count := range distribution {
-		weights = append(weights, &inference.MLNodeWeight{
-			NodeId: nodeId,
-			Weight: count,
-		})
-		sum += count
-	}
-
-	if sum != resp.Count {
-		logging.Warn("CommitWorker: distribution sum mismatch", types.PoC,
-			"pocHeight", pocHeight, "sum", sum, "commitCount", resp.Count)
-		// Continue anyway - chain accepts (latest wins)
+	// 4. Build weights adjusted to match committed count
+	weights, err := getWeightDistribution(distribution, resp.Count)
+	if err != nil {
+		logging.Error("CommitWorker: failed to build weight distribution", types.PoC,
+			"pocHeight", pocHeight, "error", err)
+		return
 	}
 
 	msg := &inference.MsgMLNodeWeightDistribution{
@@ -312,5 +304,92 @@ func (w *CommitWorker) submitWeightDistribution(pocHeight int64) {
 
 	w.distributedFor[pocHeight] = true
 	logging.Info("CommitWorker: distributed weights", types.PoC,
-		"pocHeight", pocHeight, "nodes", len(weights), "count", sum)
+		"pocHeight", pocHeight, "nodes", len(weights), "count", resp.Count)
+}
+
+// getWeightDistribution builds weight distribution adjusted to sum exactly to targetCount.
+// If local distribution differs from target, weights are proportionally scaled.
+// Preconditions: distribution must be non-empty, targetCount must be > 0.
+func getWeightDistribution(distribution map[string]uint32, targetCount uint32) ([]*inference.MLNodeWeight, error) {
+	if len(distribution) == 0 {
+		return nil, fmt.Errorf("empty distribution")
+	}
+	if targetCount == 0 {
+		return nil, fmt.Errorf("targetCount is 0")
+	}
+
+	// Calculate local sum
+	var localSum uint32
+	for _, count := range distribution {
+		localSum += count
+	}
+
+	if localSum == 0 {
+		return nil, fmt.Errorf("distribution sum is 0")
+	}
+
+	// If sums match, no adjustment needed
+	if localSum == targetCount {
+		weights := make([]*inference.MLNodeWeight, 0, len(distribution))
+		for nodeId, count := range distribution {
+			weights = append(weights, &inference.MLNodeWeight{
+				NodeId: nodeId,
+				Weight: count,
+			})
+		}
+		return weights, nil
+	}
+
+	// Proportionally adjust weights to match targetCount
+	logging.Warn("CommitWorker: adjusting distribution proportionally", types.PoC,
+		"localSum", localSum, "targetCount", targetCount)
+
+	// Use float64 for proportional calculation, then round
+	ratio := float64(targetCount) / float64(localSum)
+
+	// First pass: calculate proportional weights
+	type nodeWeight struct {
+		nodeId    string
+		weight    uint32
+		remainder float64
+	}
+	nodeWeights := make([]nodeWeight, 0, len(distribution))
+	var adjustedSum uint32
+
+	for nodeId, count := range distribution {
+		exact := float64(count) * ratio
+		rounded := uint32(exact)
+		remainder := exact - float64(rounded)
+		nodeWeights = append(nodeWeights, nodeWeight{nodeId, rounded, remainder})
+		adjustedSum += rounded
+	}
+
+	// Second pass: distribute remaining count to nodes with highest remainders
+	diff := int32(targetCount) - int32(adjustedSum)
+	if diff > 0 {
+		for i := 0; i < int(diff); i++ {
+			maxIdx := 0
+			maxRem := nodeWeights[0].remainder
+			for j := 1; j < len(nodeWeights); j++ {
+				if nodeWeights[j].remainder > maxRem {
+					maxIdx = j
+					maxRem = nodeWeights[j].remainder
+				}
+			}
+			nodeWeights[maxIdx].weight++
+			nodeWeights[maxIdx].remainder = -1 // Mark as used
+		}
+	}
+
+	weights := make([]*inference.MLNodeWeight, 0, len(nodeWeights))
+	for _, nw := range nodeWeights {
+		if nw.weight > 0 {
+			weights = append(weights, &inference.MLNodeWeight{
+				NodeId: nw.nodeId,
+				Weight: nw.weight,
+			})
+		}
+	}
+
+	return weights, nil
 }

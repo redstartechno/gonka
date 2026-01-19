@@ -63,7 +63,7 @@ func (s *Server) postGeneratedArtifactsV2(ctx echo.Context) error {
 			return echo.NewHTTPError(http.StatusBadRequest, "empty artifact vector")
 		}
 		protoArtifacts = append(protoArtifacts, &inference.PoCArtifactV2{
-			Nonce:  a.Nonce,
+			Nonce:  int32(a.Nonce),
 			Vector: vectorBytes,
 		})
 	}

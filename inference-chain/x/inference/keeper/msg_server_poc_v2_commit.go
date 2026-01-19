@@ -57,16 +57,31 @@ func (k msgServer) PoCV2StoreCommit(goCtx context.Context, msg *types.MsgPoCV2St
 		}
 	}
 
-	// Store commit (overwrites previous - latest wins)
+	// Check existing commit for rate limit and count increase
 	addr := sdk.MustAccAddressFromBech32(msg.Creator)
+	pk := collections.Join(startBlockHeight, addr)
+	existing, err := k.PoCV2StoreCommits.Get(ctx, pk)
+	if err == nil {
+		// Same-block rate limit: only one commit per block allowed
+		if existing.CommitBlockHeight == currentBlockHeight {
+			return nil, sdkerrors.Wrap(types.ErrIllegalState, "only one commit per block allowed")
+		}
+		// Strict count increase: new count must be greater than previous
+		if msg.Count <= existing.Count {
+			return nil, sdkerrors.Wrap(types.ErrIllegalState,
+				fmt.Sprintf("count must increase: got %d, last recorded %d", msg.Count, existing.Count))
+		}
+	}
+
+	// Store commit with block height
 	commit := types.PoCV2StoreCommit{
 		ParticipantAddress:       msg.Creator,
 		PocStageStartBlockHeight: startBlockHeight,
 		Count:                    msg.Count,
 		RootHash:                 msg.RootHash,
+		CommitBlockHeight:        currentBlockHeight,
 	}
 
-	pk := collections.Join(startBlockHeight, addr)
 	if err := k.PoCV2StoreCommits.Set(ctx, pk, commit); err != nil {
 		return nil, sdkerrors.Wrap(types.ErrIllegalState, fmt.Sprintf("failed to store commit: %v", err))
 	}
@@ -125,15 +140,30 @@ func (k msgServer) MLNodeWeightDistribution(goCtx context.Context, msg *types.Ms
 		}
 	}
 
-	// Store distribution (overwrites previous - latest wins)
+	// Validate weight sum matches committed count
 	addr := sdk.MustAccAddressFromBech32(msg.Creator)
+	pk := collections.Join(startBlockHeight, addr)
+	commit, err := k.PoCV2StoreCommits.Get(ctx, pk)
+	if err != nil {
+		return nil, sdkerrors.Wrap(types.ErrIllegalState, "no store commit found for this stage")
+	}
+
+	var sum uint32
+	for _, w := range msg.Weights {
+		sum += w.Weight
+	}
+	if sum != commit.Count {
+		return nil, sdkerrors.Wrap(types.ErrIllegalState,
+			fmt.Sprintf("weight sum %d does not match committed count %d", sum, commit.Count))
+	}
+
+	// Store distribution
 	distribution := types.MLNodeWeightDistribution{
 		ParticipantAddress:       msg.Creator,
 		PocStageStartBlockHeight: startBlockHeight,
 		Weights:                  msg.Weights,
 	}
 
-	pk := collections.Join(startBlockHeight, addr)
 	if err := k.MLNodeWeightDistributions.Set(ctx, pk, distribution); err != nil {
 		return nil, sdkerrors.Wrap(types.ErrIllegalState, fmt.Sprintf("failed to store distribution: %v", err))
 	}

@@ -224,7 +224,7 @@ func (wc *WeightCalculator) calculateParticipantWeight(batches []types.PoCBatchV
 	nodeWeights := make(map[string]int64)
 	totalWeight := int64(0)
 
-	uniqueNonces := make(map[int64]struct{})
+	uniqueNonces := make(map[int32]struct{})
 	for _, batch := range batches {
 		weight := int64(0)
 		for _, artifact := range batch.Artifacts {
