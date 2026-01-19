@@ -103,10 +103,23 @@ func (w *CommitWorker) tick() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	inGeneration := w.broker.IsInPoCGeneratePhase()
 	pocHeight := w.getPocStageHeight(epochState)
 
-	// 1. Weight Distribution (State Reconciliation)
+	// 1. Store Commits
+	// Submit commits whenever exchange window is open.
+	// This ensures we commit even during winddown phase before window closes.
+	if pocHeight > 0 {
+		canCommit := w.shouldAcceptStoreCommit(epochState, pocHeight)
+		logging.Debug("CommitWorker: tick", types.PoC,
+			"phase", epochState.CurrentPhase,
+			"pocHeight", pocHeight,
+			"canCommit", canCommit)
+		if canCommit {
+			w.maybeSubmitCommit(pocHeight)
+		}
+	}
+
+	// 2. Weight Distribution (State Reconciliation)
 	// If we are in a phase where weights SHOULD have been distributed (Validation/WindDown),
 	// and we haven't done it for this pocHeight yet, do it now.
 	// This handles restarts gracefully and fixes the confirmation PoC bug.
@@ -114,13 +127,6 @@ func (w *CommitWorker) tick() {
 		if !w.distributedFor[pocHeight] {
 			w.submitWeightDistribution(pocHeight)
 		}
-	}
-
-	// 2. Store Commits
-	// During generation, periodically commit state if changed.
-	// Must be window-aware (keeper rejects after exchange closes).
-	if inGeneration && pocHeight > 0 && w.shouldAcceptStoreCommit(epochState, pocHeight) {
-		w.maybeSubmitCommit(pocHeight)
 	}
 }
 
@@ -205,11 +211,13 @@ func (w *CommitWorker) shouldHaveDistributedWeights(epochState *chainphase.Epoch
 func (w *CommitWorker) maybeSubmitCommit(pocHeight int64) {
 	store, err := w.store.GetStore(pocHeight)
 	if err != nil || store == nil {
+		logging.Debug("CommitWorker: no store for height", types.PoC, "pocHeight", pocHeight)
 		return
 	}
 
 	count, rootHash := store.GetFlushedRoot()
 	if count == 0 || rootHash == nil {
+		logging.Debug("CommitWorker: no flushed data", types.PoC, "pocHeight", pocHeight, "count", count)
 		return
 	}
 
