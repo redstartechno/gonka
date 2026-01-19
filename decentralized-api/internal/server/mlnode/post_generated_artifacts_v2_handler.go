@@ -86,9 +86,6 @@ func (s *Server) postGeneratedArtifactsV2(ctx echo.Context) error {
 		return err
 	}
 
-	// Submit store commit after successful batch submission
-	s.submitStoreCommit(body.BlockHeight)
-
 	logging.Info("BatchV2-callback. Submitted batch", types.PoC,
 		"blockHeight", body.BlockHeight,
 		"nodeId", nodeId,
@@ -179,41 +176,5 @@ func (s *Server) addToLocalStorage(pocStageStartHeight int64, nodeId string, art
 			}
 			logging.Error("Failed to store artifact", types.PoC, "nonce", a.Nonce, "error", err)
 		}
-	}
-}
-
-func (s *Server) submitStoreCommit(pocStageStartHeight int64) {
-	if s.artifactStore == nil {
-		return
-	}
-
-	store, err := s.artifactStore.GetOrCreateStore(pocStageStartHeight)
-	if err != nil {
-		logging.Warn("Failed to get artifact store for commit", types.PoC,
-			"pocStageStartHeight", pocStageStartHeight, "error", err)
-		return
-	}
-
-	// Flush to persist buffered artifacts before getting root
-	if err := store.Flush(); err != nil {
-		logging.Warn("Failed to flush artifact store for commit", types.PoC,
-			"pocStageStartHeight", pocStageStartHeight, "error", err)
-		return
-	}
-
-	count, rootHash := store.GetFlushedRoot()
-	if count == 0 || rootHash == nil {
-		return
-	}
-
-	msg := &inference.MsgPoCV2StoreCommit{
-		PocStageStartBlockHeight: pocStageStartHeight,
-		Count:                    count,
-		RootHash:                 rootHash,
-	}
-
-	if err := s.recorder.SubmitPoCV2StoreCommit(msg); err != nil {
-		logging.Warn("Failed to submit store commit", types.PoC,
-			"pocStageStartHeight", pocStageStartHeight, "error", err)
 	}
 }

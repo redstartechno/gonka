@@ -12,7 +12,6 @@ import (
 	"decentralized-api/internal/startup"
 	"decentralized-api/internal/validation"
 	"decentralized-api/logging"
-	"decentralized-api/pocartifacts"
 	"decentralized-api/training"
 	"decentralized-api/upgrade"
 	"encoding/json"
@@ -105,10 +104,6 @@ func NewEventListener(
 		blockObserver:         bo,
 		rewardRecoveryChecker: startup.NewRewardRecoveryChecker(phaseTracker, &transactionRecorder, validator, configManager),
 	}
-}
-
-func (el *EventListener) SetArtifactStore(store *pocartifacts.ManagedArtifactStore) {
-	el.dispatcher.SetArtifactStore(store)
 }
 
 func (el *EventListener) openWsConnAndSubscribe() {

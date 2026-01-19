@@ -20,10 +20,8 @@ import (
 	"decentralized-api/internal/pocv2"
 	"decentralized-api/internal/validation"
 	"decentralized-api/logging"
-	"decentralized-api/pocartifacts"
 
 	coretypes "github.com/cometbft/cometbft/rpc/core/types"
-	"github.com/productscience/inference/api/inference/inference"
 	"github.com/productscience/inference/x/inference/types"
 	"google.golang.org/grpc"
 )
@@ -71,8 +69,6 @@ type OnNewBlockDispatcher struct {
 	configManager         *apiconfig.ConfigManager
 	validator             *validation.InferenceValidator
 	epochGroupDataCache   *internal.EpochGroupDataCache
-	artifactStore         *pocartifacts.ManagedArtifactStore
-	recorder              cosmosclient.CosmosMessageClient
 }
 
 // StatusResponse matches the structure expected by getStatus function
@@ -161,70 +157,7 @@ func NewOnNewBlockDispatcherFromCosmosClient(
 		validator,
 	)
 	dispatcher.epochGroupDataCache = epochGroupDataCache
-	dispatcher.recorder = cosmosClient
 	return dispatcher
-}
-
-// SetArtifactStore sets the artifact store for phase-based flush control.
-func (d *OnNewBlockDispatcher) SetArtifactStore(store *pocartifacts.ManagedArtifactStore) {
-	d.artifactStore = store
-}
-
-func (d *OnNewBlockDispatcher) startArtifactFlush() {
-	if d.artifactStore != nil {
-		d.artifactStore.StartPeriodicFlush(5 * time.Second)
-		logging.Info("Started artifact flush", types.PoC)
-	}
-}
-
-func (d *OnNewBlockDispatcher) stopArtifactFlush() {
-	if d.artifactStore != nil {
-		d.artifactStore.StopPeriodicFlush()
-		logging.Info("Stopped artifact flush", types.PoC)
-	}
-}
-
-func (d *OnNewBlockDispatcher) submitNodeWeightDistribution(pocStageStartHeight int64) {
-	if d.artifactStore == nil || d.recorder == nil {
-		return
-	}
-
-	store, err := d.artifactStore.GetOrCreateStore(pocStageStartHeight)
-	if err != nil {
-		logging.Warn("Failed to get artifact store for weight distribution", types.PoC,
-			"pocStageStartHeight", pocStageStartHeight, "error", err)
-		return
-	}
-
-	distribution := store.GetNodeDistribution()
-	if len(distribution) == 0 {
-		logging.Debug("No node distribution to submit", types.PoC,
-			"pocStageStartHeight", pocStageStartHeight)
-		return
-	}
-
-	weights := make([]*inference.MLNodeWeight, 0, len(distribution))
-	for nodeId, count := range distribution {
-		weights = append(weights, &inference.MLNodeWeight{
-			NodeId: nodeId,
-			Weight: count,
-		})
-	}
-
-	msg := &inference.MsgMLNodeWeightDistribution{
-		PocStageStartBlockHeight: pocStageStartHeight,
-		Weights:                  weights,
-	}
-
-	if err := d.recorder.SubmitMLNodeWeightDistribution(msg); err != nil {
-		logging.Warn("Failed to submit node weight distribution", types.PoC,
-			"pocStageStartHeight", pocStageStartHeight, "error", err)
-		return
-	}
-
-	logging.Info("Submitted node weight distribution", types.PoC,
-		"pocStageStartHeight", pocStageStartHeight,
-		"nodeCount", len(weights))
 }
 
 // ProcessNewBlock is the main entry point for processing new block events
@@ -392,7 +325,6 @@ func (d *OnNewBlockDispatcher) handlePhaseTransitions(epochState chainphase.Epoc
 	if epochContext.IsStartOfPocStage(blockHeight) {
 		logging.Info("DapiStage:IsStartOfPocStage: sending StartPoCEvent to the PoC orchestrator", types.Stages, "blockHeight", blockHeight, "blockHash", blockHash)
 		d.randomSeedManager.GenerateSeedInfo(epochContext.EpochIndex)
-		d.startArtifactFlush()
 		return
 	}
 
@@ -400,9 +332,6 @@ func (d *OnNewBlockDispatcher) handlePhaseTransitions(epochState chainphase.Epoc
 	if epochContext.IsEndOfPoCStage(blockHeight) {
 		logging.Info("DapiStage:IsEndOfPoCStage. Calling MoveToValidationStage", types.Stages,
 			"blockHeigh", blockHeight, "blockHash", blockHash)
-		d.stopArtifactFlush()
-		// Submit weight distribution after flush stops (data is now persisted)
-		go d.submitNodeWeightDistribution(epochContext.PocStartBlockHeight)
 		command := broker.NewInitValidateCommand()
 		err := d.nodeBroker.QueueMessage(command)
 		if err != nil {
@@ -502,7 +431,6 @@ func (d *OnNewBlockDispatcher) handlePhaseTransitions(epochState chainphase.Epoc
 				"trigger_height", event.TriggerHeight,
 				"block_hash", event.PocSeedBlockHash)
 
-			d.startArtifactFlush()
 			command := broker.NewStartPocCommand()
 			if err := d.nodeBroker.QueueMessage(command); err != nil {
 				logging.Error("Failed to send confirmation PoC start command", types.PoC, "error", err)
@@ -516,7 +444,6 @@ func (d *OnNewBlockDispatcher) handlePhaseTransitions(epochState chainphase.Epoc
 				"exchange_end", event.GetExchangeEnd(epochParams),
 				"validation_starts_at", event.GetValidationStart(epochParams))
 
-			d.stopArtifactFlush()
 			command := broker.NewInitValidateCommand()
 			if err := d.nodeBroker.QueueMessage(command); err != nil {
 				logging.Error("Failed to send confirmation PoC validate command", types.PoC, "error", err)

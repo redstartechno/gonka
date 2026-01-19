@@ -184,7 +184,11 @@ func main() {
 	// Manages per-height directories with automatic pruning (retains last 10)
 	artifactStore := pocartifacts.NewManagedArtifactStore("/root/.dapi/data/poc-artifacts", 10)
 	defer artifactStore.Close()
-	listener.SetArtifactStore(artifactStore)
+
+	// Create commit worker for time-based artifact commits and weight distribution
+	// Worker owns flush lifecycle, commits periodically (not per-request), and handles distribution
+	commitWorker := pocv2.NewCommitWorker(artifactStore, recorder, chainPhaseTracker, nodeBroker, 5*time.Second)
+	defer commitWorker.Close()
 
 	publicServer := pserver.NewServer(nodeBroker, config, recorder, trainingExecutor, blockQueue, chainPhaseTracker, payloadStore, pserver.WithArtifactStore(artifactStore))
 	publicServer.Start(addr)
