@@ -11,6 +11,12 @@ import (
 
 // SubmitPocValidationsV2 handles batch submission of PoC v2 validations.
 func (k msgServer) SubmitPocValidationsV2(goCtx context.Context, msg *types.MsgSubmitPocValidationsV2) (*types.MsgSubmitPocValidationsV2Response, error) {
+	// V2 guard: reject when V1 mode is active
+	params := k.GetParams(goCtx)
+	if !params.PocParams.PocV2Enabled {
+		return nil, sdkerrors.Wrap(types.ErrNotSupported, "V2 disabled when poc_v2_enabled=false")
+	}
+
 	ctx := sdk.UnwrapSDKContext(goCtx)
 	currentBlockHeight := ctx.BlockHeight()
 	startBlockHeight := msg.PocStageStartBlockHeight

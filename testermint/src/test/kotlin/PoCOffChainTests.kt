@@ -122,7 +122,7 @@ class PoCOffChainTests : TestermintTest() {
         logSection("=== TEST: PoC Off-Chain Validation - All Store Commits Query ===")
 
         // Initialize cluster
-        val (cluster, genesis) = initCluster(reboot = true)
+        val (cluster, genesis) = initCluster(reboot = true, config = bandwidthConfig)
         cluster.allPairs.forEach { it.waitForMlNodesToLoad() }
 
         // Wait for PoC generation to complete and some artifacts to be generated
@@ -209,6 +209,9 @@ class PoCOffChainTests : TestermintTest() {
                 this[InferenceParams::epochParams] = spec<EpochParams> {
                     this[EpochParams::pocStageDuration] = 3L
                     this[EpochParams::pocValidationDuration] = 4L
+                }
+                this[InferenceParams::pocParams] = spec<PocParams> {
+                    this[PocParams::pocV2Enabled] = true
                 }
             }
         }

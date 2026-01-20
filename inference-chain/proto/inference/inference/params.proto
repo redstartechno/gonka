@@ -127,6 +127,7 @@ message PocParams {
   PoCModelParams model_params = 5 [deprecated = true]; // V1 model architecture params, deprecated
   string model_id = 6;  // Model identifier for PoC generation/validation
   int64 seq_len = 7;    // Sequence length for PoC generation/validation
+  bool poc_v2_enabled = 8;  // false = V1 (on-chain batches), true = V2 (off-chain commits). Default: true
 }
 
 message Decimal {

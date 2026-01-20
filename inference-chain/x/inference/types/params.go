@@ -99,10 +99,10 @@ func DefaultParams() Params {
 			AllowedDeveloperAddresses: nil,
 		},
 		ParticipantAccessParams: &ParticipantAccessParams{
-			NewParticipantRegistrationStartHeight:  0,     // disabled by default
-			BlockedParticipantAddresses:            nil,   // keep nil to match proto round-trips
-			UseParticipantAllowlist:                false, // disabled by default
-			ParticipantAllowlistUntilBlockHeight:   0,     // no cutoff
+			NewParticipantRegistrationStartHeight: 0,     // disabled by default
+			BlockedParticipantAddresses:           nil,   // keep nil to match proto round-trips
+			UseParticipantAllowlist:               false, // disabled by default
+			ParticipantAllowlistUntilBlockHeight:  0,     // no cutoff
 		},
 	}
 }

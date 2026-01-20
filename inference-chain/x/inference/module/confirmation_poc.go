@@ -362,8 +362,13 @@ func (am AppModule) updateConfirmationWeights(ctx context.Context, event *types.
 	params := am.keeper.GetParams(ctx)
 	weightScaleFactor := params.PocParams.GetWeightScaleFactorDec()
 
-	// Compute confirmation weights using V2 implementation
-	confirmationParticipants := am.updateConfirmationWeightsV2(ctx, event, currentValidatorWeights, weightScaleFactor)
+	// Dispatch to V1 or V2 confirmation weight calculation based on poc_v2_enabled flag
+	var confirmationParticipants []*types.ActiveParticipant
+	if params.PocParams.PocV2Enabled {
+		confirmationParticipants = am.updateConfirmationWeightsV2(ctx, event, currentValidatorWeights, weightScaleFactor)
+	} else {
+		confirmationParticipants = am.UpdateConfirmationWeightsV1(ctx, event, currentValidatorWeights, weightScaleFactor)
+	}
 
 	// Convert to map for easy lookup
 	confirmationWeights := make(map[string]int64)

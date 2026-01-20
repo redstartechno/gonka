@@ -62,4 +62,5 @@ var (
 	ErrNewParticipantRegistrationClosed      = sdkerrors.Register(ModuleName, 1156, "new participant registration is closed")
 	ErrDeprecated                            = sdkerrors.Register(ModuleName, 1157, "this message type is deprecated")
 	ErrPocArtifactVectorEmpty                = sdkerrors.Register(ModuleName, 1158, "artifact vector is empty")
+	ErrNotSupported                          = sdkerrors.Register(ModuleName, 1159, "operation not supported in current mode")
 )

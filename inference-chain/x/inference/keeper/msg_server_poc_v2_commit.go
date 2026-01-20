@@ -12,6 +12,12 @@ import (
 
 // PoCV2StoreCommit handles submission of off-chain artifact store commits.
 func (k msgServer) PoCV2StoreCommit(goCtx context.Context, msg *types.MsgPoCV2StoreCommit) (*types.MsgPoCV2StoreCommitResponse, error) {
+	// V2 guard: reject when V1 mode is active
+	params := k.GetParams(goCtx)
+	if !params.PocParams.PocV2Enabled {
+		return nil, sdkerrors.Wrap(types.ErrNotSupported, "V2 disabled when poc_v2_enabled=false")
+	}
+
 	ctx := sdk.UnwrapSDKContext(goCtx)
 	currentBlockHeight := ctx.BlockHeight()
 	startBlockHeight := msg.PocStageStartBlockHeight
@@ -96,6 +102,12 @@ func (k msgServer) PoCV2StoreCommit(goCtx context.Context, msg *types.MsgPoCV2St
 
 // MLNodeWeightDistribution handles submission of per-node weight distribution.
 func (k msgServer) MLNodeWeightDistribution(goCtx context.Context, msg *types.MsgMLNodeWeightDistribution) (*types.MsgMLNodeWeightDistributionResponse, error) {
+	// V2 guard: reject when V1 mode is active
+	params := k.GetParams(goCtx)
+	if !params.PocParams.PocV2Enabled {
+		return nil, sdkerrors.Wrap(types.ErrNotSupported, "V2 disabled when poc_v2_enabled=false")
+	}
+
 	ctx := sdk.UnwrapSDKContext(goCtx)
 	currentBlockHeight := ctx.BlockHeight()
 	startBlockHeight := msg.PocStageStartBlockHeight
