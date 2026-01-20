@@ -99,6 +99,11 @@ func (w *CommitWorker) tick() {
 		return
 	}
 
+	// V1 mode: CommitWorker is not needed (batches go directly to chain)
+	if !epochState.PocV2Enabled {
+		return
+	}
+
 	w.mu.Lock()
 	defer w.mu.Unlock()
 

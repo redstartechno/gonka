@@ -216,6 +216,11 @@ func (d *OnNewBlockDispatcher) ProcessNewBlock(ctx context.Context, blockInfo ch
 					logging.Warn("Failed to update bandwidth parameters", types.Config, "error", err)
 				}
 			}
+
+			// Update PoC V2 enabled flag for runtime V1/V2 switching
+			if params.Params.PocParams != nil {
+				d.phaseTracker.UpdatePocV2Enabled(params.Params.PocParams.PocV2Enabled)
+			}
 		}
 	}
 

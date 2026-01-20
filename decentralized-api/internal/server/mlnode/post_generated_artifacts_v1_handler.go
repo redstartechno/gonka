@@ -16,6 +16,11 @@ import (
 // postGeneratedBatchesV1 handles V1 PoC artifact batch callbacks from MLNode.
 // Submits MsgSubmitPocBatch directly to chain (on-chain storage).
 func (s *Server) postGeneratedBatchesV1(ctx echo.Context) error {
+	// V2 mode: V1 endpoints are disabled
+	if s.broker != nil && s.broker.IsPoCv2Enabled() {
+		return echo.NewHTTPError(http.StatusServiceUnavailable, "V1 endpoints disabled when poc_v2_enabled=true")
+	}
+
 	var body mlnodeclient.ProofBatchV1
 
 	if err := ctx.Bind(&body); err != nil {
@@ -60,6 +65,11 @@ func (s *Server) postGeneratedBatchesV1(ctx echo.Context) error {
 // postValidatedBatchesV1 handles V1 PoC validation result callbacks from MLNode.
 // Submits MsgSubmitPocValidation to chain.
 func (s *Server) postValidatedBatchesV1(ctx echo.Context) error {
+	// V2 mode: V1 endpoints are disabled
+	if s.broker != nil && s.broker.IsPoCv2Enabled() {
+		return echo.NewHTTPError(http.StatusServiceUnavailable, "V1 endpoints disabled when poc_v2_enabled=true")
+	}
+
 	var body mlnodeclient.ValidatedBatchV1
 
 	if err := ctx.Bind(&body); err != nil {

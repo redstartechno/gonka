@@ -19,6 +19,7 @@ type ChainPhaseTracker struct {
 	currentEpochParams         *types.EpochParams
 	currentIsSynced            bool
 	activeConfirmationPoCEvent *types.ConfirmationPoCEvent
+	pocV2Enabled               bool // cached from PocParams.PocV2Enabled, default true
 }
 
 type BlockInfo struct {
@@ -28,7 +29,9 @@ type BlockInfo struct {
 
 // NewChainPhaseTracker creates a new ChainPhaseTracker instance.
 func NewChainPhaseTracker() *ChainPhaseTracker {
-	return &ChainPhaseTracker{}
+	return &ChainPhaseTracker{
+		pocV2Enabled: true, // V2 is default going forward
+	}
 }
 
 // Update caches the latest Epoch information from the network.
@@ -50,6 +53,7 @@ type EpochState struct {
 	CurrentPhase               types.EpochPhase
 	IsSynced                   bool
 	ActiveConfirmationPoCEvent *types.ConfirmationPoCEvent
+	PocV2Enabled               bool // true = V2 (off-chain), false = V1 (on-chain batches)
 }
 
 func (es *EpochState) IsNilOrNotSynced() bool {
@@ -74,6 +78,7 @@ func (t *ChainPhaseTracker) GetCurrentEpochState() *EpochState {
 		CurrentPhase:               phase,
 		IsSynced:                   t.currentIsSynced,
 		ActiveConfirmationPoCEvent: t.activeConfirmationPoCEvent,
+		PocV2Enabled:               t.pocV2Enabled,
 	}
 }
 
@@ -90,4 +95,21 @@ func (t *ChainPhaseTracker) UpdateEpochParams(params types.EpochParams) {
 	defer t.mu.Unlock()
 
 	t.currentEpochParams = &params
+}
+
+// UpdatePocV2Enabled updates the cached poc_v2_enabled flag from governance params.
+func (t *ChainPhaseTracker) UpdatePocV2Enabled(enabled bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	t.pocV2Enabled = enabled
+}
+
+// IsPocV2Enabled returns the cached poc_v2_enabled flag.
+// Returns true by default if not explicitly set.
+func (t *ChainPhaseTracker) IsPocV2Enabled() bool {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
+	return t.pocV2Enabled
 }

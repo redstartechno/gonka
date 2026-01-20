@@ -106,6 +106,11 @@ func (s *Server) postPocProofs(ctx echo.Context) error {
 		return echo.NewHTTPError(http.StatusServiceUnavailable, "artifact store not configured")
 	}
 
+	// V1 mode: proof API is not available (batches are on-chain)
+	if s.phaseTracker != nil && !s.phaseTracker.IsPocV2Enabled() {
+		return echo.NewHTTPError(http.StatusServiceUnavailable, "proof API requires poc_v2_enabled=true")
+	}
+
 	var req PocProofsRequest
 	if err := ctx.Bind(&req); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid request body")
@@ -257,6 +262,11 @@ func (s *Server) postPocProofs(ctx echo.Context) error {
 func (s *Server) getPocArtifactsState(ctx echo.Context) error {
 	if s.artifactStore == nil {
 		return echo.NewHTTPError(http.StatusServiceUnavailable, "artifact store not configured")
+	}
+
+	// V1 mode: artifact state API is not available (batches are on-chain)
+	if s.phaseTracker != nil && !s.phaseTracker.IsPocV2Enabled() {
+		return echo.NewHTTPError(http.StatusServiceUnavailable, "artifact state API requires poc_v2_enabled=true")
 	}
 
 	heightParam := ctx.QueryParam("height")

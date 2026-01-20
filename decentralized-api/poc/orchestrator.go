@@ -10,18 +10,19 @@ import (
 )
 
 // Orchestrator is the interface for PoC orchestration.
-// Kept as a potential switch point for V1/V2 migration (see migration.md).
+// Supports V1/V2 dispatch based on poc_v2_enabled governance parameter.
 type Orchestrator interface {
 	ValidateReceivedArtifacts(pocStageStartBlockHeight int64)
 }
 
-// orchestratorImpl is the minimal PoC v2 orchestrator.
-// It delegates to OffChainValidator for artifact validation.
+// orchestratorImpl coordinates PoC validation with V1/V2 dispatch.
 type orchestratorImpl struct {
-	validator *OffChainValidator
+	validatorV1    *OnChainValidator  // V1: queries chain for PoCBatch
+	validatorV2    *OffChainValidator // V2: fetches proofs from participant APIs
+	isPoCv2Enabled func() bool        // version check function
 }
 
-// NewOrchestrator creates a new PoC orchestrator.
+// NewOrchestrator creates a new PoC orchestrator with V1/V2 validators.
 func NewOrchestrator(
 	pubKey string,
 	nodeBroker *broker.Broker,
@@ -30,23 +31,56 @@ func NewOrchestrator(
 	cosmosClient cosmosclient.CosmosMessageClient,
 	phaseTracker *chainphase.ChainPhaseTracker,
 ) Orchestrator {
+	config := DefaultValidationConfig()
+
+	// V2 validator (off-chain proofs)
+	validatorV2 := NewOffChainValidator(
+		cosmosClient,
+		nodeBroker,
+		phaseTracker,
+		callbackUrl,
+		pubKey,
+		chainNodeUrl,
+		config,
+	)
+
+	// V1 validator (on-chain batches)
+	validatorV1 := NewOnChainValidator(
+		cosmosClient,
+		nodeBroker,
+		phaseTracker,
+		callbackUrl,
+		pubKey,
+		chainNodeUrl,
+		config,
+	)
+
+	// Version check via phaseTracker
+	isPoCv2Enabled := func() bool {
+		if phaseTracker == nil {
+			return true // default V2
+		}
+		return phaseTracker.IsPocV2Enabled()
+	}
+
 	return &orchestratorImpl{
-		validator: NewOffChainValidator(
-			cosmosClient,
-			nodeBroker,
-			phaseTracker,
-			callbackUrl,
-			pubKey,
-			chainNodeUrl,
-			DefaultValidationConfig(),
-		),
+		validatorV1:    validatorV1,
+		validatorV2:    validatorV2,
+		isPoCv2Enabled: isPoCv2Enabled,
 	}
 }
 
 // ValidateReceivedArtifacts validates artifacts for the given PoC stage.
+// Dispatches to V1 or V2 validator based on poc_v2_enabled governance parameter.
 func (o *orchestratorImpl) ValidateReceivedArtifacts(pocStageStartBlockHeight int64) {
-	logging.Info("Orchestrator: delegating to off-chain validator", types.PoC,
-		"pocStageStartBlockHeight", pocStageStartBlockHeight)
+	if o.isPoCv2Enabled() {
+		logging.Info("Orchestrator: delegating to V2 off-chain validator", types.PoC,
+			"pocStageStartBlockHeight", pocStageStartBlockHeight)
+		o.validatorV2.ValidateAll(pocStageStartBlockHeight)
+		return
+	}
 
-	o.validator.ValidateAll(pocStageStartBlockHeight)
+	logging.Info("Orchestrator: delegating to V1 on-chain validator", types.PoC,
+		"pocStageStartBlockHeight", pocStageStartBlockHeight)
+	o.validatorV1.ValidateAll(pocStageStartBlockHeight)
 }

@@ -181,27 +181,29 @@ OnChainValidator.ValidateAll()
 
 ---
 
-## Not Implemented (Deferred to Phase 3)
+## Phase 3 (Completed)
 
 ### Dispatch Wiring
 
 | Item | Status | Notes |
 |------|--------|-------|
-| `broker/broker.go` dispatch | Not done | `getCommandForState()` V1/V2 switch |
-| `poc/orchestrator.go` dispatch | Not done | `ValidateReceivedArtifacts()` switch |
-| `poc/commit_worker.go` check-inside | Not done | Skip when V1 mode |
-| `internal/server/public/poc_handler.go` check-inside | Not done | Return 503 when V1 mode |
-| Version check at callback handlers | Not done | Guard V1/V2 handlers by mode |
+| `broker/broker.go` dispatch | Done | `getCommandForState()` V1/V2 switch |
+| `poc/orchestrator.go` dispatch | Done | `ValidateReceivedArtifacts()` switch |
+| `poc/commit_worker.go` check-inside | Done | Skip when V1 mode |
+| `internal/server/public/poc_handler.go` check-inside | Done | Return 503 when V1 mode |
+| Version check at callback handlers | Done | Guard V1/V2 handlers by mode |
+| Testermint E2E tests | Done | `PoCMigrationTests.kt` |
+
+See `migration-phase3.md` for implementation details.
 
 ---
 
-## Next Steps
+## Migration Complete
 
-1. **Phase 3**: Wire dispatch logic based on `poc_v2_enabled` parameter
-   - Add version checks in broker dispatcher
-   - Add version checks in orchestrator
-   - Add check-inside guards in CommitWorker and Proof API
-   - Add testermint E2E tests for V1/V2 switching
+All migration phases are now complete:
+- **Phase 1**: On-chain V1 logic with guards
+- **Phase 2**: DAPI V1 logic in isolated files
+- **Phase 3**: Dispatch wiring and guards
 
 ---
 
@@ -209,5 +211,6 @@ OnChainValidator.ValidateAll()
 
 - `migration.md` - Full migration plan
 - `migration-phase1.md` - Phase 1 (on-chain V1 logic)
+- `migration-phase3.md` - Phase 3 (dispatch and guards)
 - `offchain.md` - PoC V2 off-chain artifacts proposal
 - `manager-v6.md` - Phase 5 domain consolidation

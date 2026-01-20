@@ -133,10 +133,24 @@ func (b *Broker) GetParticipantAddress() string {
 	return b.participantInfo.GetAddress()
 }
 
+// IsPoCv2Enabled returns whether PoC V2 (off-chain artifacts) is enabled.
+// Returns true by default if phaseTracker is not available.
+func (b *Broker) IsPoCv2Enabled() bool {
+	if b == nil || b.phaseTracker == nil {
+		return true // default V2
+	}
+	return b.phaseTracker.IsPocV2Enabled()
+}
+
 const PoCv2BatchesBasePath = "/v2/poc-batches"
+const PoCv1BatchesBasePath = "/v1/poc-batches"
 
 func GetPoCv2CallbackBaseURL(callbackUrl string) string {
 	return fmt.Sprintf("%s%s", callbackUrl, PoCv2BatchesBasePath)
+}
+
+func GetPoCv1CallbackBaseURL(callbackUrl string) string {
+	return fmt.Sprintf("%s%s", callbackUrl, PoCv1BatchesBasePath)
 }
 
 type ModelArgs struct {
@@ -1121,21 +1135,43 @@ func (b *Broker) getCommandForState(nodeState *NodeState, pocGenParams *pocParam
 		switch nodeState.PocIntendedStatus {
 		case PocStatusGenerating:
 			if pocGenParams != nil && pocGenParams.startPoCBlockHeight > 0 {
-				return StartPoCNodeCommandV2{
+				// Dispatch V1 or V2 based on governance parameter
+				if b.IsPoCv2Enabled() {
+					return StartPoCNodeCommandV2{
+						BlockHeight: pocGenParams.startPoCBlockHeight,
+						BlockHash:   pocGenParams.startPoCBlockHash,
+						PubKey:      b.participantInfo.GetPubKey(),
+						CallbackUrl: GetPoCv2CallbackBaseURL(b.callbackUrl),
+						TotalNodes:  totalNodes,
+						Model:       pocGenParams.modelId,
+						SeqLen:      pocGenParams.seqLen,
+					}
+				}
+				return StartPoCNodeCommandV1{
 					BlockHeight: pocGenParams.startPoCBlockHeight,
 					BlockHash:   pocGenParams.startPoCBlockHash,
 					PubKey:      b.participantInfo.GetPubKey(),
-					CallbackUrl: GetPoCv2CallbackBaseURL(b.callbackUrl),
+					CallbackUrl: GetPoCv1CallbackBaseURL(b.callbackUrl),
 					TotalNodes:  totalNodes,
-					Model:       pocGenParams.modelId,
-					SeqLen:      pocGenParams.seqLen,
+					ModelParams: nil, // V1 uses chain-stored model params
 				}
 			}
 			logging.Error("Cannot create StartPoCNodeCommand: missing PoC parameters", types.Nodes, "error", pocGenErr)
 			return nil
 		case PocStatusValidating:
 			if pocGenParams != nil && pocGenParams.startPoCBlockHeight > 0 {
-				return TransitionPoCToValidatingV2Command{}
+				// Dispatch V1 or V2 based on governance parameter
+				if b.IsPoCv2Enabled() {
+					return TransitionPoCToValidatingV2Command{}
+				}
+				return InitValidateNodeCommandV1{
+					BlockHeight: pocGenParams.startPoCBlockHeight,
+					BlockHash:   pocGenParams.startPoCBlockHash,
+					PubKey:      b.participantInfo.GetPubKey(),
+					CallbackUrl: GetPoCv1CallbackBaseURL(b.callbackUrl),
+					TotalNodes:  totalNodes,
+					ModelParams: nil, // V1 uses chain-stored model params
+				}
 			}
 			logging.Error("Cannot create InitValidateNodeCommand: missing PoC parameters", types.Nodes, "error", pocGenErr)
 			return nil
