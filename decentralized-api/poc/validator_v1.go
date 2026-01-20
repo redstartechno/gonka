@@ -355,34 +355,13 @@ func (v *OnChainValidator) getBlockHash(epochState *chainphase.EpochState, pocSt
 }
 
 // filterNodesForV1Validation returns nodes available for V1 PoC validation.
+// Matches main branch logic: only accepts nodes in POC status with PocStatusValidating.
 func filterNodesForV1Validation(nodes []broker.NodeResponse) []broker.NodeResponse {
 	filtered := make([]broker.NodeResponse, 0, len(nodes))
 	for _, node := range nodes {
-		// Exclude failed nodes
-		if node.State.CurrentStatus == types.HardwareNodeStatus_FAILED {
-			continue
-		}
-
-		// Exclude unknown status nodes
-		if node.State.CurrentStatus == types.HardwareNodeStatus_UNKNOWN {
-			continue
-		}
-
-		// Exclude administratively disabled nodes
-		if !node.State.AdminState.Enabled {
-			continue
-		}
-
-		// Accept nodes in POC status (any sub-status)
-		if node.State.CurrentStatus == types.HardwareNodeStatus_POC {
+		if node.State.CurrentStatus == types.HardwareNodeStatus_POC &&
+			node.State.PocCurrentStatus == broker.PocStatusValidating {
 			filtered = append(filtered, node)
-			continue
-		}
-
-		// Accept nodes in INFERENCE status
-		if node.State.CurrentStatus == types.HardwareNodeStatus_INFERENCE {
-			filtered = append(filtered, node)
-			continue
 		}
 	}
 	return filtered
