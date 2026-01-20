@@ -15,7 +15,6 @@ import (
 const (
 	batchStartConsumer        = "batch-start-consumer"
 	batchFinishConsumer       = "batch-finish-consumer"
-	batchPocV2Consumer        = "batch-poc-v2-consumer"
 	batchValidationV2Consumer = "batch-validation-v2-consumer"
 	batchAckWait              = time.Minute // must exceed FlushTimeout to prevent redelivery
 )
@@ -38,17 +37,14 @@ type BatchConsumer struct {
 
 	startBatch        []pendingMsg
 	finishBatch       []pendingMsg
-	pocV2Batch        []pendingMsg
 	validationV2Batch []pendingMsg
 
 	startMu        sync.Mutex
 	finishMu       sync.Mutex
-	pocV2Mu        sync.Mutex
 	validationV2Mu sync.Mutex
 
 	startCreatedAt        time.Time
 	finishCreatedAt       time.Time
-	pocV2CreatedAt        time.Time
 	validationV2CreatedAt time.Time
 }
 
@@ -65,7 +61,6 @@ func NewBatchConsumer(
 		config:            config,
 		startBatch:        make([]pendingMsg, 0, config.FlushSize),
 		finishBatch:       make([]pendingMsg, 0, config.FlushSize),
-		pocV2Batch:        make([]pendingMsg, 0, config.FlushSize),
 		validationV2Batch: make([]pendingMsg, 0, config.FlushSize),
 	}
 }
@@ -75,9 +70,6 @@ func (c *BatchConsumer) Start() error {
 		return err
 	}
 	if err := c.subscribeStream(server.TxsBatchFinishStream, batchFinishConsumer, c.handleFinishMsg); err != nil {
-		return err
-	}
-	if err := c.subscribeStream(server.TxsBatchPocV2Stream, batchPocV2Consumer, c.handlePocV2Msg); err != nil {
 		return err
 	}
 	if err := c.subscribeStream(server.TxsBatchValidationV2Stream, batchValidationV2Consumer, c.handleValidationV2Msg); err != nil {
@@ -150,31 +142,6 @@ func (c *BatchConsumer) handleFinishMsg(msg *nats.Msg) {
 	}
 }
 
-func (c *BatchConsumer) handlePocV2Msg(msg *nats.Msg) {
-	if err := msg.InProgress(); err != nil {
-		logging.Error("Failed to mark poc v2 msg in progress", types.Messages, "error", err)
-	}
-	sdkMsg, err := c.unmarshalMsg(msg.Data)
-	if err != nil {
-		logging.Error("Failed to unmarshal poc v2 msg", types.Messages, "error", err)
-		msg.Term()
-		return
-	}
-
-	var shouldFlush bool
-	c.pocV2Mu.Lock()
-	if len(c.pocV2Batch) == 0 {
-		c.pocV2CreatedAt = time.Now()
-	}
-	c.pocV2Batch = append(c.pocV2Batch, pendingMsg{msg: sdkMsg, natsMsg: msg})
-	shouldFlush = len(c.pocV2Batch) >= c.config.FlushSize
-	c.pocV2Mu.Unlock()
-
-	if shouldFlush {
-		c.flushPocV2()
-	}
-}
-
 func (c *BatchConsumer) handleValidationV2Msg(msg *nats.Msg) {
 	if err := msg.InProgress(); err != nil {
 		logging.Error("Failed to mark validation v2 msg in progress", types.Messages, "error", err)
@@ -208,7 +175,6 @@ func (c *BatchConsumer) flushLoop() {
 		c.extendAckDeadlines()
 		c.checkAndFlushStart()
 		c.checkAndFlushFinish()
-		c.checkAndFlushPocV2()
 		c.checkAndFlushValidationV2()
 	}
 }
@@ -225,12 +191,6 @@ func (c *BatchConsumer) extendAckDeadlines() {
 		_ = p.natsMsg.InProgress()
 	}
 	c.finishMu.Unlock()
-
-	c.pocV2Mu.Lock()
-	for _, p := range c.pocV2Batch {
-		_ = p.natsMsg.InProgress()
-	}
-	c.pocV2Mu.Unlock()
 
 	c.validationV2Mu.Lock()
 	for _, p := range c.validationV2Batch {
@@ -256,16 +216,6 @@ func (c *BatchConsumer) checkAndFlushFinish() {
 
 	if shouldFlush {
 		c.flushFinish()
-	}
-}
-
-func (c *BatchConsumer) checkAndFlushPocV2() {
-	c.pocV2Mu.Lock()
-	shouldFlush := len(c.pocV2Batch) > 0 && time.Since(c.pocV2CreatedAt) >= c.config.FlushTimeout
-	c.pocV2Mu.Unlock()
-
-	if shouldFlush {
-		c.flushPocV2()
 	}
 }
 
@@ -305,20 +255,6 @@ func (c *BatchConsumer) flushFinish() {
 	c.finishMu.Unlock()
 
 	c.broadcastBatch("finish", batch)
-}
-
-func (c *BatchConsumer) flushPocV2() {
-	c.pocV2Mu.Lock()
-	batch := c.pocV2Batch
-	if len(batch) == 0 {
-		c.pocV2Mu.Unlock()
-		return
-	}
-	c.pocV2Batch = make([]pendingMsg, 0, c.config.FlushSize)
-	c.pocV2CreatedAt = time.Time{} // reset timer
-	c.pocV2Mu.Unlock()
-
-	c.broadcastBatch("poc_v2", batch)
 }
 
 func (c *BatchConsumer) flushValidationV2() {
@@ -366,10 +302,6 @@ func (c *BatchConsumer) PublishStartInference(msg sdk.Msg) error {
 
 func (c *BatchConsumer) PublishFinishInference(msg sdk.Msg) error {
 	return c.publishMsg(server.TxsBatchFinishStream, msg)
-}
-
-func (c *BatchConsumer) PublishPocBatchV2(msg sdk.Msg) error {
-	return c.publishMsg(server.TxsBatchPocV2Stream, msg)
 }
 
 func (c *BatchConsumer) PublishPocValidationV2(msg sdk.Msg) error {

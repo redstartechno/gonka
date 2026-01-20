@@ -120,12 +120,7 @@ service Query {
 
   }
 
-  // PoC v2 queries
-  rpc PocV2BatchesForStage (QueryPocV2BatchesForStageRequest) returns (QueryPocV2BatchesForStageResponse) {
-    option (google.api.http).get = "/productscience/inference/inference/poc_v2_batches_for_stage/{block_height}";
-
-  }
-
+  // PoC v2 validation queries
   rpc PocV2ValidationsForStage (QueryPocV2ValidationsForStageRequest) returns (QueryPocV2ValidationsForStageResponse) {
     option (google.api.http).get = "/productscience/inference/inference/poc_v2_validations_for_stage/{block_height}";
 
@@ -615,22 +610,7 @@ message PoCValidationsWithParticipants {
   repeated PoCValidation poc_validation = 4 [(gogoproto.nullable) = false];
 }
 
-// PoC v2 query messages
-
-message QueryPocV2BatchesForStageRequest {
-  int64 block_height = 1;
-}
-
-message QueryPocV2BatchesForStageResponse {
-  repeated PoCBatchesWithParticipantsV2 poc_batch = 1 [(gogoproto.nullable) = false];
-}
-
-message PoCBatchesWithParticipantsV2 {
-           string              participant = 1;
-           string              pub_key     = 2;
-           string              hex_pub_key = 3;
-  repeated PoCBatchV2  poc_batch   = 4 [(gogoproto.nullable) = false];
-}
+// PoC v2 validation query messages
 
 message QueryPocV2ValidationsForStageRequest {
   int64 block_height = 1;

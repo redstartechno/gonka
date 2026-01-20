@@ -1,13 +1,15 @@
 package mlnode
 
 import (
-	cosmos_client "decentralized-api/cosmosclient"
-	"decentralized-api/logging"
-	"decentralized-api/mlnodeclient"
-	"decentralized-api/pocartifacts"
 	"encoding/base64"
 	"errors"
 	"net/http"
+
+	cosmos_client "decentralized-api/cosmosclient"
+	"decentralized-api/logging"
+	"decentralized-api/mlnodeclient"
+	"decentralized-api/poc"
+	"decentralized-api/poc/artifacts"
 
 	"github.com/labstack/echo/v4"
 	"github.com/productscience/inference/api/inference/inference"
@@ -31,7 +33,8 @@ func (s *Server) postGeneratedArtifactsV2(ctx echo.Context) error {
 		"nodeId", body.NodeId,
 		"artifactsCount", len(body.Artifacts))
 
-	if !s.broker.IsInPoCGeneratePhase() {
+	epochState := s.broker.GetPhaseTracker().GetCurrentEpochState()
+	if !poc.ShouldAcceptGeneratedArtifacts(epochState) {
 		logging.Warn("ArtifactBatchV2-callback. Rejected - not in PoC generate phase", types.PoC,
 			"blockHeight", body.BlockHeight)
 		return echo.NewHTTPError(http.StatusServiceUnavailable, "not in PoC generate phase")
@@ -97,7 +100,8 @@ func (s *Server) postValidatedArtifactsV2(ctx echo.Context) error {
 		"nTotal", body.NTotal,
 		"fraudDetected", body.FraudDetected)
 
-	if !s.broker.IsInPoCValidatePhase() {
+	epochState := s.broker.GetPhaseTracker().GetCurrentEpochState()
+	if !poc.ShouldAcceptValidatedArtifacts(epochState) {
 		logging.Warn("ValidatedArtifactsV2-callback. Rejected - not in PoC validate phase", types.PoC,
 			"blockHeight", body.BlockHeight)
 		return echo.NewHTTPError(http.StatusServiceUnavailable, "not in PoC validate phase")
@@ -144,7 +148,7 @@ func (s *Server) postValidatedArtifactsV2(ctx echo.Context) error {
 	return ctx.NoContent(http.StatusOK)
 }
 
-func (s *Server) addToLocalStorage(pocStageStartHeight int64, nodeId string, artifacts []*inference.PoCArtifactV2) {
+func (s *Server) addToLocalStorage(pocStageStartHeight int64, nodeId string, protoArtifacts []*inference.PoCArtifactV2) {
 	if s.artifactStore == nil {
 		return
 	}
@@ -156,9 +160,9 @@ func (s *Server) addToLocalStorage(pocStageStartHeight int64, nodeId string, art
 		return
 	}
 
-	for _, a := range artifacts {
+	for _, a := range protoArtifacts {
 		if err := store.AddWithNode(int32(a.Nonce), a.Vector, nodeId); err != nil {
-			if errors.Is(err, pocartifacts.ErrDuplicateNonce) {
+			if errors.Is(err, artifacts.ErrDuplicateNonce) {
 				continue
 			}
 			logging.Error("Failed to store artifact", types.PoC, "nonce", a.Nonce, "error", err)

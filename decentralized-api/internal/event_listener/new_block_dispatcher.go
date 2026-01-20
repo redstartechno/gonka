@@ -16,10 +16,10 @@ import (
 	"decentralized-api/cosmosclient"
 	"decentralized-api/internal"
 	"decentralized-api/internal/event_listener/chainevents"
-	"decentralized-api/internal/poc"
-	"decentralized-api/internal/pocv2"
+	"decentralized-api/internal/seed"
 	"decentralized-api/internal/validation"
 	"decentralized-api/logging"
+	"decentralized-api/poc"
 
 	coretypes "github.com/cometbft/cometbft/rpc/core/types"
 	"github.com/productscience/inference/x/inference/types"
@@ -58,17 +58,17 @@ type MlNodeReconciliationConfig struct {
 
 // OnNewBlockDispatcher orchestrates processing of new block events
 type OnNewBlockDispatcher struct {
-	nodeBroker            *broker.Broker
-	nodePocOrchestratorV2 pocv2.NodePoCOrchestratorV2
-	queryClient           ChainStateClient
-	phaseTracker          *chainphase.ChainPhaseTracker
-	reconciliationConfig  MlNodeReconciliationConfig
-	getStatusFunc         StatusFunc
-	setHeightFunc         SetHeightFunc
-	randomSeedManager     poc.RandomSeedManager
-	configManager         *apiconfig.ConfigManager
-	validator             *validation.InferenceValidator
-	epochGroupDataCache   *internal.EpochGroupDataCache
+	nodeBroker           *broker.Broker
+	pocOrchestrator      poc.Orchestrator
+	queryClient          ChainStateClient
+	phaseTracker         *chainphase.ChainPhaseTracker
+	reconciliationConfig MlNodeReconciliationConfig
+	getStatusFunc        StatusFunc
+	setHeightFunc        SetHeightFunc
+	randomSeedManager    seed.RandomSeedManager
+	configManager        *apiconfig.ConfigManager
+	validator            *validation.InferenceValidator
+	epochGroupDataCache  *internal.EpochGroupDataCache
 }
 
 // StatusResponse matches the structure expected by getStatus function
@@ -96,27 +96,27 @@ var DefaultReconciliationConfig = MlNodeReconciliationConfig{
 // NewOnNewBlockDispatcher creates a new dispatcher with default configuration
 func NewOnNewBlockDispatcher(
 	nodeBroker *broker.Broker,
-	nodePocOrchestratorV2 pocv2.NodePoCOrchestratorV2,
+	pocOrchestrator poc.Orchestrator,
 	queryClient ChainStateClient,
 	phaseTracker *chainphase.ChainPhaseTracker,
 	getStatusFunc StatusFunc,
 	setHeightFunc SetHeightFunc,
-	randomSeedManager poc.RandomSeedManager,
+	randomSeedManager seed.RandomSeedManager,
 	reconciliationConfig MlNodeReconciliationConfig,
 	configManager *apiconfig.ConfigManager,
 	validator *validation.InferenceValidator,
 ) *OnNewBlockDispatcher {
 	return &OnNewBlockDispatcher{
-		nodeBroker:            nodeBroker,
-		nodePocOrchestratorV2: nodePocOrchestratorV2,
-		queryClient:           queryClient,
-		phaseTracker:          phaseTracker,
-		reconciliationConfig:  reconciliationConfig,
-		getStatusFunc:         getStatusFunc,
-		setHeightFunc:         setHeightFunc,
-		randomSeedManager:     randomSeedManager,
-		configManager:         configManager,
-		validator:             validator,
+		nodeBroker:           nodeBroker,
+		pocOrchestrator:      pocOrchestrator,
+		queryClient:          queryClient,
+		phaseTracker:         phaseTracker,
+		reconciliationConfig: reconciliationConfig,
+		getStatusFunc:        getStatusFunc,
+		setHeightFunc:        setHeightFunc,
+		randomSeedManager:    randomSeedManager,
+		configManager:        configManager,
+		validator:            validator,
 	}
 }
 
@@ -125,7 +125,7 @@ func NewOnNewBlockDispatcher(
 func NewOnNewBlockDispatcherFromCosmosClient(
 	nodeBroker *broker.Broker,
 	configManager *apiconfig.ConfigManager,
-	nodePocOrchestratorV2 pocv2.NodePoCOrchestratorV2,
+	pocOrchestrator poc.Orchestrator,
 	cosmosClient cosmosclient.CosmosMessageClient,
 	phaseTracker *chainphase.ChainPhaseTracker,
 	reconciliationConfig MlNodeReconciliationConfig,
@@ -141,12 +141,12 @@ func NewOnNewBlockDispatcherFromCosmosClient(
 		return getStatus(url)
 	}
 
-	randomSeedManager := poc.NewRandomSeedManager(cosmosClient, configManager)
+	randomSeedManager := seed.NewRandomSeedManager(cosmosClient, configManager)
 	epochGroupDataCache := internal.NewEpochGroupDataCache(cosmosClient)
 
 	dispatcher := NewOnNewBlockDispatcher(
 		nodeBroker,
-		nodePocOrchestratorV2,
+		pocOrchestrator,
 		queryClient,
 		phaseTracker,
 		getStatusFunc,
@@ -343,7 +343,7 @@ func (d *OnNewBlockDispatcher) handlePhaseTransitions(epochState chainphase.Epoc
 	if epochContext.IsStartOfPoCValidationStage(blockHeight) {
 		logging.Info("DapiStage:IsStartOfPoCValidationStage", types.Stages, "blockHeight", blockHeight, "blockHash", blockHash, "pocStartBlockHeight", epochContext.PocStartBlockHeight)
 		go func() {
-			d.nodePocOrchestratorV2.ValidateReceivedArtifacts(epochContext.PocStartBlockHeight)
+			d.pocOrchestrator.ValidateReceivedArtifacts(epochContext.PocStartBlockHeight)
 		}()
 	}
 
@@ -456,7 +456,7 @@ func (d *OnNewBlockDispatcher) handlePhaseTransitions(epochState chainphase.Epoc
 				"trigger_height", event.TriggerHeight)
 
 			go func() {
-				d.nodePocOrchestratorV2.ValidateReceivedArtifacts(event.TriggerHeight)
+				d.pocOrchestrator.ValidateReceivedArtifacts(event.TriggerHeight)
 			}()
 		}
 

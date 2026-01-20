@@ -1,4 +1,4 @@
-package pocv2
+package poc
 
 import (
 	"bytes"
@@ -17,7 +17,7 @@ import (
 
 	"decentralized-api/cosmosclient"
 	"decentralized-api/logging"
-	"decentralized-api/pocartifacts"
+	"decentralized-api/poc/artifacts"
 	"decentralized-api/utils"
 
 	"github.com/productscience/inference/x/inference/types"
@@ -190,7 +190,7 @@ func (c *ProofClient) FetchAndVerifyProofs(
 		leafData := buildLeafData(item.NonceValue, vectorBytes)
 
 		// Verify MMR proof
-		if !pocartifacts.VerifyProof(req.RootHash, req.Count, item.LeafIndex, leafData, proofHashes) {
+		if !artifacts.VerifyProof(req.RootHash, req.Count, item.LeafIndex, leafData, proofHashes) {
 			logging.Warn("MMR proof verification failed", types.PoC,
 				"participant", req.ParticipantAddress, "leafIndex", item.LeafIndex)
 			return nil, fmt.Errorf("%w: leaf %d", ErrProofVerificationFailed, item.LeafIndex)

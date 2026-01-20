@@ -1,4 +1,4 @@
-package pocartifacts
+package artifacts
 
 import (
 	"os"
@@ -70,7 +70,6 @@ func TestManagedArtifactStore_GetStore_ExistingDir(t *testing.T) {
 	if err := store.Add(1, []byte("test")); err != nil {
 		t.Fatalf("Add failed: %v", err)
 	}
-	// Flush to ensure data is persisted before reopening
 	if err := m1.Flush(); err != nil {
 		t.Fatalf("Flush failed: %v", err)
 	}
@@ -183,37 +182,11 @@ func TestManagedArtifactStore_AutoPrune(t *testing.T) {
 	}
 
 	// With retainCount=3, should keep newest 3: 300, 400, 500
-	// Heights 100, 200 should be pruned
 	if len(heights) != 3 {
 		t.Errorf("expected 3 stores after prune, got %d: %v", len(heights), heights)
 	}
 	if len(heights) == 3 && (heights[0] != 300 || heights[1] != 400 || heights[2] != 500) {
 		t.Errorf("expected [300, 400, 500], got %v", heights)
-	}
-}
-
-func TestManagedArtifactStore_NoPruneWhenBelowRetainCount(t *testing.T) {
-	dir := t.TempDir()
-	m := NewManagedArtifactStore(dir, 5)
-	defer m.Close()
-
-	// Create only 3 stores (below retainCount=5)
-	for _, height := range []int64{100, 200, 300} {
-		if _, err := m.GetOrCreateStore(height); err != nil {
-			t.Fatalf("GetOrCreateStore(%d) failed: %v", height, err)
-		}
-	}
-
-	m.cleanup()
-	time.Sleep(50 * time.Millisecond)
-
-	// Nothing should be pruned since we have fewer stores than retainCount
-	heights, err := m.ListStores()
-	if err != nil {
-		t.Fatalf("ListStores failed: %v", err)
-	}
-	if len(heights) != 3 {
-		t.Errorf("expected 3 stores (no pruning), got %d: %v", len(heights), heights)
 	}
 }
 

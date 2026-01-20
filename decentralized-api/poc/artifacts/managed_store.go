@@ -1,4 +1,4 @@
-package pocartifacts
+package artifacts
 
 import (
 	"context"

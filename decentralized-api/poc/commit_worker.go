@@ -1,4 +1,4 @@
-package pocv2
+package poc
 
 import (
 	"bytes"
@@ -7,11 +7,10 @@ import (
 	"sync"
 	"time"
 
-	"decentralized-api/broker"
 	"decentralized-api/chainphase"
 	"decentralized-api/cosmosclient"
 	"decentralized-api/logging"
-	"decentralized-api/pocartifacts"
+	"decentralized-api/poc/artifacts"
 
 	"github.com/productscience/inference/api/inference/inference"
 	"github.com/productscience/inference/x/inference/types"
@@ -28,10 +27,10 @@ type commitState struct {
 // - Store commits during generation (time-based, not per-request)
 // - Weight distribution at end of generation (state-based for restart robustness)
 type CommitWorker struct {
-	store    *pocartifacts.ManagedArtifactStore
-	recorder cosmosclient.CosmosMessageClient
-	tracker  *chainphase.ChainPhaseTracker
-	broker   *broker.Broker
+	store              *artifacts.ManagedArtifactStore
+	recorder           cosmosclient.CosmosMessageClient
+	tracker            *chainphase.ChainPhaseTracker
+	participantAddress string
 
 	interval time.Duration
 	stop     chan struct{}
@@ -45,22 +44,22 @@ type CommitWorker struct {
 // NewCommitWorker creates and starts a new commit worker.
 // The worker runs until Close() is called.
 func NewCommitWorker(
-	store *pocartifacts.ManagedArtifactStore,
+	store *artifacts.ManagedArtifactStore,
 	recorder cosmosclient.CosmosMessageClient,
 	tracker *chainphase.ChainPhaseTracker,
-	broker *broker.Broker,
+	participantAddress string,
 	interval time.Duration,
 ) *CommitWorker {
 	w := &CommitWorker{
-		store:          store,
-		recorder:       recorder,
-		tracker:        tracker,
-		broker:         broker,
-		interval:       interval,
-		stop:           make(chan struct{}),
-		done:           make(chan struct{}),
-		lastCommitted:  make(map[int64]commitState),
-		distributedFor: make(map[int64]bool),
+		store:              store,
+		recorder:           recorder,
+		tracker:            tracker,
+		participantAddress: participantAddress,
+		interval:           interval,
+		stop:               make(chan struct{}),
+		done:               make(chan struct{}),
+		lastCommitted:      make(map[int64]commitState),
+		distributedFor:     make(map[int64]bool),
 	}
 
 	// Start flush - always on (same interval as commits)
@@ -103,13 +102,12 @@ func (w *CommitWorker) tick() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	pocHeight := w.getPocStageHeight(epochState)
+	pocHeight := GetCurrentPocStageHeight(epochState)
 
 	// 1. Store Commits
 	// Submit commits whenever exchange window is open.
-	// This ensures we commit even during winddown phase before window closes.
 	if pocHeight > 0 {
-		canCommit := w.shouldAcceptStoreCommit(epochState, pocHeight)
+		canCommit := ShouldAcceptStoreCommit(epochState, pocHeight)
 		logging.Debug("CommitWorker: tick", types.PoC,
 			"phase", epochState.CurrentPhase,
 			"pocHeight", pocHeight,
@@ -120,92 +118,13 @@ func (w *CommitWorker) tick() {
 	}
 
 	// 2. Weight Distribution (State Reconciliation)
-	// If we are in a phase where weights SHOULD have been distributed (Validation/WindDown),
+	// If we are in a phase where weights SHOULD have been distributed,
 	// and we haven't done it for this pocHeight yet, do it now.
-	// This handles restarts gracefully and fixes the confirmation PoC bug.
-	if w.shouldHaveDistributedWeights(epochState) && pocHeight > 0 {
+	if ShouldHaveDistributedWeights(epochState) && pocHeight > 0 {
 		if !w.distributedFor[pocHeight] {
 			w.submitWeightDistribution(pocHeight)
 		}
 	}
-}
-
-// getPocStageHeight returns the correct PoC stage height based on context.
-// For regular PoC: PocStartBlockHeight
-// For confirmation PoC: TriggerHeight
-func (w *CommitWorker) getPocStageHeight(epochState *chainphase.EpochState) int64 {
-	if epochState.IsNilOrNotSynced() {
-		return 0
-	}
-
-	// Confirmation PoC uses event's trigger height
-	if epochState.ActiveConfirmationPoCEvent != nil &&
-		epochState.CurrentPhase == types.InferencePhase {
-		return epochState.ActiveConfirmationPoCEvent.TriggerHeight
-	}
-
-	// Regular PoC
-	return epochState.LatestEpoch.PocStartBlockHeight
-}
-
-// shouldAcceptStoreCommit returns true if the chain will accept MsgPoCV2StoreCommit
-// at the current block height. Mirrors keeper validation.
-func (w *CommitWorker) shouldAcceptStoreCommit(epochState *chainphase.EpochState, pocStageStartHeight int64) bool {
-	if epochState.IsNilOrNotSynced() {
-		return false
-	}
-
-	currentHeight := epochState.CurrentBlock.Height
-
-	// Confirmation PoC: check batch submission window
-	if epochState.ActiveConfirmationPoCEvent != nil &&
-		epochState.CurrentPhase == types.InferencePhase {
-		event := epochState.ActiveConfirmationPoCEvent
-		if event.Phase != types.ConfirmationPoCPhase_CONFIRMATION_POC_GENERATION {
-			return false
-		}
-		if pocStageStartHeight != event.TriggerHeight {
-			return false
-		}
-		epochParams := &epochState.LatestEpoch.EpochParams
-		return event.IsInBatchSubmissionWindow(currentHeight, epochParams)
-	}
-
-	// Regular PoC: check exchange window
-	if epochState.CurrentPhase != types.PoCGeneratePhase &&
-		epochState.CurrentPhase != types.PoCGenerateWindDownPhase {
-		return false
-	}
-
-	if !epochState.LatestEpoch.IsStartOfPocStage(pocStageStartHeight) {
-		return false
-	}
-
-	return epochState.LatestEpoch.IsPoCExchangeWindow(currentHeight)
-}
-
-// shouldHaveDistributedWeights returns true if we should be in a state where weights
-// have been distributed (Validation phase or WindDown phase).
-func (w *CommitWorker) shouldHaveDistributedWeights(epochState *chainphase.EpochState) bool {
-	if epochState.IsNilOrNotSynced() {
-		return false
-	}
-
-	// Regular PoC: Validation or WindDown phases
-	if epochState.CurrentPhase == types.PoCValidatePhase ||
-		epochState.CurrentPhase == types.PoCValidateWindDownPhase ||
-		epochState.CurrentPhase == types.PoCGenerateWindDownPhase {
-		return true
-	}
-
-	// Confirmation PoC: Validation phase
-	if epochState.CurrentPhase == types.InferencePhase &&
-		epochState.ActiveConfirmationPoCEvent != nil &&
-		epochState.ActiveConfirmationPoCEvent.Phase == types.ConfirmationPoCPhase_CONFIRMATION_POC_VALIDATION {
-		return true
-	}
-
-	return false
 }
 
 func (w *CommitWorker) maybeSubmitCommit(pocHeight int64) {
@@ -255,9 +174,7 @@ func (w *CommitWorker) submitWeightDistribution(pocHeight int64) {
 	}
 
 	// 1. Query chain for the canonical committed snapshot
-	// This ensures we distribute for exactly what was accepted on-chain
-	participantAddress := w.broker.GetParticipantAddress()
-	if participantAddress == "" {
+	if w.participantAddress == "" {
 		logging.Warn("CommitWorker: no participant address, skipping distribution", types.PoC)
 		return
 	}
@@ -265,7 +182,7 @@ func (w *CommitWorker) submitWeightDistribution(pocHeight int64) {
 	queryClient := w.recorder.NewInferenceQueryClient()
 	resp, err := queryClient.PoCV2StoreCommit(context.Background(), &types.QueryPoCV2StoreCommitRequest{
 		PocStageStartBlockHeight: pocHeight,
-		ParticipantAddress:       participantAddress,
+		ParticipantAddress:       w.participantAddress,
 	})
 	if err != nil {
 		logging.Warn("CommitWorker: failed to query last commit", types.PoC,
@@ -316,8 +233,6 @@ func (w *CommitWorker) submitWeightDistribution(pocHeight int64) {
 }
 
 // getWeightDistribution builds weight distribution adjusted to sum exactly to targetCount.
-// If local distribution differs from target, weights are proportionally scaled.
-// Preconditions: distribution must be non-empty, targetCount must be > 0.
 func getWeightDistribution(distribution map[string]uint32, targetCount uint32) ([]*inference.MLNodeWeight, error) {
 	if len(distribution) == 0 {
 		return nil, fmt.Errorf("empty distribution")
@@ -352,10 +267,8 @@ func getWeightDistribution(distribution map[string]uint32, targetCount uint32) (
 	logging.Warn("CommitWorker: adjusting distribution proportionally", types.PoC,
 		"localSum", localSum, "targetCount", targetCount)
 
-	// Use float64 for proportional calculation, then round
 	ratio := float64(targetCount) / float64(localSum)
 
-	// First pass: calculate proportional weights
 	type nodeWeight struct {
 		nodeId    string
 		weight    uint32
@@ -372,7 +285,7 @@ func getWeightDistribution(distribution map[string]uint32, targetCount uint32) (
 		adjustedSum += rounded
 	}
 
-	// Second pass: distribute remaining count to nodes with highest remainders
+	// Distribute remaining count to nodes with highest remainders
 	diff := int32(targetCount) - int32(adjustedSum)
 	if diff > 0 {
 		for i := 0; i < int(diff); i++ {

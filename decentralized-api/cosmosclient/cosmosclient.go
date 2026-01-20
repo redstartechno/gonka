@@ -205,7 +205,6 @@ type CosmosMessageClient interface {
 	FinishInference(transaction *inference.MsgFinishInference) error
 	ReportValidation(transaction *inference.MsgValidation) error
 	SubmitNewUnfundedParticipant(transaction *inference.MsgSubmitNewUnfundedParticipant) error
-	SubmitPocBatchesV2(transaction *inference.MsgSubmitPocBatchesV2) error
 	SubmitPocValidationsV2(transaction *inference.MsgSubmitPocValidationsV2) error
 	SubmitPoCV2StoreCommit(transaction *inference.MsgPoCV2StoreCommit) error
 	SubmitMLNodeWeightDistribution(transaction *inference.MsgMLNodeWeightDistribution) error
@@ -359,15 +358,6 @@ func (icc *InferenceCosmosClient) ClaimRewards(transaction *inference.MsgClaimRe
 
 func (icc *InferenceCosmosClient) BankBalances(ctx context.Context, address string) ([]sdk.Coin, error) {
 	return icc.manager.BankBalances(ctx, address)
-}
-
-func (icc *InferenceCosmosClient) SubmitPocBatchesV2(transaction *inference.MsgSubmitPocBatchesV2) error {
-	transaction.Creator = icc.Address
-	if icc.batchingEnabled {
-		return icc.batchConsumer.PublishPocBatchV2(transaction)
-	}
-	_, err := icc.manager.SendTransactionAsyncWithRetry(transaction)
-	return err
 }
 
 func (icc *InferenceCosmosClient) SubmitPocValidationsV2(transaction *inference.MsgSubmitPocValidationsV2) error {

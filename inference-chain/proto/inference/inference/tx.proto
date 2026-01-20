@@ -33,8 +33,7 @@ service Msg {
   rpc ClaimRewards                     (MsgClaimRewards) returns (MsgClaimRewardsResponse);
   rpc SubmitPocBatch                   (MsgSubmitPocBatch) returns (MsgSubmitPocBatchResponse);
   rpc SubmitPocValidation              (MsgSubmitPocValidation) returns (MsgSubmitPocValidationResponse);
-  // PoC v2 (batch-based) messages
-  rpc SubmitPocBatchesV2               (MsgSubmitPocBatchesV2) returns (MsgSubmitPocBatchesV2Response);
+  // PoC v2 validation messages
   rpc SubmitPocValidationsV2           (MsgSubmitPocValidationsV2) returns (MsgSubmitPocValidationsV2Response);
   // PoC v2 off-chain commit messages
   rpc PoCV2StoreCommit                 (MsgPoCV2StoreCommit) returns (MsgPoCV2StoreCommitResponse);
@@ -231,18 +230,7 @@ message MsgSubmitPocValidation {
 
 message MsgSubmitPocValidationResponse {}
 
-// PoC v2 (batch-based) messages
-// Note: Current iteration stores artifacts on-chain; later iteration moves fully off-chain.
-
-message MsgSubmitPocBatchesV2 {
-  option (cosmos.msg.v1.signer) = "creator";
-  string creator = 1;
-  int64 poc_stage_start_block_height = 2;
-  repeated PoCBatchPayloadV2 batches = 3;
-}
-
-message MsgSubmitPocBatchesV2Response {}
-
+// PoC v2 validation messages
 message MsgSubmitPocValidationsV2 {
   option (cosmos.msg.v1.signer) = "creator";
   string creator = 1;

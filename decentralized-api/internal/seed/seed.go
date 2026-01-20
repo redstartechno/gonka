@@ -1,16 +1,18 @@
-package poc
+package seed
 
 import (
+	"encoding/binary"
+	"encoding/hex"
+
 	"decentralized-api/apiconfig"
 	"decentralized-api/cosmosclient"
 	"decentralized-api/logging"
-	"encoding/binary"
-	"encoding/hex"
 
 	"github.com/productscience/inference/api/inference/inference"
 	"github.com/productscience/inference/x/inference/types"
 )
 
+// RandomSeedManager manages random seeds for rewards/claims.
 type RandomSeedManager interface {
 	GenerateSeedInfo(epochIndex uint64)
 	GetSeedForEpoch(epochIndex uint64) apiconfig.SeedInfo
@@ -19,11 +21,13 @@ type RandomSeedManager interface {
 	RequestMoney(epochIndex uint64)
 }
 
+// RandomSeedManagerImpl is the implementation of RandomSeedManager.
 type RandomSeedManagerImpl struct {
 	transactionRecorder cosmosclient.CosmosMessageClient
 	configManager       *apiconfig.ConfigManager
 }
 
+// NewRandomSeedManager creates a new random seed manager.
 func NewRandomSeedManager(
 	transactionRecorder cosmosclient.CosmosMessageClient,
 	configManager *apiconfig.ConfigManager,

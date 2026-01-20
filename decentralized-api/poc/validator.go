@@ -1,4 +1,4 @@
-package pocv2
+package poc
 
 import (
 	"context"
@@ -126,7 +126,7 @@ func (v *OffChainValidator) ValidateAll(pocStageStartBlockHeight int64) {
 		logging.Error("OffChainValidator: failed to get nodes", types.PoC, "error", err)
 		return
 	}
-	nodes = filterNodesForV2Validation(nodes)
+	nodes = filterNodesForValidation(nodes)
 	if len(nodes) == 0 {
 		logging.Error("OffChainValidator: no nodes available", types.PoC)
 		return
@@ -533,4 +533,47 @@ func (v *OffChainValidator) stopGenerationOnAllNodes(nodes []broker.NodeResponse
 
 	logging.Info("OffChainValidator: stop generation complete", types.PoC,
 		"success", successCount, "failed", failCount)
+}
+
+// filterNodesForValidation returns nodes available for PoC validation.
+// - Accept nodes in POC status with any sub-status
+// - Accept nodes in INFERENCE status
+// - Exclude FAILED or administratively disabled nodes
+func filterNodesForValidation(nodes []broker.NodeResponse) []broker.NodeResponse {
+	filtered := make([]broker.NodeResponse, 0, len(nodes))
+	for _, node := range nodes {
+		// Exclude failed nodes
+		if node.State.CurrentStatus == types.HardwareNodeStatus_FAILED {
+			logging.Debug("filterNodesForValidation: Skipping FAILED node", types.PoC, "node_id", node.Node.Id)
+			continue
+		}
+
+		// Exclude unknown status nodes
+		if node.State.CurrentStatus == types.HardwareNodeStatus_UNKNOWN {
+			logging.Debug("filterNodesForValidation: Skipping UNKNOWN node", types.PoC, "node_id", node.Node.Id)
+			continue
+		}
+
+		// Exclude administratively disabled nodes
+		if !node.State.AdminState.Enabled {
+			logging.Debug("filterNodesForValidation: Skipping administratively disabled node", types.PoC, "node_id", node.Node.Id)
+			continue
+		}
+
+		// Accept nodes in POC status (any sub-status)
+		if node.State.CurrentStatus == types.HardwareNodeStatus_POC {
+			filtered = append(filtered, node)
+			continue
+		}
+
+		// Accept nodes in INFERENCE status
+		if node.State.CurrentStatus == types.HardwareNodeStatus_INFERENCE {
+			filtered = append(filtered, node)
+			continue
+		}
+
+		logging.Debug("filterNodesForValidation: Skipping node with status", types.PoC,
+			"node_id", node.Node.Id, "status", node.State.CurrentStatus.String())
+	}
+	return filtered
 }

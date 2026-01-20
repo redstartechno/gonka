@@ -5,7 +5,6 @@ const defaultMaxBlocks int64 = 30
 
 // deadlineByMsgType defines message-specific deadlines based on chain epoch parameters
 var deadlineByMsgType = map[string]int64{
-	"/inference.inference.MsgSubmitPocBatchesV2":     240,
 	"/inference.inference.MsgSubmitPocValidationsV2": 240,
 	"/inference.inference.MsgFinishInference":        150,
 	"/inference.inference.MsgValidation":             150,

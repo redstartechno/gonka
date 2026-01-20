@@ -4,17 +4,10 @@ package inference.inference;
 option go_package = "github.com/productscience/inference/x/inference/types";
 
 // PoCArtifactV2 represents a single artifact from PoC v2 generation.
+// Used for local off-chain storage and proof verification.
 message PoCArtifactV2 {
   int32 nonce = 1;
   bytes vector = 2; // Opaque bytes (encoding defined at application level)
-}
-
-// PoCBatchV2 represents a batch of artifacts from a single node.
-message PoCBatchV2 {
-  string participant_address = 1;
-  int64 poc_stage_start_block_height = 2;
-  string node_id = 3;
-  repeated PoCArtifactV2 artifacts = 4;
 }
 
 // PoCValidationV2 represents a validator's attestation of a participant's PoC work.
@@ -24,13 +17,6 @@ message PoCValidationV2 {
   string validator_participant_address = 2;
   int64 poc_stage_start_block_height = 3;
   int64 validated_weight = 4;
-}
-
-// PoCBatchPayloadV2 is the message payload for batch submission.
-// Height is at message level, participant derived from signer.
-message PoCBatchPayloadV2 {
-  string node_id = 1;
-  repeated PoCArtifactV2 artifacts = 2;
 }
 
 // PoCValidationPayloadV2 is the message payload for validation submission.

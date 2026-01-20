@@ -40,7 +40,6 @@ type (
 		PoCBatches     collections.Map[collections.Triple[int64, sdk.AccAddress, string], types.PoCBatch]
 		PoCValidations collections.Map[collections.Triple[int64, sdk.AccAddress, sdk.AccAddress], types.PoCValidation]
 		// PoC v2 collections
-		PoCBatchesV2              collections.Map[collections.Triple[int64, sdk.AccAddress, string], types.PoCBatchV2]
 		PoCValidationsV2          collections.Map[collections.Triple[int64, sdk.AccAddress, sdk.AccAddress], types.PoCValidationV2]
 		PoCV2StoreCommits         collections.Map[collections.Pair[int64, sdk.AccAddress], types.PoCV2StoreCommit]
 		MLNodeWeightDistributions collections.Map[collections.Pair[int64, sdk.AccAddress], types.MLNodeWeightDistribution]
@@ -156,13 +155,6 @@ func NewKeeper(
 			codec.CollValue[types.PoCValidation](cdc),
 		),
 		// PoC v2 collections
-		PoCBatchesV2: collections.NewMap(
-			sb,
-			types.PoCBatchV2Prefix,
-			"poc_batch_v2",
-			collections.TripleKeyCodec(collections.Int64Key, sdk.AccAddressKey, collections.StringKey),
-			codec.CollValue[types.PoCBatchV2](cdc),
-		),
 		PoCValidationsV2: collections.NewMap(
 			sb,
 			types.PoCValidationV2Prefix,

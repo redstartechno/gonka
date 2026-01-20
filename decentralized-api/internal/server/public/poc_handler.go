@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"decentralized-api/logging"
-	"decentralized-api/pocartifacts"
+	"decentralized-api/poc/artifacts"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
@@ -214,7 +214,7 @@ func (s *Server) postPocProofs(ctx echo.Context) error {
 		leafIdx := uint32(leafIndex)
 		nonce, vector, err := stageStore.GetArtifact(leafIdx)
 		if err != nil {
-			if err == pocartifacts.ErrLeafIndexOutOfRange {
+			if err == artifacts.ErrLeafIndexOutOfRange {
 				return echo.NewHTTPError(http.StatusBadRequest, "leaf_index out of range")
 			}
 			logging.Error("Failed to get artifact", types.Validation,
@@ -224,7 +224,7 @@ func (s *Server) postPocProofs(ctx echo.Context) error {
 
 		proof, err := stageStore.GetProof(leafIdx, reqCount)
 		if err != nil {
-			if err == pocartifacts.ErrLeafIndexOutOfRange {
+			if err == artifacts.ErrLeafIndexOutOfRange {
 				return echo.NewHTTPError(http.StatusBadRequest, "leaf_index out of range for proof")
 			}
 			logging.Error("Failed to get proof", types.Validation,

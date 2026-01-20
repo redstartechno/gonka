@@ -16,7 +16,6 @@ const (
 	TxsToObserveStream         = "txs_to_observe"
 	TxsBatchStartStream        = "txs_batch_start"
 	TxsBatchFinishStream       = "txs_batch_finish"
-	TxsBatchPocV2Stream        = "txs_batch_poc_v2"
 	TxsBatchValidationV2Stream = "txs_batch_validation_v2"
 
 	storageDir    = "/root/.dapi/.nats"
@@ -86,7 +85,6 @@ func (s *server) Start() error {
 		TxsToObserveStream,
 		TxsBatchStartStream,
 		TxsBatchFinishStream,
-		TxsBatchPocV2Stream,
 		TxsBatchValidationV2Stream,
 	})
 }

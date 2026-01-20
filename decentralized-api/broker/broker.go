@@ -345,6 +345,10 @@ func (b *Broker) GetChainBridge() BrokerChainBridge {
 	return b.chainBridge
 }
 
+func (b *Broker) GetPhaseTracker() *chainphase.ChainPhaseTracker {
+	return b.phaseTracker
+}
+
 func (b *Broker) LoadNodeToBroker(node *apiconfig.InferenceNodeConfig) chan NodeCommandResponse {
 	if node == nil {
 		return nil

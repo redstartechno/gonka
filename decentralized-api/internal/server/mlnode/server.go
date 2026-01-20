@@ -4,7 +4,7 @@ import (
 	"decentralized-api/broker"
 	cosmos_client "decentralized-api/cosmosclient"
 	"decentralized-api/internal/server/middleware"
-	"decentralized-api/pocartifacts"
+	"decentralized-api/poc/artifacts"
 
 	"github.com/labstack/echo/v4"
 )
@@ -13,14 +13,14 @@ type Server struct {
 	e             *echo.Echo
 	recorder      cosmos_client.CosmosMessageClient
 	broker        *broker.Broker
-	artifactStore *pocartifacts.ManagedArtifactStore // Optional: for off-chain PoC artifacts
+	artifactStore *artifacts.ManagedArtifactStore // Optional: for off-chain PoC artifacts
 }
 
 // ServerOption configures optional Server dependencies.
 type ServerOption func(*Server)
 
 // WithArtifactStore enables local artifact storage for off-chain PoC.
-func WithArtifactStore(store *pocartifacts.ManagedArtifactStore) ServerOption {
+func WithArtifactStore(store *artifacts.ManagedArtifactStore) ServerOption {
 	return func(s *Server) {
 		s.artifactStore = store
 	}

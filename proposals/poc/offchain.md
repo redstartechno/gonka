@@ -3,7 +3,10 @@
 ## Related Documents
 - `proposals/poc/offchain-phase1.md` — Phase 1 implementation (storage & MMR).
 - `proposals/poc/offchain-phase2.md` — Phase 2 implementation (proof API & managed storage).
-- `.cursorrules/rules.md` — Project conventions.
+- `proposals/poc/offchain-phase3.md` — Phase 3 implementation (chain messages).
+- `proposals/poc/offchain-phase35.md` — Phase 3.5 implementation (CommitWorker).
+- `proposals/poc/offchain-phase4.md` — Phase 4 implementation (validation switchover).
+- `proposals/poc/manager-v6.md` — Phase 5 domain consolidation plan.
 
 ---
 
@@ -236,7 +239,7 @@ seed = SHA256(validator_pubkey || block_hash || poc_stage_start_block_height)
 indices = deterministic_sample(seed, count, sample_count)
 ```
 
-**Code reference:** Current sampling logic in `decentralized-api/internal/pocv2/node_orchestrator.go` lines 392-418, using `pocParams.ValidationSampleSize` (lines 253-264).
+**Code reference:** Sampling logic in `decentralized-api/internal/pocv2/offchain_validator.go`.
 
 ### 6.2 Validation Steps
 
@@ -305,11 +308,8 @@ To prevent adaptive cheating:
 - `MsgPoCV2StoreCommit` proto, handler, and query endpoint
 - `MsgMLNodeWeightDistribution` proto, handler, and query endpoint
 - Artifact store node tracking (`AddWithNode`, `GetNodeDistribution`)
-- Commit submission from handler (per-batch)
-- Distribution submission from dispatcher (at end of generation)
-- Testermint verification
 
-### Phase 3.5: PoC Package Consolidation 
+### Phase 3.5: CommitWorker
 **Status:** Complete (see `offchain-phase35.md`)
 - CommitWorker sends commits every 5s (not per `/generated` request)
 - Distribution queries chain for last commit and validates exact match (`sum(weights) == last_commit.count`)
@@ -318,14 +318,31 @@ To prevent adaptive cheating:
 - Nonce type changed from `int64` to `int32`
 
 ### Phase 4: Validation Switchover
-- Update `node_orchestrator.go` to fetch from off-chain API instead of chain.
-- Verify proof before statistical validation.
-- Full testermint E2E tests.
+**Status:** Complete (see `offchain-phase4.md`)
+- `OffChainValidator` fetches proofs from participant APIs
+- On-chain batch submission removed from handler
+- Weight calculation uses store commits instead of batches
+- E2E tests passing
 
-### Phase 5: Cleanup
-- Remove on-chain artifact storage.
-- Remove `MsgSubmitPocBatchesV2` (or deprecate).
-- Documentation update.
+### Phase 5: Cleanup & Domain Consolidation
+**Status:** Pending (see `manager-v6.md`)
+
+**Chain cleanup:**
+- Remove `MsgSubmitPocBatchesV2` message and handler
+- Remove `PoCBatchesV2` collection from keeper
+- Remove `QueryPocV2BatchesForStage` query endpoint
+
+**DAPI cleanup:**
+- Remove dead batch types from `node_orchestrator.go`
+- Remove `post_generated_batches_handler.go` (V1 handlers)
+- Remove `SubmitPocBatchesV2` from cosmosclient
+
+**Domain consolidation:**
+- Move `pocartifacts/` to `poc/artifacts/`
+- Move `internal/pocv2/` to `poc/`
+- Consolidate phase predicates into `poc/phase.go`
+- Add NodeProvider interface to decouple orchestrator from broker
+- Delete `broker/phase_helpers.go`
 
 ---
 
@@ -349,20 +366,17 @@ message PoCArtifactV2 {
 
 | Aspect | File | Notes |
 |--------|------|-------|
-| Current batch submission | `inference-chain/x/inference/keeper/msg_server_submit_poc_v2.go` | Stores full artifacts on-chain |
 | Window validation | `inference-chain/x/inference/keeper/poc_period_validation.go` | `CheckPoCMessageTooLate` |
-| Validation sample size | `decentralized-api/internal/pocv2/node_orchestrator.go:253-264` | `PocParams.ValidationSampleSize` |
-| Sampling logic | `decentralized-api/internal/pocv2/node_orchestrator.go:392-418` | Deterministic seed from pubkey+hash+height |
 | **Off-chain artifact store** | `decentralized-api/pocartifacts/store.go` | ArtifactStore with MMR |
 | **MMR implementation** | `decentralized-api/pocartifacts/mmr.go` | Proof generation/verification |
 | **Managed store** | `decentralized-api/pocartifacts/managed_store.go` | Per-height stores with auto-pruning |
 | **Proof API handler** | `decentralized-api/internal/server/public/poc_handler.go` | POST /v1/poc/proofs, GET /v1/poc/artifacts/state |
 | **Authz cache** | `decentralized-api/internal/authzcache/cache.go` | Signer pubkey lookup with TTL |
 | **Store commit handler** | `inference-chain/x/inference/keeper/msg_server_poc_v2_commit.go` | MsgPoCV2StoreCommit, MsgMLNodeWeightDistribution |
-| **Store commit submission** | `decentralized-api/internal/server/mlnode/post_generated_artifacts_v2_handler.go` | submitStoreCommit() |
-| **Weight distribution** | `decentralized-api/internal/event_listener/new_block_dispatcher.go` | submitNodeWeightDistribution() |
+| **CommitWorker** | `decentralized-api/internal/pocv2/commit_worker.go` | Time-based commits and distribution |
+| **OffChainValidator** | `decentralized-api/internal/pocv2/offchain_validator.go` | Fetches proofs, verifies, sends to ML nodes |
+| **ProofClient** | `decentralized-api/internal/pocv2/proof_client.go` | HTTP client for proof requests |
 | **Testermint integration** | `testermint/src/test/kotlin/PoCOffChainTests.kt` | E2E proof API test |
-| Proto comment (future off-chain) | `inference-chain/proto/inference/inference/tx.proto:231-233` | Acknowledges planned migration |
 
 ---
 
@@ -371,4 +385,6 @@ message PoCArtifactV2 {
 - `offchain-phase1.md` — Phase 1 implementation details
 - `offchain-phase2.md` — Phase 2 implementation details
 - `offchain-phase3.md` — Phase 3 implementation details
-- `manager-v5.md` — PoC package consolidation proposal (Phase 3.5)
+- `offchain-phase35.md` — Phase 3.5 implementation details
+- `offchain-phase4.md` — Phase 4 implementation details
+- `manager-v6.md` — Phase 5 domain consolidation plan

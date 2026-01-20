@@ -34,7 +34,6 @@ const (
 	Query_EpochGroupValidationsAll_FullMethodName                  = "/inference.inference.Query/EpochGroupValidationsAll"
 	Query_PocBatchesForStage_FullMethodName                        = "/inference.inference.Query/PocBatchesForStage"
 	Query_PocValidationsForStage_FullMethodName                    = "/inference.inference.Query/PocValidationsForStage"
-	Query_PocV2BatchesForStage_FullMethodName                      = "/inference.inference.Query/PocV2BatchesForStage"
 	Query_PocV2ValidationsForStage_FullMethodName                  = "/inference.inference.Query/PocV2ValidationsForStage"
 	Query_PoCV2StoreCommit_FullMethodName                          = "/inference.inference.Query/PoCV2StoreCommit"
 	Query_MLNodeWeightDistribution_FullMethodName                  = "/inference.inference.Query/MLNodeWeightDistribution"
@@ -129,8 +128,7 @@ type QueryClient interface {
 	PocBatchesForStage(ctx context.Context, in *QueryPocBatchesForStageRequest, opts ...grpc.CallOption) (*QueryPocBatchesForStageResponse, error)
 	// Queries a list of PocValidationsForStage items.
 	PocValidationsForStage(ctx context.Context, in *QueryPocValidationsForStageRequest, opts ...grpc.CallOption) (*QueryPocValidationsForStageResponse, error)
-	// PoC v2 queries
-	PocV2BatchesForStage(ctx context.Context, in *QueryPocV2BatchesForStageRequest, opts ...grpc.CallOption) (*QueryPocV2BatchesForStageResponse, error)
+	// PoC v2 validation queries
 	PocV2ValidationsForStage(ctx context.Context, in *QueryPocV2ValidationsForStageRequest, opts ...grpc.CallOption) (*QueryPocV2ValidationsForStageResponse, error)
 	// PoC v2 off-chain commit queries
 	PoCV2StoreCommit(ctx context.Context, in *QueryPoCV2StoreCommitRequest, opts ...grpc.CallOption) (*QueryPoCV2StoreCommitResponse, error)
@@ -378,15 +376,6 @@ func (c *queryClient) PocBatchesForStage(ctx context.Context, in *QueryPocBatche
 func (c *queryClient) PocValidationsForStage(ctx context.Context, in *QueryPocValidationsForStageRequest, opts ...grpc.CallOption) (*QueryPocValidationsForStageResponse, error) {
 	out := new(QueryPocValidationsForStageResponse)
 	err := c.cc.Invoke(ctx, Query_PocValidationsForStage_FullMethodName, in, out, opts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *queryClient) PocV2BatchesForStage(ctx context.Context, in *QueryPocV2BatchesForStageRequest, opts ...grpc.CallOption) (*QueryPocV2BatchesForStageResponse, error) {
-	out := new(QueryPocV2BatchesForStageResponse)
-	err := c.cc.Invoke(ctx, Query_PocV2BatchesForStage_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -989,8 +978,7 @@ type QueryServer interface {
 	PocBatchesForStage(context.Context, *QueryPocBatchesForStageRequest) (*QueryPocBatchesForStageResponse, error)
 	// Queries a list of PocValidationsForStage items.
 	PocValidationsForStage(context.Context, *QueryPocValidationsForStageRequest) (*QueryPocValidationsForStageResponse, error)
-	// PoC v2 queries
-	PocV2BatchesForStage(context.Context, *QueryPocV2BatchesForStageRequest) (*QueryPocV2BatchesForStageResponse, error)
+	// PoC v2 validation queries
 	PocV2ValidationsForStage(context.Context, *QueryPocV2ValidationsForStageRequest) (*QueryPocV2ValidationsForStageResponse, error)
 	// PoC v2 off-chain commit queries
 	PoCV2StoreCommit(context.Context, *QueryPoCV2StoreCommitRequest) (*QueryPoCV2StoreCommitResponse, error)
@@ -1150,9 +1138,6 @@ func (UnimplementedQueryServer) PocBatchesForStage(context.Context, *QueryPocBat
 }
 func (UnimplementedQueryServer) PocValidationsForStage(context.Context, *QueryPocValidationsForStageRequest) (*QueryPocValidationsForStageResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method PocValidationsForStage not implemented")
-}
-func (UnimplementedQueryServer) PocV2BatchesForStage(context.Context, *QueryPocV2BatchesForStageRequest) (*QueryPocV2BatchesForStageResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method PocV2BatchesForStage not implemented")
 }
 func (UnimplementedQueryServer) PocV2ValidationsForStage(context.Context, *QueryPocV2ValidationsForStageRequest) (*QueryPocV2ValidationsForStageResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method PocV2ValidationsForStage not implemented")
@@ -1622,24 +1607,6 @@ func _Query_PocValidationsForStage_Handler(srv interface{}, ctx context.Context,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(QueryServer).PocValidationsForStage(ctx, req.(*QueryPocValidationsForStageRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _Query_PocV2BatchesForStage_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(QueryPocV2BatchesForStageRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(QueryServer).PocV2BatchesForStage(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: Query_PocV2BatchesForStage_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(QueryServer).PocV2BatchesForStage(ctx, req.(*QueryPocV2BatchesForStageRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -2844,10 +2811,6 @@ var Query_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "PocValidationsForStage",
 			Handler:    _Query_PocValidationsForStage_Handler,
-		},
-		{
-			MethodName: "PocV2BatchesForStage",
-			Handler:    _Query_PocV2BatchesForStage_Handler,
 		},
 		{
 			MethodName: "PocV2ValidationsForStage",

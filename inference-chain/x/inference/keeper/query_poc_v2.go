@@ -10,53 +10,6 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// PocV2BatchesForStage returns all PoC v2 artifact batches for a given stage.
-func (k Keeper) PocV2BatchesForStage(goCtx context.Context, req *types.QueryPocV2BatchesForStageRequest) (*types.QueryPocV2BatchesForStageResponse, error) {
-	if req == nil {
-		return nil, status.Error(codes.InvalidArgument, "invalid request")
-	}
-
-	ctx := sdk.UnwrapSDKContext(goCtx)
-
-	pocBatches, err := k.GetPoCBatchesV2ByStage(ctx, req.BlockHeight)
-	if err != nil {
-		k.LogError("failed to get PoC v2 batches", types.PoC, "err", err)
-		return nil, status.Error(codes.Internal, "failed to get PoC v2 batches")
-	}
-
-	pocBatchesWithParticipants := make([]types.PoCBatchesWithParticipantsV2, 0, len(pocBatches))
-	for participantIndex, batches := range pocBatches {
-		addr, err := sdk.AccAddressFromBech32(participantIndex)
-		if err != nil {
-			k.LogError("PocV2BatchesForStage. Invalid address", types.PoC, "address", participantIndex, "err", err)
-			continue
-		}
-
-		acc := k.AccountKeeper.GetAccount(ctx, addr)
-		if acc == nil {
-			k.LogError("PocV2BatchesForStage. Account not found", types.PoC, "address", participantIndex)
-			continue
-		}
-
-		pubKey := acc.GetPubKey()
-		if pubKey == nil {
-			k.LogError("PocV2BatchesForStage. PubKey not found", types.PoC, "address", participantIndex)
-			continue
-		}
-
-		pocBatchesWithParticipants = append(pocBatchesWithParticipants, types.PoCBatchesWithParticipantsV2{
-			Participant: participantIndex,
-			PocBatch:    batches,
-			PubKey:      utils.PubKeyToString(pubKey),
-			HexPubKey:   utils.PubKeyToHexString(pubKey),
-		})
-	}
-
-	return &types.QueryPocV2BatchesForStageResponse{
-		PocBatch: pocBatchesWithParticipants,
-	}, nil
-}
-
 // PocV2ValidationsForStage returns all PoC v2 validations for a given stage.
 func (k Keeper) PocV2ValidationsForStage(goCtx context.Context, req *types.QueryPocV2ValidationsForStageRequest) (*types.QueryPocV2ValidationsForStageResponse, error) {
 	if req == nil {

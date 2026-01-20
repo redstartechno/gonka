@@ -10,13 +10,13 @@ import (
 	"decentralized-api/internal/event_listener"
 	"decentralized-api/internal/modelmanager"
 	"decentralized-api/internal/nats/server"
-	"decentralized-api/internal/pocv2"
 	adminserver "decentralized-api/internal/server/admin"
 	mlserver "decentralized-api/internal/server/mlnode"
 	pserver "decentralized-api/internal/server/public"
 	"decentralized-api/mlnodeclient"
 	"decentralized-api/payloadstorage"
-	"decentralized-api/pocartifacts"
+	"decentralized-api/poc"
+	"decentralized-api/poc/artifacts"
 	"net"
 
 	"github.com/productscience/inference/api/inference/inference"
@@ -127,7 +127,7 @@ func main() {
 		"pubkey", participantInfo.GetPubKey())
 
 	// Create v2 orchestrator for artifact-based PoC
-	nodePocOrchestratorV2 := pocv2.NewNodePoCOrchestratorV2ForCosmosChain(
+	pocOrchestrator := poc.NewOrchestrator(
 		participantInfo.GetPubKey(),
 		nodeBroker,
 		config.GetApiConfig().PoCCallbackUrl,
@@ -135,7 +135,7 @@ func main() {
 		recorder,
 		chainPhaseTracker,
 	)
-	logging.Info("node PocOrchestratorV2 orchestrator initialized", types.PoC)
+	logging.Info("PoC orchestrator initialized", types.PoC)
 
 	tendermintClient := cosmosclient.TendermintClient{
 		ChainNodeUrl: config.GetChainNodeConfig().Url,
@@ -152,7 +152,7 @@ func main() {
 
 	validator := validation.NewInferenceValidator(nodeBroker, config, recorder, chainPhaseTracker)
 	blsManager := bls.NewBlsManager(*recorder)
-	listener := event_listener.NewEventListener(config, nodePocOrchestratorV2, nodeBroker, validator, *recorder, trainingExecutor, chainPhaseTracker, cancel, blsManager)
+	listener := event_listener.NewEventListener(config, pocOrchestrator, nodeBroker, validator, *recorder, trainingExecutor, chainPhaseTracker, cancel, blsManager)
 	// TODO: propagate trainingExecutor
 	go listener.Start(ctx)
 
@@ -182,12 +182,12 @@ func main() {
 
 	// Shared managed artifact store for off-chain PoC (used by both mlnode and public servers)
 	// Manages per-height directories with automatic pruning (retains last 10)
-	artifactStore := pocartifacts.NewManagedArtifactStore("/root/.dapi/data/poc-artifacts", 10)
+	artifactStore := artifacts.NewManagedArtifactStore("/root/.dapi/data/poc-artifacts", 10)
 	defer artifactStore.Close()
 
 	// Create commit worker for time-based artifact commits and weight distribution
 	// Worker owns flush lifecycle, commits periodically (not per-request), and handles distribution
-	commitWorker := pocv2.NewCommitWorker(artifactStore, recorder, chainPhaseTracker, nodeBroker, 5*time.Second)
+	commitWorker := poc.NewCommitWorker(artifactStore, recorder, chainPhaseTracker, participantInfo.GetAddress(), 5*time.Second)
 	defer commitWorker.Close()
 
 	publicServer := pserver.NewServer(nodeBroker, config, recorder, trainingExecutor, blockQueue, chainPhaseTracker, payloadStore, pserver.WithArtifactStore(artifactStore))

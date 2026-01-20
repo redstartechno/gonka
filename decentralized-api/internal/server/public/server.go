@@ -9,7 +9,7 @@ import (
 	"decentralized-api/internal/authzcache"
 	"decentralized-api/internal/server/middleware"
 	"decentralized-api/payloadstorage"
-	"decentralized-api/pocartifacts"
+	"decentralized-api/poc/artifacts"
 	"decentralized-api/training"
 	"net/http"
 	"time"
@@ -30,7 +30,7 @@ type Server struct {
 	payloadStorage      payloadstorage.PayloadStorage
 	phaseTracker        *chainphase.ChainPhaseTracker
 	epochGroupDataCache *internal.EpochGroupDataCache
-	artifactStore       *pocartifacts.ManagedArtifactStore
+	artifactStore       *artifacts.ManagedArtifactStore
 	authzCache          *authzcache.AuthzCache
 }
 
@@ -38,7 +38,7 @@ type Server struct {
 type ServerOption func(*Server)
 
 // WithArtifactStore enables local artifact storage for off-chain PoC proofs.
-func WithArtifactStore(store *pocartifacts.ManagedArtifactStore) ServerOption {
+func WithArtifactStore(store *artifacts.ManagedArtifactStore) ServerOption {
 	return func(s *Server) {
 		s.artifactStore = store
 	}
