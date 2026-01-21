@@ -12,7 +12,7 @@ import (
 // Orchestrator is the interface for PoC orchestration.
 // Supports V1/V2 dispatch based on poc_v2_enabled governance parameter.
 type Orchestrator interface {
-	ValidateReceivedArtifacts(pocStageStartBlockHeight int64)
+	ValidateReceivedArtifacts(pocStageStartBlockHeight int64, pocStartBlockHash string)
 }
 
 // orchestratorImpl coordinates PoC validation with V1/V2 dispatch.
@@ -72,15 +72,17 @@ func NewOrchestrator(
 
 // ValidateReceivedArtifacts validates artifacts for the given PoC stage.
 // Dispatches to V1 or V2 validator based on poc_v2_enabled governance parameter.
-func (o *orchestratorImpl) ValidateReceivedArtifacts(pocStageStartBlockHeight int64) {
+// pocStartBlockHash is the block hash at PoC start - must match the hash used during generation.
+func (o *orchestratorImpl) ValidateReceivedArtifacts(pocStageStartBlockHeight int64, pocStartBlockHash string) {
 	if o.isPoCv2Enabled() {
 		logging.Info("Orchestrator: delegating to V2 off-chain validator", types.PoC,
-			"pocStageStartBlockHeight", pocStageStartBlockHeight)
-		o.validatorV2.ValidateAll(pocStageStartBlockHeight)
+			"pocStageStartBlockHeight", pocStageStartBlockHeight,
+			"pocStartBlockHash", pocStartBlockHash)
+		o.validatorV2.ValidateAll(pocStageStartBlockHeight, pocStartBlockHash)
 		return
 	}
 
 	logging.Info("Orchestrator: delegating to V1 on-chain validator", types.PoC,
 		"pocStageStartBlockHeight", pocStageStartBlockHeight)
-	o.validatorV1.ValidateAll(pocStageStartBlockHeight)
+	o.validatorV1.ValidateAll(pocStageStartBlockHeight, pocStartBlockHash)
 }

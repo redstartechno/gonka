@@ -89,10 +89,15 @@ func NewOffChainValidator(
 	}
 }
 
-// ValidateAll validates all participants who committed artifacts for the given PoC stage.
-func (v *OffChainValidator) ValidateAll(pocStageStartBlockHeight int64) {
+func (v *OffChainValidator) ValidateAll(pocStageStartBlockHeight int64, pocStartBlockHash string) {
 	logging.Info("OffChainValidator: starting validation", types.PoC,
-		"pocStageStartBlockHeight", pocStageStartBlockHeight)
+		"pocStageStartBlockHeight", pocStageStartBlockHeight,
+		"pocStartBlockHash", pocStartBlockHash)
+
+	if pocStartBlockHash == "" {
+		logging.Error("OffChainValidator: PoC start block hash is empty", types.PoC)
+		return
+	}
 
 	epochState := v.phaseTracker.GetCurrentEpochState()
 	if epochState == nil {
@@ -100,12 +105,15 @@ func (v *OffChainValidator) ValidateAll(pocStageStartBlockHeight int64) {
 		return
 	}
 
-	// Get block hash for sampling randomness
-	blockHash := v.getBlockHash(epochState, pocStageStartBlockHeight)
-	if blockHash == "" {
-		logging.Error("OffChainValidator: failed to get block hash", types.PoC)
+	samplingBlockHash := v.getSamplingBlockHash(epochState)
+	if samplingBlockHash == "" {
+		logging.Error("OffChainValidator: failed to get sampling block hash", types.PoC)
 		return
 	}
+
+	logging.Info("OffChainValidator: block hashes", types.PoC,
+		"samplingBlockHash", samplingBlockHash,
+		"pocStartBlockHash", pocStartBlockHash)
 
 	// Get PoC params
 	queryClient := v.recorder.NewInferenceQueryClient()
@@ -232,7 +240,8 @@ func (v *OffChainValidator) ValidateAll(pocStageStartBlockHeight int64) {
 				proofClient,
 				nodes,
 				pocStageStartBlockHeight,
-				blockHash,
+				samplingBlockHash,
+				pocStartBlockHash,
 				pocParams,
 				sampleSize,
 				&statsMu,
@@ -268,7 +277,8 @@ func (v *OffChainValidator) worker(
 	proofClient *ProofClient,
 	nodes []broker.NodeResponse,
 	pocHeight int64,
-	blockHash string,
+	samplingBlockHash string,
+	pocStartBlockHash string,
 	pocParams *types.PocParams,
 	sampleSize int,
 	statsMu *sync.Mutex,
@@ -294,7 +304,8 @@ func (v *OffChainValidator) worker(
 				nodes,
 				&nodeCounter,
 				pocHeight,
-				blockHash,
+				samplingBlockHash,
+				pocStartBlockHash,
 				pocParams,
 				sampleSize,
 			)
@@ -343,6 +354,8 @@ func (v *OffChainValidator) worker(
 
 // validateParticipant validates a single participant.
 // Returns validateResult indicating success, permanent failure, or retryable failure.
+// samplingBlockHash: fresh hash for random sampling (anti-cheat)
+// pocStartBlockHash: original PoC start block hash (must match generation for MLNode)
 func (v *OffChainValidator) validateParticipant(
 	workerID int,
 	work participantWork,
@@ -350,7 +363,8 @@ func (v *OffChainValidator) validateParticipant(
 	nodes []broker.NodeResponse,
 	nodeCounter *int,
 	pocHeight int64,
-	blockHash string,
+	samplingBlockHash string,
+	pocStartBlockHash string,
 	pocParams *types.PocParams,
 	sampleSize int,
 ) validateResult {
@@ -359,8 +373,8 @@ func (v *OffChainValidator) validateParticipant(
 	logging.Debug("OffChainValidator: validating participant", types.PoC,
 		"worker", workerID, "participant", work.address, "count", work.count, "attempt", work.attempt)
 
-	// Sample leaf indices
-	leafIndices := sampleLeafIndices(v.pubKey, blockHash, pocHeight, work.count, sampleSize)
+	// Sample leaf indices using fresh hash (anti-cheat: prevents validators from predicting sample)
+	leafIndices := sampleLeafIndices(v.pubKey, samplingBlockHash, pocHeight, work.count, sampleSize)
 
 	// Fetch and verify proofs
 	verified, err := proofClient.FetchAndVerifyProofs(ctx, work.url, ProofRequest{
@@ -400,9 +414,10 @@ func (v *OffChainValidator) validateParticipant(
 	}
 
 	// Send to ML node for statistical validation
+	// IMPORTANT: Use pocStartBlockHash (not samplingBlockHash) to match generation seed
 	validationCallbackUrl := v.callbackUrl + "/v2/poc-batches"
 	validationReq := mlnodeclient.PoCGenerateRequestV2{
-		BlockHash:   blockHash,
+		BlockHash:   pocStartBlockHash, // Must match the hash used during generation
 		BlockHeight: pocHeight,
 		PublicKey:   work.pubKey,
 		NodeCount:   len(nodes),
@@ -478,21 +493,17 @@ func sampleLeafIndices(validatorPubKey string, blockHash string, blockHeight int
 }
 
 // getBlockHash returns the block hash for sampling randomness.
-// Uses fresh validation-start block (not PoC start block) to prevent adaptive cheating.
-func (v *OffChainValidator) getBlockHash(epochState *chainphase.EpochState, pocStageStartBlockHeight int64) string {
-	// Use current block hash if available (this is the fresh hash at validation time)
+func (v *OffChainValidator) getSamplingBlockHash(epochState *chainphase.EpochState) string {
 	if epochState.CurrentBlock.Hash != "" {
 		return epochState.CurrentBlock.Hash
 	}
 
-	// For confirmation PoC, use event hash (already fresh at confirmation trigger)
 	if epochState.CurrentPhase == types.InferencePhase && epochState.ActiveConfirmationPoCEvent != nil {
 		return epochState.ActiveConfirmationPoCEvent.PocSeedBlockHash
 	}
 
-	// Query block hash from chain - use current validation height (fresh), not PoC start height
 	if v.chainNodeUrl == "" {
-		logging.Warn("OffChainValidator: no chain node URL, using empty hash", types.PoC)
+		logging.Warn("OffChainValidator: no chain node URL", types.PoC)
 		return ""
 	}
 
@@ -502,28 +513,21 @@ func (v *OffChainValidator) getBlockHash(epochState *chainphase.EpochState, pocS
 		return ""
 	}
 
-	// Use current block height for fresh randomness (prevents validators from predicting sample)
 	freshBlockHeight := epochState.CurrentBlock.Height
 	if freshBlockHeight <= 0 {
-		logging.Error("OffChainValidator: current block height not available", types.PoC,
-			"currentBlockHeight", freshBlockHeight, "pocStageStartBlockHeight", pocStageStartBlockHeight)
+		logging.Error("OffChainValidator: current block height not available", types.PoC)
 		return ""
 	}
 
 	block, err := client.Block(context.Background(), &freshBlockHeight)
 	if err != nil {
-		logging.Error("OffChainValidator: failed to get block", types.PoC,
-			"height", freshBlockHeight, "error", err)
+		logging.Error("OffChainValidator: failed to get block", types.PoC, "height", freshBlockHeight, "error", err)
 		return ""
 	}
-
-	logging.Info("OffChainValidator: using fresh block hash for validation", types.PoC,
-		"freshBlockHeight", freshBlockHeight, "pocStageStartBlockHeight", pocStageStartBlockHeight)
 
 	return block.Block.Hash().String()
 }
 
-// stopGenerationOnAllNodes stops PoC generation on all nodes.
 func (v *OffChainValidator) stopGenerationOnAllNodes(nodes []broker.NodeResponse) {
 	logging.Info("OffChainValidator: stopping generation on all nodes", types.PoC,
 		"numNodes", len(nodes))

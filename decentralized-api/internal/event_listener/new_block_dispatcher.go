@@ -347,8 +347,15 @@ func (d *OnNewBlockDispatcher) handlePhaseTransitions(epochState chainphase.Epoc
 
 	if epochContext.IsStartOfPoCValidationStage(blockHeight) {
 		logging.Info("DapiStage:IsStartOfPoCValidationStage", types.Stages, "blockHeight", blockHeight, "blockHash", blockHash, "pocStartBlockHeight", epochContext.PocStartBlockHeight)
+		pocStartBlockHeight := epochContext.PocStartBlockHeight
 		go func() {
-			d.pocOrchestrator.ValidateReceivedArtifacts(epochContext.PocStartBlockHeight)
+			pocStartBlockHash, err := d.nodeBroker.GetChainBridge().GetBlockHash(pocStartBlockHeight)
+			if err != nil {
+				logging.Error("Failed to get PoC start block hash", types.PoC,
+					"pocStartBlockHeight", pocStartBlockHeight, "error", err)
+				return
+			}
+			d.pocOrchestrator.ValidateReceivedArtifacts(pocStartBlockHeight, pocStartBlockHash)
 		}()
 	}
 
@@ -458,10 +465,11 @@ func (d *OnNewBlockDispatcher) handlePhaseTransitions(epochState chainphase.Epoc
 		// Start validation (now has proper gap from InitValidateCommand)
 		if event.ShouldStartValidation(blockHeight, epochParams) {
 			logging.Info("Confirmation PoC validation starting", types.PoC,
-				"trigger_height", event.TriggerHeight)
+				"trigger_height", event.TriggerHeight,
+				"poc_seed_block_hash", event.PocSeedBlockHash)
 
 			go func() {
-				d.pocOrchestrator.ValidateReceivedArtifacts(event.TriggerHeight)
+				d.pocOrchestrator.ValidateReceivedArtifacts(event.TriggerHeight, event.PocSeedBlockHash)
 			}()
 		}
 

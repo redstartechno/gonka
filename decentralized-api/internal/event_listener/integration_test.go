@@ -49,7 +49,7 @@ var defaultReconciliationConfig = MlNodeReconciliationConfig{
 // Mock implementations using minimal interfaces
 type MockNodePoCOrchestratorV2 struct{}
 
-func (m *MockNodePoCOrchestratorV2) ValidateReceivedArtifacts(pocStageStartBlockHeight int64) {
+func (m *MockNodePoCOrchestratorV2) ValidateReceivedArtifacts(pocStageStartBlockHeight int64, pocStartBlockHash string) {
 	// Mock implementation - does nothing
 }
 

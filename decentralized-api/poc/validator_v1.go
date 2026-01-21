@@ -25,7 +25,6 @@ const (
 	POC_VALIDATE_BATCH_RETRIES         = 5
 )
 
-// OnChainValidator handles V1 PoC validation by querying on-chain batches.
 type OnChainValidator struct {
 	recorder     cosmosclient.CosmosMessageClient
 	nodeBroker   *broker.Broker
@@ -37,7 +36,6 @@ type OnChainValidator struct {
 	config ValidationConfig
 }
 
-// NewOnChainValidator creates a new V1 on-chain validator.
 func NewOnChainValidator(
 	recorder cosmosclient.CosmosMessageClient,
 	nodeBroker *broker.Broker,
@@ -58,11 +56,15 @@ func NewOnChainValidator(
 	}
 }
 
-// ValidateAll validates all participants who submitted PoC batches for the given stage.
-// V1 flow: Query chain for PoCBatch, sample nonces, send to MLNode via ValidateBatchV1.
-func (v *OnChainValidator) ValidateAll(pocStageStartBlockHeight int64) {
+func (v *OnChainValidator) ValidateAll(pocStageStartBlockHeight int64, pocStartBlockHash string) {
 	logging.Info("OnChainValidator: starting V1 validation", types.PoC,
-		"pocStageStartBlockHeight", pocStageStartBlockHeight)
+		"pocStageStartBlockHeight", pocStageStartBlockHeight,
+		"pocStartBlockHash", pocStartBlockHash)
+
+	if pocStartBlockHash == "" {
+		logging.Error("OnChainValidator: pocStartBlockHash is empty", types.PoC)
+		return
+	}
 
 	epochState := v.phaseTracker.GetCurrentEpochState()
 	if epochState == nil {
@@ -70,10 +72,9 @@ func (v *OnChainValidator) ValidateAll(pocStageStartBlockHeight int64) {
 		return
 	}
 
-	// Get block hash for sampling randomness
-	blockHash := v.getBlockHash(epochState, pocStageStartBlockHeight)
-	if blockHash == "" {
-		logging.Error("OnChainValidator: failed to get block hash", types.PoC)
+	samplingBlockHash := v.getSamplingBlockHash(epochState)
+	if samplingBlockHash == "" {
+		logging.Error("OnChainValidator: failed to get sampling block hash", types.PoC)
 		return
 	}
 
@@ -163,7 +164,8 @@ func (v *OnChainValidator) ValidateAll(pocStageStartBlockHeight int64) {
 			nonces:             allNonces,
 			dist:               allDist,
 			blockHeight:        pocStageStartBlockHeight,
-			blockHash:          blockHash,
+			pocStartBlockHash:  pocStartBlockHash,
+			samplingBlockHash:  samplingBlockHash,
 		})
 	}
 
@@ -222,17 +224,16 @@ func (v *OnChainValidator) ValidateAll(pocStageStartBlockHeight int64) {
 		"failed", failCount)
 }
 
-// v1ValidateWork represents a single participant to validate in V1 mode.
 type v1ValidateWork struct {
 	participantAddress string
-	hexPubKey          string // hex-encoded public key for MLNode callback
+	hexPubKey          string
 	nonces             []int64
 	dist               []float64
 	blockHeight        int64
-	blockHash          string
+	pocStartBlockHash  string
+	samplingBlockHash  string
 }
 
-// v1Worker processes V1 validation work items.
 func (v *OnChainValidator) v1Worker(
 	workerID int,
 	workChan <-chan v1ValidateWork,
@@ -250,21 +251,18 @@ func (v *OnChainValidator) v1Worker(
 		logging.Debug("OnChainValidator: validating participant", types.PoC,
 			"worker", workerID, "participant", work.participantAddress, "nonces", len(work.nonces))
 
-		// Sample nonces for validation
 		sampledBatch := sampleNoncesV1(
 			v.pubKey,
-			work.blockHash,
+			work.samplingBlockHash,
 			work.blockHeight,
 			work.nonces,
 			work.dist,
 			int64(sampleSize),
 		)
 
-		// Build V1 proof batch for MLNode
-		// PublicKey must be hex-encoded pubkey (not address) so callback can convert back to address
 		batch := mlnodeclient.ProofBatchV1{
 			PublicKey:   work.hexPubKey,
-			BlockHash:   work.blockHash,
+			BlockHash:   work.pocStartBlockHash,
 			BlockHeight: work.blockHeight,
 			Nonces:      sampledBatch.nonces,
 			Dist:        sampledBatch.dist,
@@ -314,14 +312,12 @@ func (v *OnChainValidator) v1Worker(
 	}
 }
 
-// sampledBatch holds sampled nonces and distances.
 type sampledBatch struct {
 	nonces []int64
 	dist   []float64
 }
 
-// sampleNoncesV1 samples nonces deterministically for V1 validation.
-func sampleNoncesV1(validatorPubKey, blockHash string, blockHeight int64, nonces []int64, dist []float64, sampleSize int64) sampledBatch {
+func sampleNoncesV1(validatorPubKey, samplingBlockHash string, blockHeight int64, nonces []int64, dist []float64, sampleSize int64) sampledBatch {
 	totalNonces := int64(len(nonces))
 	if sampleSize >= totalNonces {
 		return sampledBatch{nonces: nonces, dist: dist}
@@ -329,7 +325,7 @@ func sampleNoncesV1(validatorPubKey, blockHash string, blockHeight int64, nonces
 
 	indices := deterministicSampleIndicesV1(
 		validatorPubKey,
-		blockHash,
+		samplingBlockHash,
 		blockHeight,
 		sampleSize,
 		totalNonces,
@@ -348,8 +344,7 @@ func sampleNoncesV1(validatorPubKey, blockHash string, blockHeight int64, nonces
 	return sampledBatch{nonces: sampledNonces, dist: sampledDist}
 }
 
-// deterministicSampleIndicesV1 generates deterministic sample indices for V1.
-func deterministicSampleIndicesV1(validatorPubKey, blockHash string, blockHeight, nSamples, totalItems int64) []int {
+func deterministicSampleIndicesV1(validatorPubKey, samplingBlockHash string, blockHeight, nSamples, totalItems int64) []int {
 	if nSamples >= totalItems {
 		indices := make([]int, totalItems)
 		for i := int64(0); i < totalItems; i++ {
@@ -358,7 +353,7 @@ func deterministicSampleIndicesV1(validatorPubKey, blockHash string, blockHeight
 		return indices
 	}
 
-	seedInput := fmt.Sprintf("%s:%s:%d", validatorPubKey, blockHash, blockHeight)
+	seedInput := fmt.Sprintf("%s:%s:%d", validatorPubKey, samplingBlockHash, blockHeight)
 	hash := sha256.Sum256([]byte(seedInput))
 	seed := int64(binary.BigEndian.Uint64(hash[:8]))
 
@@ -369,22 +364,17 @@ func deterministicSampleIndicesV1(validatorPubKey, blockHash string, blockHeight
 	return indices
 }
 
-// getBlockHash returns the block hash for sampling randomness.
-// Uses fresh validation-start block (not PoC start block) to prevent adaptive cheating.
-func (v *OnChainValidator) getBlockHash(epochState *chainphase.EpochState, pocStageStartBlockHeight int64) string {
-	// Use current block hash if available (this is the fresh hash at validation time)
+func (v *OnChainValidator) getSamplingBlockHash(epochState *chainphase.EpochState) string {
 	if epochState.CurrentBlock.Hash != "" {
 		return epochState.CurrentBlock.Hash
 	}
 
-	// For confirmation PoC, use event hash (already fresh at confirmation trigger)
 	if epochState.CurrentPhase == types.InferencePhase && epochState.ActiveConfirmationPoCEvent != nil {
 		return epochState.ActiveConfirmationPoCEvent.PocSeedBlockHash
 	}
 
-	// Query block hash from chain - use current validation height (fresh), not PoC start height
 	if v.chainNodeUrl == "" {
-		logging.Warn("OnChainValidator: no chain node URL, using empty hash", types.PoC)
+		logging.Warn("OnChainValidator: no chain node URL", types.PoC)
 		return ""
 	}
 
@@ -394,29 +384,21 @@ func (v *OnChainValidator) getBlockHash(epochState *chainphase.EpochState, pocSt
 		return ""
 	}
 
-	// Use current block height for fresh randomness (prevents validators from predicting sample)
 	freshBlockHeight := epochState.CurrentBlock.Height
 	if freshBlockHeight <= 0 {
-		logging.Error("OnChainValidator: current block height not available", types.PoC,
-			"currentBlockHeight", freshBlockHeight, "pocStageStartBlockHeight", pocStageStartBlockHeight)
+		logging.Error("OnChainValidator: current block height not available", types.PoC)
 		return ""
 	}
 
 	block, err := client.Block(context.Background(), &freshBlockHeight)
 	if err != nil {
-		logging.Error("OnChainValidator: failed to get block", types.PoC,
-			"height", freshBlockHeight, "error", err)
+		logging.Error("OnChainValidator: failed to get block", types.PoC, "height", freshBlockHeight, "error", err)
 		return ""
 	}
-
-	logging.Info("OnChainValidator: using fresh block hash for validation", types.PoC,
-		"freshBlockHeight", freshBlockHeight, "pocStageStartBlockHeight", pocStageStartBlockHeight)
 
 	return block.Block.Hash().String()
 }
 
-// getNodesWithRetry gets nodes for PoC validation with retry logic.
-// Waits for nodes to enter PocStatusValidating state with up to 30 retries.
 func (v *OnChainValidator) getNodesWithRetry(pocStageStartBlockHeight int64) ([]broker.NodeResponse, error) {
 	return v.getNodesWithRetryConfig(
 		pocStageStartBlockHeight,
@@ -425,7 +407,6 @@ func (v *OnChainValidator) getNodesWithRetry(pocStageStartBlockHeight int64) ([]
 	)
 }
 
-// getNodesWithRetryConfig allows tests to supply custom retry settings.
 func (v *OnChainValidator) getNodesWithRetryConfig(
 	pocStageStartBlockHeight int64,
 	retries int,
@@ -474,8 +455,6 @@ func (v *OnChainValidator) getNodesWithRetryConfig(
 	return nil, errors.New("no nodes available for PoC validation after retries")
 }
 
-// filterNodesForV1Validation returns nodes available for V1 PoC validation.
-// Matches main branch logic: only accepts nodes in POC status with PocStatusValidating.
 func filterNodesForV1Validation(nodes []broker.NodeResponse) []broker.NodeResponse {
 	filtered := make([]broker.NodeResponse, 0, len(nodes))
 	for _, node := range nodes {
