@@ -179,9 +179,9 @@ class WebhookService(private val responseService: ResponseService) {
                 // Get the weight from the ResponseService, default to 10 if not set
                 val weight = responseService.getPocResponseWeight(hostName) ?: 10L
 
-                // Generate unique nonces using the shared atomic counter (same as v1)
-                // This ensures multi-node participants get unique nonces across all their nodes
-                val start = latestNonce.getAndAdd(weight)
+                // Generate unique nonces: atomic counter + nodeId offset
+                // Each mock-server container has its own counter, so nodeId ensures uniqueness across nodes
+                val start = latestNonce.getAndAdd(weight) + (nodeId * 1_000_000L)
                 val artifacts = (0 until weight.toInt()).map { i ->
                     val nonce = start + i
                     val vectorBytes = ByteArray(24) { j -> ((nonce * 2 + j) % 256).toByte() }

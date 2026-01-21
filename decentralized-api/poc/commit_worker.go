@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -234,7 +235,8 @@ func (w *CommitWorker) submitWeightDistribution(pocHeight int64) {
 
 	w.distributedFor[pocHeight] = true
 	logging.Info("CommitWorker: distributed weights", types.PoC,
-		"pocHeight", pocHeight, "nodes", len(weights), "count", resp.Count)
+		"pocHeight", pocHeight, "nodes", len(weights), "count", resp.Count,
+		"distribution", formatWeightDistribution(weights))
 }
 
 // getWeightDistribution builds weight distribution adjusted to sum exactly to targetCount.
@@ -318,4 +320,15 @@ func getWeightDistribution(distribution map[string]uint32, targetCount uint32) (
 	}
 
 	return weights, nil
+}
+
+func formatWeightDistribution(weights []*inference.MLNodeWeight) string {
+	if len(weights) == 0 {
+		return "{}"
+	}
+	parts := make([]string, len(weights))
+	for i, w := range weights {
+		parts[i] = fmt.Sprintf("%s:%d", w.NodeId, w.Weight)
+	}
+	return "{" + strings.Join(parts, ", ") + "}"
 }

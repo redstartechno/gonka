@@ -369,6 +369,19 @@ func (s *ArtifactStore) GetNodeDistribution() map[string]uint32 {
 	return result
 }
 
+// GetNodeCounts returns a copy of the current (unflushed) node distribution.
+// Useful for logging/debugging to see real-time artifact counts per node.
+func (s *ArtifactStore) GetNodeCounts() map[string]uint32 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	result := make(map[string]uint32, len(s.nodeCounts))
+	for k, v := range s.nodeCounts {
+		result[k] = v
+	}
+	return result
+}
+
 func (s *ArtifactStore) GetArtifact(leafIndex uint32) (nonce int32, vector []byte, err error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

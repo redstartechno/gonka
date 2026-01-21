@@ -79,12 +79,14 @@ func (s *Server) postGeneratedArtifactsV2(ctx echo.Context) error {
 	// Store artifacts locally for off-chain proofs
 	// Store commits (MsgPoCV2StoreCommit) are submitted by CommitWorker
 	// Weight distributions (MsgMLNodeWeightDistribution) are submitted at end of generation
-	s.addToLocalStorage(body.BlockHeight, nodeId, protoArtifacts)
+	totalCount, nodeDistribution := s.addToLocalStorage(body.BlockHeight, nodeId, protoArtifacts)
 
 	logging.Debug("ArtifactBatchV2-callback. Stored locally", types.PoC,
 		"blockHeight", body.BlockHeight,
 		"nodeId", nodeId,
-		"artifactsCount", len(protoArtifacts))
+		"artifactsCount", len(protoArtifacts),
+		"totalInStore", totalCount,
+		"nodeDistribution", nodeDistribution)
 
 	return ctx.NoContent(http.StatusOK)
 }
@@ -158,16 +160,16 @@ func (s *Server) postValidatedArtifactsV2(ctx echo.Context) error {
 	return ctx.NoContent(http.StatusOK)
 }
 
-func (s *Server) addToLocalStorage(pocStageStartHeight int64, nodeId string, protoArtifacts []*inference.PoCArtifactV2) {
+func (s *Server) addToLocalStorage(pocStageStartHeight int64, nodeId string, protoArtifacts []*inference.PoCArtifactV2) (uint32, map[string]uint32) {
 	if s.artifactStore == nil {
-		return
+		return 0, nil
 	}
 
 	store, err := s.artifactStore.GetOrCreateStore(pocStageStartHeight)
 	if err != nil {
 		logging.Error("Failed to get artifact store", types.PoC,
 			"pocStageStartHeight", pocStageStartHeight, "error", err)
-		return
+		return 0, nil
 	}
 
 	for _, a := range protoArtifacts {
@@ -178,4 +180,6 @@ func (s *Server) addToLocalStorage(pocStageStartHeight int64, nodeId string, pro
 			logging.Error("Failed to store artifact", types.PoC, "nonce", a.Nonce, "error", err)
 		}
 	}
+
+	return store.Count(), store.GetNodeCounts()
 }
