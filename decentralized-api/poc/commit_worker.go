@@ -17,16 +17,13 @@ import (
 	"github.com/productscience/inference/x/inference/types"
 )
 
-// commitState tracks the last committed MMR state to avoid duplicate submissions.
+const distributionRetryInterval = 30 * time.Second
+
 type commitState struct {
 	count    uint32
 	rootHash []byte
 }
 
-// CommitWorker owns the entire "artifacts → chain" pipeline:
-// - Periodic flush of artifact stores
-// - Store commits during generation (time-based, not per-request)
-// - Weight distribution at end of generation (state-based for restart robustness)
 type CommitWorker struct {
 	store              *artifacts.ManagedArtifactStore
 	recorder           cosmosclient.CosmosMessageClient
@@ -37,9 +34,10 @@ type CommitWorker struct {
 	stop     chan struct{}
 	done     chan struct{}
 
-	mu             sync.Mutex
-	lastCommitted  map[int64]commitState // pocHeight -> last submitted state
-	distributedFor map[int64]bool        // pocHeight -> already distributed locally
+	mu                      sync.Mutex
+	currentPocHeight        int64
+	lastDistributionAttempt time.Time
+	lastCommitted           map[int64]commitState
 }
 
 // NewCommitWorker creates and starts a new commit worker.
@@ -60,7 +58,6 @@ func NewCommitWorker(
 		stop:               make(chan struct{}),
 		done:               make(chan struct{}),
 		lastCommitted:      make(map[int64]commitState),
-		distributedFor:     make(map[int64]bool),
 	}
 
 	// Start flush - always on (same interval as commits)
@@ -110,8 +107,12 @@ func (w *CommitWorker) tick() {
 
 	pocHeight := GetCurrentPocStageHeight(epochState)
 
-	// 1. Store Commits
-	// Submit commits whenever exchange window is open.
+	if pocHeight > 0 && w.currentPocHeight != pocHeight {
+		w.currentPocHeight = pocHeight
+		w.lastDistributionAttempt = time.Time{}
+		w.lastCommitted = make(map[int64]commitState)
+	}
+
 	if pocHeight > 0 {
 		canCommit := ShouldAcceptStoreCommit(epochState, pocHeight)
 		logging.Debug("CommitWorker: tick", types.PoC,
@@ -123,11 +124,10 @@ func (w *CommitWorker) tick() {
 		}
 	}
 
-	// 2. Weight Distribution (State Reconciliation)
-	// If we are in a phase where weights SHOULD have been distributed,
-	// and we haven't done it for this pocHeight yet, do it now.
 	if ShouldHaveDistributedWeights(epochState) && pocHeight > 0 {
-		if !w.distributedFor[pocHeight] {
+		shouldRetry := w.lastDistributionAttempt.IsZero() ||
+			time.Since(w.lastDistributionAttempt) > distributionRetryInterval
+		if shouldRetry && !w.isDistributionOnChain(pocHeight) {
 			w.submitWeightDistribution(pocHeight)
 		}
 	}
@@ -169,17 +169,26 @@ func (w *CommitWorker) maybeSubmitCommit(pocHeight int64) {
 		"pocHeight", pocHeight, "count", count)
 }
 
-func (w *CommitWorker) submitWeightDistribution(pocHeight int64) {
-	if w.distributedFor[pocHeight] {
-		return
+func (w *CommitWorker) isDistributionOnChain(pocHeight int64) bool {
+	if w.participantAddress == "" {
+		return false
 	}
+	queryClient := w.recorder.NewInferenceQueryClient()
+	resp, err := queryClient.MLNodeWeightDistribution(context.Background(), &types.QueryMLNodeWeightDistributionRequest{
+		PocStageStartBlockHeight: pocHeight,
+		ParticipantAddress:       w.participantAddress,
+	})
+	return err == nil && resp.Found
+}
+
+func (w *CommitWorker) submitWeightDistribution(pocHeight int64) {
+	w.lastDistributionAttempt = time.Now()
 
 	store, err := w.store.GetStore(pocHeight)
 	if err != nil || store == nil {
 		return
 	}
 
-	// 1. Query chain for the canonical committed snapshot
 	if w.participantAddress == "" {
 		logging.Warn("CommitWorker: no participant address, skipping distribution", types.PoC)
 		return
@@ -201,20 +210,17 @@ func (w *CommitWorker) submitWeightDistribution(pocHeight int64) {
 		return
 	}
 
-	// 2. Flush local store to ensure all data is persisted
 	if err := store.Flush(); err != nil {
 		logging.Warn("CommitWorker: flush failed before distribution", types.PoC,
 			"pocHeight", pocHeight, "error", err)
 	}
 
-	// 3. Get local distribution
 	distribution := store.GetNodeDistribution()
 	if len(distribution) == 0 {
 		logging.Debug("CommitWorker: empty distribution", types.PoC, "pocHeight", pocHeight)
 		return
 	}
 
-	// 4. Build weights adjusted to match committed count
 	weights, err := getWeightDistribution(distribution, resp.Count)
 	if err != nil {
 		logging.Error("CommitWorker: failed to build weight distribution", types.PoC,
@@ -233,13 +239,11 @@ func (w *CommitWorker) submitWeightDistribution(pocHeight int64) {
 		return
 	}
 
-	w.distributedFor[pocHeight] = true
 	logging.Info("CommitWorker: distributed weights", types.PoC,
 		"pocHeight", pocHeight, "nodes", len(weights), "count", resp.Count,
 		"distribution", formatWeightDistribution(weights))
 }
 
-// getWeightDistribution builds weight distribution adjusted to sum exactly to targetCount.
 func getWeightDistribution(distribution map[string]uint32, targetCount uint32) ([]*inference.MLNodeWeight, error) {
 	if len(distribution) == 0 {
 		return nil, fmt.Errorf("empty distribution")
@@ -248,7 +252,6 @@ func getWeightDistribution(distribution map[string]uint32, targetCount uint32) (
 		return nil, fmt.Errorf("targetCount is 0")
 	}
 
-	// Calculate local sum
 	var localSum uint32
 	for _, count := range distribution {
 		localSum += count
@@ -258,7 +261,6 @@ func getWeightDistribution(distribution map[string]uint32, targetCount uint32) (
 		return nil, fmt.Errorf("distribution sum is 0")
 	}
 
-	// If sums match, no adjustment needed
 	if localSum == targetCount {
 		weights := make([]*inference.MLNodeWeight, 0, len(distribution))
 		for nodeId, count := range distribution {
@@ -270,53 +272,26 @@ func getWeightDistribution(distribution map[string]uint32, targetCount uint32) (
 		return weights, nil
 	}
 
-	// Proportionally adjust weights to match targetCount
 	logging.Warn("CommitWorker: adjusting distribution proportionally", types.PoC,
 		"localSum", localSum, "targetCount", targetCount)
 
 	ratio := float64(targetCount) / float64(localSum)
 
-	type nodeWeight struct {
-		nodeId    string
-		weight    uint32
-		remainder float64
-	}
-	nodeWeights := make([]nodeWeight, 0, len(distribution))
-	var adjustedSum uint32
-
+	weights := make([]*inference.MLNodeWeight, 0, len(distribution))
+	var scaledSum uint32
 	for nodeId, count := range distribution {
-		exact := float64(count) * ratio
-		rounded := uint32(exact)
-		remainder := exact - float64(rounded)
-		nodeWeights = append(nodeWeights, nodeWeight{nodeId, rounded, remainder})
-		adjustedSum += rounded
+		scaled := uint32(float64(count) * ratio)
+		weights = append(weights, &inference.MLNodeWeight{
+			NodeId: nodeId,
+			Weight: scaled,
+		})
+		scaledSum += scaled
 	}
 
-	// Distribute remaining count to nodes with highest remainders
-	diff := int32(targetCount) - int32(adjustedSum)
-	if diff > 0 {
-		for i := 0; i < int(diff); i++ {
-			maxIdx := 0
-			maxRem := nodeWeights[0].remainder
-			for j := 1; j < len(nodeWeights); j++ {
-				if nodeWeights[j].remainder > maxRem {
-					maxIdx = j
-					maxRem = nodeWeights[j].remainder
-				}
-			}
-			nodeWeights[maxIdx].weight++
-			nodeWeights[maxIdx].remainder = -1 // Mark as used
-		}
-	}
-
-	weights := make([]*inference.MLNodeWeight, 0, len(nodeWeights))
-	for _, nw := range nodeWeights {
-		if nw.weight > 0 {
-			weights = append(weights, &inference.MLNodeWeight{
-				NodeId: nw.nodeId,
-				Weight: nw.weight,
-			})
-		}
+	diff := int(targetCount) - int(scaledSum)
+	for i := 0; diff > 0; i++ {
+		weights[i%len(weights)].Weight++
+		diff--
 	}
 
 	return weights, nil

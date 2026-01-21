@@ -1,6 +1,7 @@
 package poc
 
 import (
+	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -9,6 +10,7 @@ import (
 	"decentralized-api/cosmosclient"
 	"decentralized-api/poc/artifacts"
 
+	"github.com/productscience/inference/api/inference/inference"
 	"github.com/productscience/inference/x/inference/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -209,9 +211,267 @@ func TestCommitWorker_SubmitWeightDistribution_NoCommitFound(t *testing.T) {
 	store := artifacts.NewManagedArtifactStore(tmpDir, 5)
 	defer store.Close()
 
-	// Create store with some data
 	_, err = store.GetOrCreateStore(100)
 	assert.NoError(t, err)
+}
 
-	// This test validates that the distribution logic exists and handles not-found gracefully
+func TestGetWeightDistribution_ExactMatch(t *testing.T) {
+	distribution := map[string]uint32{
+		"node1": 100,
+		"node2": 200,
+		"node3": 300,
+	}
+	targetCount := uint32(600)
+
+	weights, err := getWeightDistribution(distribution, targetCount)
+
+	assert.NoError(t, err)
+	assert.Len(t, weights, 3)
+	assertWeightSum(t, weights, targetCount)
+}
+
+func TestGetWeightDistribution_ScaleUp(t *testing.T) {
+	tests := []struct {
+		name         string
+		distribution map[string]uint32
+		targetCount  uint32
+	}{
+		{
+			name:         "small scale up",
+			distribution: map[string]uint32{"node1": 100, "node2": 200},
+			targetCount:  400,
+		},
+		{
+			name:         "large scale up",
+			distribution: map[string]uint32{"node1": 10, "node2": 20},
+			targetCount:  1000,
+		},
+		{
+			name:         "scale from original error case",
+			distribution: map[string]uint32{"node1": 5232, "node2": 5232},
+			targetCount:  10688,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			weights, err := getWeightDistribution(tt.distribution, tt.targetCount)
+			assert.NoError(t, err)
+			assertWeightSum(t, weights, tt.targetCount)
+		})
+	}
+}
+
+func TestGetWeightDistribution_ScaleDown(t *testing.T) {
+	tests := []struct {
+		name         string
+		distribution map[string]uint32
+		targetCount  uint32
+	}{
+		{
+			name:         "small scale down",
+			distribution: map[string]uint32{"node1": 500, "node2": 500},
+			targetCount:  800,
+		},
+		{
+			name:         "large scale down",
+			distribution: map[string]uint32{"node1": 10000, "node2": 5000},
+			targetCount:  100,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			weights, err := getWeightDistribution(tt.distribution, tt.targetCount)
+			assert.NoError(t, err)
+			assertWeightSum(t, weights, tt.targetCount)
+		})
+	}
+}
+
+func TestGetWeightDistribution_SingleNode(t *testing.T) {
+	distribution := map[string]uint32{"node1": 50}
+	targetCount := uint32(100)
+
+	weights, err := getWeightDistribution(distribution, targetCount)
+
+	assert.NoError(t, err)
+	assert.Len(t, weights, 1)
+	assertWeightSum(t, weights, targetCount)
+}
+
+func TestGetWeightDistribution_ManyNodesSmallWeights(t *testing.T) {
+	distribution := map[string]uint32{}
+	for i := 0; i < 100; i++ {
+		distribution[fmt.Sprintf("node%d", i)] = 1
+	}
+	targetCount := uint32(500)
+
+	weights, err := getWeightDistribution(distribution, targetCount)
+
+	assert.NoError(t, err)
+	assertWeightSum(t, weights, targetCount)
+}
+
+func TestGetWeightDistribution_LargeDiffRoundRobin(t *testing.T) {
+	distribution := map[string]uint32{"node1": 1, "node2": 1}
+	targetCount := uint32(1000)
+
+	weights, err := getWeightDistribution(distribution, targetCount)
+
+	assert.NoError(t, err)
+	assert.Len(t, weights, 2)
+	assertWeightSum(t, weights, targetCount)
+}
+
+func TestGetWeightDistribution_Errors(t *testing.T) {
+	tests := []struct {
+		name         string
+		distribution map[string]uint32
+		targetCount  uint32
+		expectError  string
+	}{
+		{
+			name:         "empty distribution",
+			distribution: map[string]uint32{},
+			targetCount:  100,
+			expectError:  "empty distribution",
+		},
+		{
+			name:         "zero target",
+			distribution: map[string]uint32{"node1": 100},
+			targetCount:  0,
+			expectError:  "targetCount is 0",
+		},
+		{
+			name:         "zero sum distribution",
+			distribution: map[string]uint32{"node1": 0, "node2": 0},
+			targetCount:  100,
+			expectError:  "distribution sum is 0",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := getWeightDistribution(tt.distribution, tt.targetCount)
+			assert.Error(t, err)
+			assert.Contains(t, err.Error(), tt.expectError)
+		})
+	}
+}
+
+func TestGetWeightDistribution_AlwaysExactSum(t *testing.T) {
+	testCases := []struct {
+		localSum    uint32
+		targetCount uint32
+		nodes       int
+	}{
+		{100, 200, 2},
+		{200, 100, 2},
+		{333, 500, 3},
+		{500, 333, 3},
+		{1, 1000, 5},
+		{10464, 10688, 2},
+		{10688, 10464, 2},
+		{7, 1000, 7},
+		{1000, 7, 7},
+	}
+
+	for _, tc := range testCases {
+		t.Run(fmt.Sprintf("local%d_target%d_nodes%d", tc.localSum, tc.targetCount, tc.nodes), func(t *testing.T) {
+			distribution := make(map[string]uint32)
+			perNode := tc.localSum / uint32(tc.nodes)
+			remainder := tc.localSum % uint32(tc.nodes)
+			for i := 0; i < tc.nodes; i++ {
+				w := perNode
+				if uint32(i) < remainder {
+					w++
+				}
+				distribution[fmt.Sprintf("node%d", i)] = w
+			}
+
+			weights, err := getWeightDistribution(distribution, tc.targetCount)
+			assert.NoError(t, err)
+			assertWeightSum(t, weights, tc.targetCount)
+		})
+	}
+}
+
+func assertWeightSum(t *testing.T, weights []*inference.MLNodeWeight, expected uint32) {
+	t.Helper()
+	var sum uint32
+	for _, w := range weights {
+		sum += w.Weight
+	}
+	assert.Equal(t, expected, sum, "weight sum should equal target exactly")
+}
+
+func TestCommitWorker_HeightChangeResetsState(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "commit_worker_test")
+	assert.NoError(t, err)
+	defer os.RemoveAll(tmpDir)
+
+	store := artifacts.NewManagedArtifactStore(tmpDir, 5)
+	defer store.Close()
+
+	mockRecorder := &cosmosclient.MockCosmosMessageClient{}
+
+	worker := &CommitWorker{
+		store:              store,
+		recorder:           mockRecorder,
+		participantAddress: "test_addr",
+		lastCommitted:      make(map[int64]commitState),
+		currentPocHeight:   100,
+	}
+
+	worker.lastCommitted[100] = commitState{count: 50, rootHash: []byte("hash")}
+	worker.lastDistributionAttempt = time.Now().Add(-time.Hour)
+
+	epochState := createCommitWorkerTestEpochState(types.PoCGeneratePhase, 210, 200)
+	epochState.PocV2Enabled = true
+
+	worker.mu.Lock()
+	pocHeight := GetCurrentPocStageHeight(epochState)
+	if pocHeight > 0 && worker.currentPocHeight != pocHeight {
+		worker.currentPocHeight = pocHeight
+		worker.lastDistributionAttempt = time.Time{}
+		worker.lastCommitted = make(map[int64]commitState)
+	}
+	worker.mu.Unlock()
+
+	assert.Equal(t, int64(200), worker.currentPocHeight)
+	assert.True(t, worker.lastDistributionAttempt.IsZero())
+	assert.Empty(t, worker.lastCommitted)
+}
+
+func TestCommitWorker_RetryLogic(t *testing.T) {
+	tests := []struct {
+		name                    string
+		lastDistributionAttempt time.Time
+		expectRetry             bool
+	}{
+		{
+			name:                    "first attempt triggers immediately",
+			lastDistributionAttempt: time.Time{},
+			expectRetry:             true,
+		},
+		{
+			name:                    "retry after interval",
+			lastDistributionAttempt: time.Now().Add(-35 * time.Second),
+			expectRetry:             true,
+		},
+		{
+			name:                    "no retry within interval",
+			lastDistributionAttempt: time.Now().Add(-10 * time.Second),
+			expectRetry:             false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			shouldRetry := tt.lastDistributionAttempt.IsZero() ||
+				time.Since(tt.lastDistributionAttempt) > distributionRetryInterval
+			assert.Equal(t, tt.expectRetry, shouldRetry)
+		})
+	}
 }
