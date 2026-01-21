@@ -120,13 +120,13 @@ func (v *OffChainValidator) ValidateAll(pocStageStartBlockHeight int64) {
 		sampleSize = 200
 	}
 
-	// Get available ML nodes for validation
-	nodes, err := v.nodeBroker.GetNodes()
+	// Get available ML nodes for validation with retry
+	nodes, err := v.getNodesWithRetry(pocStageStartBlockHeight)
 	if err != nil {
-		logging.Error("OffChainValidator: failed to get nodes", types.PoC, "error", err)
+		logging.Error("OffChainValidator: failed to get nodes for validation", types.PoC,
+			"pocStageStartBlockHeight", pocStageStartBlockHeight, "error", err)
 		return
 	}
-	nodes = filterNodesForValidation(nodes)
 	if len(nodes) == 0 {
 		logging.Error("OffChainValidator: no nodes available", types.PoC)
 		return
@@ -533,6 +533,65 @@ func (v *OffChainValidator) stopGenerationOnAllNodes(nodes []broker.NodeResponse
 
 	logging.Info("OffChainValidator: stop generation complete", types.PoC,
 		"success", successCount, "failed", failCount)
+}
+
+// getNodesWithRetry gets nodes for PoC validation with retry logic.
+// Waits for nodes to become available with up to 30 retries.
+func (v *OffChainValidator) getNodesWithRetry(pocStageStartBlockHeight int64) ([]broker.NodeResponse, error) {
+	return v.getNodesWithRetryConfig(
+		pocStageStartBlockHeight,
+		POC_VALIDATE_GET_NODES_RETRIES,
+		POC_VALIDATE_GET_NODES_RETRY_DELAY,
+	)
+}
+
+// getNodesWithRetryConfig allows tests to supply custom retry settings.
+func (v *OffChainValidator) getNodesWithRetryConfig(
+	pocStageStartBlockHeight int64,
+	retries int,
+	delay time.Duration,
+) ([]broker.NodeResponse, error) {
+	if retries <= 0 {
+		retries = 1
+	}
+
+	for attempt := 0; attempt < retries; attempt++ {
+		nodes, err := v.nodeBroker.GetNodes()
+		if err != nil {
+			logging.Error("OffChainValidator: failed to get nodes", types.PoC,
+				"pocStageStartBlockHeight", pocStageStartBlockHeight,
+				"error", err,
+				"attempt", attempt)
+			return nil, err
+		}
+
+		logging.Info("OffChainValidator: got nodes", types.PoC,
+			"pocStageStartBlockHeight", pocStageStartBlockHeight,
+			"numNodes", len(nodes),
+			"attempt", attempt)
+
+		nodes = filterNodesForValidation(nodes)
+		logging.Info("OffChainValidator: filtered nodes for validation", types.PoC,
+			"numNodes", len(nodes),
+			"attempt", attempt)
+
+		if len(nodes) != 0 {
+			logging.Info("OffChainValidator: returning filtered nodes", types.PoC,
+				"numNodes", len(nodes),
+				"attempt", attempt)
+			return nodes, nil
+		}
+
+		if attempt == retries-1 {
+			break
+		}
+		time.Sleep(delay)
+	}
+
+	logging.Error("OffChainValidator: failed to get nodes after all retry attempts", types.PoC,
+		"pocStageStartBlockHeight", pocStageStartBlockHeight,
+		"numAttempts", retries)
+	return nil, errors.New("no nodes available for PoC validation after retries")
 }
 
 // filterNodesForValidation returns nodes available for PoC validation.
