@@ -32,11 +32,11 @@ type NatsServerConfig struct {
 }
 
 type TxBatchingConfig struct {
-	Disabled            bool `koanf:"disabled" json:"disabled"`
-	FlushSize           int  `koanf:"flush_size" json:"flush_size"`
-	FlushTimeoutSeconds int  `koanf:"flush_timeout_seconds" json:"flush_timeout_seconds"`
-	// V2 validation aggregation timeout (default: 30s)
-	ValidationV2FlushTimeoutSeconds int `koanf:"validation_v2_flush_timeout_seconds" json:"validation_v2_flush_timeout_seconds"`
+	Disabled                        bool `koanf:"disabled" json:"disabled"`
+	FlushSize                       int  `koanf:"flush_size" json:"flush_size"`
+	FlushTimeoutSeconds             int  `koanf:"flush_timeout_seconds" json:"flush_timeout_seconds"`
+	ValidationV2FlushSize           int  `koanf:"validation_v2_flush_size" json:"validation_v2_flush_size"`
+	ValidationV2FlushTimeoutSeconds int  `koanf:"validation_v2_flush_timeout_seconds" json:"validation_v2_flush_timeout_seconds"`
 }
 
 type UpgradePlan struct {

@@ -16,14 +16,15 @@ func TestSubmitPocBatchV1_BlockedParticipant(t *testing.T) {
 	k, ms, ctx := setupMsgServer(t)
 	sdkCtx := sdk.UnwrapSDKContext(ctx).WithBlockHeight(100)
 
-	params := k.GetParams(sdkCtx)
+	params, err := k.GetParams(sdkCtx)
+	require.NoError(t, err)
 	params.ParticipantAccessParams = &types.ParticipantAccessParams{
 		BlockedParticipantAddresses: []string{testutil.Executor},
 	}
 	require.NoError(t, k.SetParams(sdkCtx, params))
 
 	// Call V1 handler directly via msg server (when V1 is enabled, SubmitPocBatch routes to submitPocBatchV1)
-	_, err := ms.SubmitPocBatch(sdkCtx, &types.MsgSubmitPocBatch{
+	_, err = ms.SubmitPocBatch(sdkCtx, &types.MsgSubmitPocBatch{
 		Creator:                  testutil.Executor,
 		PocStageStartBlockHeight: 1,
 		BatchId:                  "batch",
@@ -72,13 +73,14 @@ func TestSubmitPocValidationV1_BlockedValidator(t *testing.T) {
 	k, ms, ctx := setupMsgServer(t)
 	sdkCtx := sdk.UnwrapSDKContext(ctx).WithBlockHeight(100)
 
-	params := k.GetParams(sdkCtx)
+	params, err := k.GetParams(sdkCtx)
+	require.NoError(t, err)
 	params.ParticipantAccessParams = &types.ParticipantAccessParams{
 		BlockedParticipantAddresses: []string{testutil.Creator}, // validator in this msg
 	}
 	require.NoError(t, k.SetParams(sdkCtx, params))
 
-	_, err := ms.SubmitPocValidation(sdkCtx, &types.MsgSubmitPocValidation{
+	_, err = ms.SubmitPocValidation(sdkCtx, &types.MsgSubmitPocValidation{
 		Creator:                  testutil.Creator,
 		ParticipantAddress:       testutil.Executor,
 		PocStageStartBlockHeight: 1,
@@ -97,7 +99,8 @@ func TestSubmitPocBatchV1_StoresBatch(t *testing.T) {
 	sdkCtx := sdk.UnwrapSDKContext(ctx).WithBlockHeight(100)
 
 	// Setup epoch params
-	params := k.GetParams(sdkCtx)
+	params, err := k.GetParams(sdkCtx)
+	require.NoError(t, err)
 	params.EpochParams = &types.EpochParams{
 		PocStageDuration:      50,
 		PocExchangeDuration:   20,
@@ -165,7 +168,8 @@ func TestSubmitPocBatchV1_ConfirmationPoC(t *testing.T) {
 	sdkCtx := sdk.UnwrapSDKContext(ctx).WithBlockHeight(200)
 
 	// Setup epoch params
-	params := k.GetParams(sdkCtx)
+	params, err := k.GetParams(sdkCtx)
+	require.NoError(t, err)
 	params.EpochParams = &types.EpochParams{
 		PocStageDuration:      50,
 		PocExchangeDuration:   20,
@@ -209,7 +213,8 @@ func TestSubmitPocValidationV1_WindowValidation(t *testing.T) {
 	k, ctx, _ := keepertest.InferenceKeeperReturningMocks(t)
 
 	// Setup epoch params
-	params := k.GetParams(ctx)
+	params, err := k.GetParams(ctx)
+	require.NoError(t, err)
 	params.EpochParams = &types.EpochParams{
 		PocStageDuration:      50,
 		PocExchangeDuration:   20,

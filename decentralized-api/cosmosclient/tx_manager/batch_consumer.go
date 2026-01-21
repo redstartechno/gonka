@@ -26,6 +26,7 @@ const (
 type BatchConfig struct {
 	FlushSize                int
 	FlushTimeout             time.Duration
+	ValidationV2FlushSize    int
 	ValidationV2FlushTimeout time.Duration
 }
 
@@ -78,7 +79,7 @@ func NewBatchConsumer(
 		config:             config,
 		startBatch:         make([]pendingMsg, 0, config.FlushSize),
 		finishBatch:        make([]pendingMsg, 0, config.FlushSize),
-		validationV2Batch:  make([]pendingMsg, 0, config.FlushSize),
+		validationV2Batch:  make([]pendingMsg, 0, config.ValidationV2FlushSize),
 		pocBatchBatch:      make([]pendingMsg, 0, config.FlushSize),
 		pocValidationBatch: make([]pendingMsg, 0, config.FlushSize),
 	}
@@ -185,7 +186,7 @@ func (c *BatchConsumer) handleValidationV2Msg(msg *nats.Msg) {
 		c.validationV2CreatedAt = time.Now()
 	}
 	c.validationV2Batch = append(c.validationV2Batch, pendingMsg{msg: sdkMsg, natsMsg: msg})
-	shouldFlush = len(c.validationV2Batch) >= c.config.FlushSize
+	shouldFlush = len(c.validationV2Batch) >= c.config.ValidationV2FlushSize
 	c.validationV2Mu.Unlock()
 
 	if shouldFlush {
@@ -374,7 +375,7 @@ func (c *BatchConsumer) flushValidationV2() {
 		c.validationV2Mu.Unlock()
 		return
 	}
-	c.validationV2Batch = make([]pendingMsg, 0, c.config.FlushSize)
+	c.validationV2Batch = make([]pendingMsg, 0, c.config.ValidationV2FlushSize)
 	c.validationV2CreatedAt = time.Time{} // reset timer
 	c.validationV2Mu.Unlock()
 

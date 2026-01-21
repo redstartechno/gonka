@@ -22,6 +22,21 @@ func (k msgServer) submitPocValidationV1(goCtx context.Context, msg *types.MsgSu
 	currentBlockHeight := ctx.BlockHeight()
 	startBlockHeight := msg.PocStageStartBlockHeight
 
+	exists, err := k.HasPoCValidation(ctx, startBlockHeight, msg.ParticipantAddress, msg.Creator)
+	if err != nil {
+		k.LogError(PocFailureTag+"[SubmitPocValidation] Error checking existing validation", types.PoC,
+			"participant", msg.ParticipantAddress,
+			"validatorParticipant", msg.Creator,
+			"error", err)
+		return nil, sdkerrors.Wrap(types.ErrIllegalState, "error checking existing validation")
+	}
+	if exists {
+		k.LogWarn(PocFailureTag+"[SubmitPocValidation] Duplicate validation rejected", types.PoC,
+			"participant", msg.ParticipantAddress,
+			"validatorParticipant", msg.Creator)
+		return nil, sdkerrors.Wrap(types.ErrPocValidationAlreadyExists, "PoC validation already exists for this participant from this validator")
+	}
+
 	// Check for active confirmation PoC event first
 	activeEvent, isActive, err := k.Keeper.GetActiveConfirmationPoCEvent(ctx)
 	if err != nil {
@@ -46,7 +61,11 @@ func (k msgServer) submitPocValidationV1(goCtx context.Context, msg *types.MsgSu
 		}
 
 		// Verify we're in the validation window
-		epochParams := k.GetParams(ctx).EpochParams
+		confirmParams, err := k.GetParams(ctx)
+		if err != nil {
+			return nil, err
+		}
+		epochParams := confirmParams.EpochParams
 		if !activeEvent.IsInValidationWindow(currentBlockHeight, epochParams) {
 			k.LogError(PocFailureTag+"[SubmitPocValidation] Confirmation PoC: outside validation window", types.PoC,
 				"participant", msg.ParticipantAddress,
@@ -70,7 +89,11 @@ func (k msgServer) submitPocValidationV1(goCtx context.Context, msg *types.MsgSu
 	}
 
 	// Regular PoC logic
-	epochParams := k.Keeper.GetParams(ctx).EpochParams
+	regularParams, err := k.Keeper.GetParams(ctx)
+	if err != nil {
+		return nil, err
+	}
+	epochParams := regularParams.EpochParams
 	upcomingEpoch, found := k.Keeper.GetUpcomingEpoch(ctx)
 	if !found {
 		k.LogError(PocFailureTag+"[SubmitPocValidation] Failed to get upcoming epoch", types.PoC,

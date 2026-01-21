@@ -408,7 +408,11 @@ func (am AppModule) ComputeNewWeightsV1(ctx context.Context, upcomingEpoch types
 	}
 
 	// STEP 4: Create WeightCalculatorV1 and calculate PoC mining participants (excluding inference-serving nodes)
-	params := am.keeper.GetParams(ctx)
+	params, err := am.keeper.GetParams(ctx)
+	if err != nil {
+		am.LogError("ComputeNewWeightsV1: Error getting params", types.PoC, "error", err.Error())
+		return nil
+	}
 	weightScaleFactor := params.PocParams.GetWeightScaleFactorDec()
 	calculator := NewWeightCalculatorV1(
 		currentValidatorWeights,

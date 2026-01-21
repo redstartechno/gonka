@@ -13,7 +13,10 @@ import (
 // PoCV2StoreCommit handles submission of off-chain artifact store commits.
 func (k msgServer) PoCV2StoreCommit(goCtx context.Context, msg *types.MsgPoCV2StoreCommit) (*types.MsgPoCV2StoreCommitResponse, error) {
 	// V2 guard: reject when V1 mode is active
-	params := k.GetParams(goCtx)
+	params, err := k.GetParams(goCtx)
+	if err != nil {
+		return nil, err
+	}
 	if !params.PocParams.PocV2Enabled {
 		return nil, sdkerrors.Wrap(types.ErrNotSupported, "V2 disabled when poc_v2_enabled=false")
 	}
@@ -42,12 +45,20 @@ func (k msgServer) PoCV2StoreCommit(goCtx context.Context, msg *types.MsgPoCV2St
 			return nil, sdkerrors.Wrap(types.ErrPocWrongStartBlockHeight,
 				fmt.Sprintf("confirmation PoC: start block height %d doesn't match event trigger %d", startBlockHeight, activeEvent.TriggerHeight))
 		}
-		epochParams := k.GetParams(ctx).EpochParams
+		confirmParams, err := k.GetParams(ctx)
+		if err != nil {
+			return nil, err
+		}
+		epochParams := confirmParams.EpochParams
 		if !activeEvent.IsInBatchSubmissionWindow(currentBlockHeight, epochParams) {
 			return nil, sdkerrors.Wrap(types.ErrPocTooLate, "confirmation PoC batch submission window closed")
 		}
 	} else {
-		epochParams := k.Keeper.GetParams(goCtx).EpochParams
+		regularParams, err := k.Keeper.GetParams(goCtx)
+		if err != nil {
+			return nil, err
+		}
+		epochParams := regularParams.EpochParams
 		upcomingEpoch, found := k.Keeper.GetUpcomingEpoch(ctx)
 		if !found {
 			return nil, sdkerrors.Wrap(types.ErrUpcomingEpochNotFound, "failed to get upcoming epoch")
@@ -103,7 +114,10 @@ func (k msgServer) PoCV2StoreCommit(goCtx context.Context, msg *types.MsgPoCV2St
 // MLNodeWeightDistribution handles submission of per-node weight distribution.
 func (k msgServer) MLNodeWeightDistribution(goCtx context.Context, msg *types.MsgMLNodeWeightDistribution) (*types.MsgMLNodeWeightDistributionResponse, error) {
 	// V2 guard: reject when V1 mode is active
-	params := k.GetParams(goCtx)
+	params, err := k.GetParams(goCtx)
+	if err != nil {
+		return nil, err
+	}
 	if !params.PocParams.PocV2Enabled {
 		return nil, sdkerrors.Wrap(types.ErrNotSupported, "V2 disabled when poc_v2_enabled=false")
 	}
@@ -128,13 +142,21 @@ func (k msgServer) MLNodeWeightDistribution(goCtx context.Context, msg *types.Ms
 			return nil, sdkerrors.Wrap(types.ErrPocWrongStartBlockHeight,
 				fmt.Sprintf("confirmation PoC: start block height %d doesn't match event trigger %d", startBlockHeight, activeEvent.TriggerHeight))
 		}
-		epochParams := k.GetParams(ctx).EpochParams
+		confirmParams, err := k.GetParams(ctx)
+		if err != nil {
+			return nil, err
+		}
+		epochParams := confirmParams.EpochParams
 		validationEnd := activeEvent.GetValidationEnd(epochParams)
 		if currentBlockHeight > validationEnd {
 			return nil, sdkerrors.Wrap(types.ErrPocTooLate, "confirmation PoC validation window closed")
 		}
 	} else {
-		epochParams := k.Keeper.GetParams(goCtx).EpochParams
+		regularParams, err := k.Keeper.GetParams(goCtx)
+		if err != nil {
+			return nil, err
+		}
+		epochParams := regularParams.EpochParams
 		upcomingEpoch, found := k.Keeper.GetUpcomingEpoch(ctx)
 		if !found {
 			return nil, sdkerrors.Wrap(types.ErrUpcomingEpochNotFound, "failed to get upcoming epoch")

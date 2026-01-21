@@ -20,7 +20,8 @@ func TestUpdateConfirmationWeightsV1_BasicCalculation(t *testing.T) {
 	k, ctx, _ := keepertest.InferenceKeeperReturningMocks(t)
 
 	// Setup params with weight scale factor
-	params := k.GetParams(ctx)
+	params, err := k.GetParams(ctx)
+	require.NoError(t, err)
 	params.PocParams = &types.PocParams{
 		WeightScaleFactor: types.DecimalFromFloat(1.0),
 	}
@@ -95,7 +96,8 @@ func TestUpdateConfirmationWeightsV1_NoBatches(t *testing.T) {
 	k, ctx, _ := keepertest.InferenceKeeperReturningMocks(t)
 
 	// Setup params with weight scale factor
-	params := k.GetParams(ctx)
+	params, err := k.GetParams(ctx)
+	require.NoError(t, err)
 	params.PocParams = &types.PocParams{
 		WeightScaleFactor: types.DecimalFromFloat(1.0),
 	}
@@ -132,7 +134,8 @@ func TestUpdateConfirmationWeightsV1_MultipleParticipants(t *testing.T) {
 	k, ctx, _ := keepertest.InferenceKeeperReturningMocks(t)
 
 	// Setup params with weight scale factor
-	params := k.GetParams(ctx)
+	params, err := k.GetParams(ctx)
+	require.NoError(t, err)
 	params.PocParams = &types.PocParams{
 		WeightScaleFactor: types.DecimalFromFloat(1.0),
 	}
@@ -244,7 +247,8 @@ func TestUpdateConfirmationWeightsV1_FraudRejection(t *testing.T) {
 	k, ctx, _ := keepertest.InferenceKeeperReturningMocks(t)
 
 	// Setup params with weight scale factor
-	params := k.GetParams(ctx)
+	params, err := k.GetParams(ctx)
+	require.NoError(t, err)
 	params.PocParams = &types.PocParams{
 		WeightScaleFactor: types.DecimalFromFloat(1.0),
 	}

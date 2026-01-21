@@ -176,6 +176,7 @@ func NewInferenceCosmosClient(ctx context.Context, addressPrefix string, config 
 		batchConfig := tx_manager.BatchConfig{
 			FlushSize:                batchingCfg.FlushSize,
 			FlushTimeout:             time.Duration(batchingCfg.FlushTimeoutSeconds) * time.Second,
+			ValidationV2FlushSize:    batchingCfg.ValidationV2FlushSize,
 			ValidationV2FlushTimeout: time.Duration(batchingCfg.ValidationV2FlushTimeoutSeconds) * time.Second,
 		}
 		batchConsumer := tx_manager.NewBatchConsumer(

@@ -454,7 +454,8 @@ func TestComputeNewWeightsV1_AllowlistExclusion(t *testing.T) {
 	k.SetRandomSeed(ctx, types.RandomSeed{Participant: participantB, EpochIndex: 1, Signature: "sigB"})
 
 	// Enable allowlist and add only participantA
-	params := k.GetParams(ctx)
+	params, err := k.GetParams(ctx)
+	require.NoError(t, err)
 	params.ParticipantAccessParams.UseParticipantAllowlist = true
 	require.NoError(t, k.SetParams(ctx, params))
 
@@ -481,7 +482,8 @@ func TestWeightCalculatorV1_UniqueNonces(t *testing.T) {
 	k, ctx, _ := keepertest.InferenceKeeperReturningMocks(t)
 
 	// Setup params with weight scale factor
-	params := k.GetParams(ctx)
+	params, err := k.GetParams(ctx)
+	require.NoError(t, err)
 	params.PocParams = &types.PocParams{
 		WeightScaleFactor: types.DecimalFromFloat(1.0),
 	}

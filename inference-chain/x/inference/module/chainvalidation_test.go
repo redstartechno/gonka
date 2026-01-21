@@ -703,7 +703,8 @@ func TestComputeNewWeights_AllowlistExcludesParticipant(t *testing.T) {
 	k.SetRandomSeed(ctx, types.RandomSeed{Participant: participantB, EpochIndex: 1, Signature: "sigB"})
 
 	// Enable allowlist and add only participantA
-	params, _ := k.GetParams(ctx)
+	params, err := k.GetParams(ctx)
+	require.NoError(t, err)
 	params.ParticipantAccessParams.UseParticipantAllowlist = true
 	require.NoError(t, k.SetParams(ctx, params))
 

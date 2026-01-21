@@ -302,8 +302,9 @@ func TestBatchConsumer_ValidationV2Batching(t *testing.T) {
 	mockMgr := &mockTxManager{}
 
 	config := BatchConfig{
-		FlushSize:    3,
-		FlushTimeout: 10 * time.Second,
+		FlushSize:             3,
+		FlushTimeout:          10 * time.Second,
+		ValidationV2FlushSize: 10,
 	}
 
 	consumer := NewBatchConsumer(js, cdc, mockMgr, config)
@@ -341,8 +342,9 @@ func TestBatchConsumer_AllQueuesIndependent(t *testing.T) {
 	mockMgr := &mockTxManager{}
 
 	config := BatchConfig{
-		FlushSize:    2,
-		FlushTimeout: 10 * time.Second,
+		FlushSize:             2,
+		FlushTimeout:          10 * time.Second,
+		ValidationV2FlushSize: 10,
 	}
 
 	consumer := NewBatchConsumer(js, cdc, mockMgr, config)

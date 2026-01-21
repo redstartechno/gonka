@@ -148,7 +148,9 @@ func (cm *ConfigManager) GetTxBatchingConfig() TxBatchingConfig {
 	if cfg.FlushTimeoutSeconds == 0 {
 		cfg.FlushTimeoutSeconds = 5
 	}
-	// V2 validation timeout default: 30 seconds
+	if cfg.ValidationV2FlushSize == 0 {
+		cfg.ValidationV2FlushSize = 10
+	}
 	if cfg.ValidationV2FlushTimeoutSeconds == 0 {
 		cfg.ValidationV2FlushTimeoutSeconds = 30
 	}

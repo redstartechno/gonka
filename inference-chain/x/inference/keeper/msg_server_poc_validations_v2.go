@@ -12,7 +12,10 @@ import (
 // SubmitPocValidationsV2 handles batch submission of PoC v2 validations.
 func (k msgServer) SubmitPocValidationsV2(goCtx context.Context, msg *types.MsgSubmitPocValidationsV2) (*types.MsgSubmitPocValidationsV2Response, error) {
 	// V2 guard: reject when V1 mode is active
-	params := k.GetParams(goCtx)
+	params, err := k.GetParams(goCtx)
+	if err != nil {
+		return nil, err
+	}
 	if !params.PocParams.PocV2Enabled {
 		return nil, sdkerrors.Wrap(types.ErrNotSupported, "V2 disabled when poc_v2_enabled=false")
 	}
@@ -50,7 +53,11 @@ func (k msgServer) SubmitPocValidationsV2(goCtx context.Context, msg *types.MsgS
 		}
 
 		// Verify we're in the validation window
-		epochParams := k.GetParams(ctx).EpochParams
+		confirmParams, err := k.GetParams(ctx)
+		if err != nil {
+			return nil, err
+		}
+		epochParams := confirmParams.EpochParams
 		if !activeEvent.IsInValidationWindow(currentBlockHeight, epochParams) {
 			k.LogError(PocFailureTag+"[SubmitPocValidationsV2] Confirmation PoC: outside validation window", types.PoC,
 				"validatorParticipant", msg.Creator,
@@ -61,7 +68,11 @@ func (k msgServer) SubmitPocValidationsV2(goCtx context.Context, msg *types.MsgS
 		}
 	} else {
 		// Regular PoC logic
-		epochParams := k.Keeper.GetParams(ctx).EpochParams
+		regularParams, err := k.Keeper.GetParams(ctx)
+		if err != nil {
+			return nil, err
+		}
+		epochParams := regularParams.EpochParams
 		upcomingEpoch, found := k.Keeper.GetUpcomingEpoch(ctx)
 		if !found {
 			k.LogError(PocFailureTag+"[SubmitPocValidationsV2] Failed to get upcoming epoch", types.PoC,
