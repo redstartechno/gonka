@@ -154,6 +154,9 @@ func (cm *ConfigManager) GetTxBatchingConfig() TxBatchingConfig {
 	if cfg.ValidationV2FlushTimeoutSeconds == 0 {
 		cfg.ValidationV2FlushTimeoutSeconds = 30
 	}
+	if cfg.PocCommitIntervalSeconds == 0 {
+		cfg.PocCommitIntervalSeconds = 5
+	}
 	return cfg
 }
 

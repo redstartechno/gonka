@@ -242,6 +242,7 @@ data class DockerGroup(
             put("DAPI_TX_BATCHING__FLUSH_TIMEOUT_SECONDS", "1")
             put("DAPI_TX_BATCHING__VALIDATION_V2_FLUSH_SIZE", "1")
             put("DAPI_TX_BATCHING__VALIDATION_V2_FLUSH_TIMEOUT_SECONDS", "1")
+            put("DAPI_TX_BATCHING__POC_COMMIT_INTERVAL_SECONDS", "1")
             put("NODE_CONFIG_PATH", "/root/node_config.json")
             put("NODE_CONFIG", nodeConfigFile)
             put("PUBLIC_URL", publicUrl)
