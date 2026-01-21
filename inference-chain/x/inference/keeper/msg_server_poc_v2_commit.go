@@ -75,7 +75,10 @@ func (k msgServer) PoCV2StoreCommit(goCtx context.Context, msg *types.MsgPoCV2St
 	}
 
 	// Check existing commit for rate limit and count increase
-	addr := sdk.MustAccAddressFromBech32(msg.Creator)
+	addr, err := sdk.AccAddressFromBech32(msg.Creator)
+	if err != nil {
+		return nil, sdkerrors.Wrap(types.ErrInvalidAddress, fmt.Sprintf("invalid creator address: %v", err))
+	}
 	pk := collections.Join(startBlockHeight, addr)
 	existing, err := k.PoCV2StoreCommits.Get(ctx, pk)
 	if err == nil {
@@ -175,7 +178,10 @@ func (k msgServer) MLNodeWeightDistribution(goCtx context.Context, msg *types.Ms
 	}
 
 	// Validate weight sum matches committed count
-	addr := sdk.MustAccAddressFromBech32(msg.Creator)
+	addr, err := sdk.AccAddressFromBech32(msg.Creator)
+	if err != nil {
+		return nil, sdkerrors.Wrap(types.ErrInvalidAddress, fmt.Sprintf("invalid creator address: %v", err))
+	}
 	pk := collections.Join(startBlockHeight, addr)
 	commit, err := k.PoCV2StoreCommits.Get(ctx, pk)
 	if err != nil {

@@ -167,8 +167,8 @@ func (wc *WeightCalculator) getParticipantValidations(participantAddress string)
 
 // pocValidated checks if the participant passed validation by majority vote.
 // Uses validated_weight semantics:
-// - validated_weight == -1 -> invalid vote
-// - validated_weight > 0 -> valid vote
+// - validated_weight > 0 -> valid vote (passed validation)
+// - validated_weight <= 0 -> invalid vote (fraud/failure detected)
 func (wc *WeightCalculator) pocValidated(vals []types.PoCValidationV2, participantAddress string) bool {
 	totalWeight := calculateTotalWeight(wc.CurrentValidatorWeights)
 	halfWeight := int64(totalWeight / 2)
@@ -271,12 +271,12 @@ func calculateValidationOutcome(currentValidatorsSet map[string]int64, validatio
 	invalidWeight := int64(0)
 	for _, v := range validations {
 		if weight, ok := currentValidatorsSet[v.ValidatorParticipantAddress]; ok {
-			if v.ValidatedWeight == -1 {
-				invalidWeight += weight
-			} else if v.ValidatedWeight > 0 {
+			if v.ValidatedWeight > 0 {
 				validWeight += weight
+			} else {
+				// validated_weight <= 0 is treated as invalid (fraud/failure detected)
+				invalidWeight += weight
 			}
-			// validated_weight == 0 is treated as abstention (no weight added)
 		}
 	}
 	return validationOutcome{

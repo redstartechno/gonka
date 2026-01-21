@@ -478,18 +478,19 @@ func sampleLeafIndices(validatorPubKey string, blockHash string, blockHeight int
 }
 
 // getBlockHash returns the block hash for sampling randomness.
+// Uses fresh validation-start block (not PoC start block) to prevent adaptive cheating.
 func (v *OffChainValidator) getBlockHash(epochState *chainphase.EpochState, pocStageStartBlockHeight int64) string {
-	// Use current block hash if available
+	// Use current block hash if available (this is the fresh hash at validation time)
 	if epochState.CurrentBlock.Hash != "" {
 		return epochState.CurrentBlock.Hash
 	}
 
-	// For confirmation PoC, use event hash
+	// For confirmation PoC, use event hash (already fresh at confirmation trigger)
 	if epochState.CurrentPhase == types.InferencePhase && epochState.ActiveConfirmationPoCEvent != nil {
 		return epochState.ActiveConfirmationPoCEvent.PocSeedBlockHash
 	}
 
-	// Query block hash from chain
+	// Query block hash from chain - use current validation height (fresh), not PoC start height
 	if v.chainNodeUrl == "" {
 		logging.Warn("OffChainValidator: no chain node URL, using empty hash", types.PoC)
 		return ""
@@ -501,11 +502,23 @@ func (v *OffChainValidator) getBlockHash(epochState *chainphase.EpochState, pocS
 		return ""
 	}
 
-	block, err := client.Block(context.Background(), &pocStageStartBlockHeight)
-	if err != nil {
-		logging.Error("OffChainValidator: failed to get block", types.PoC, "error", err)
+	// Use current block height for fresh randomness (prevents validators from predicting sample)
+	freshBlockHeight := epochState.CurrentBlock.Height
+	if freshBlockHeight <= 0 {
+		logging.Error("OffChainValidator: current block height not available", types.PoC,
+			"currentBlockHeight", freshBlockHeight, "pocStageStartBlockHeight", pocStageStartBlockHeight)
 		return ""
 	}
+
+	block, err := client.Block(context.Background(), &freshBlockHeight)
+	if err != nil {
+		logging.Error("OffChainValidator: failed to get block", types.PoC,
+			"height", freshBlockHeight, "error", err)
+		return ""
+	}
+
+	logging.Info("OffChainValidator: using fresh block hash for validation", types.PoC,
+		"freshBlockHeight", freshBlockHeight, "pocStageStartBlockHeight", pocStageStartBlockHeight)
 
 	return block.Block.Hash().String()
 }

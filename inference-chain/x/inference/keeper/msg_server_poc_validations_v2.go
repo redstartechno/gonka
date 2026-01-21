@@ -105,8 +105,26 @@ func (k msgServer) SubmitPocValidationsV2(goCtx context.Context, msg *types.MsgS
 		}
 	}
 
-	// Process each validation
+	// Process each validation - skip failures, don't fail entire batch
+	storedCount := 0
 	for _, validation := range msg.Validations {
+		// Check for duplicate submission (prevents vote flipping)
+		exists, err := k.HasPocValidationV2(ctx, startBlockHeight, validation.ParticipantAddress, msg.Creator)
+		if err != nil {
+			k.LogWarn("[SubmitPocValidationsV2] Failed to check existing validation, skipping", types.PoC,
+				"validator", msg.Creator,
+				"participant", validation.ParticipantAddress,
+				"error", err)
+			continue
+		}
+		if exists {
+			k.LogWarn("[SubmitPocValidationsV2] Validation already exists, skipping duplicate", types.PoC,
+				"validator", msg.Creator,
+				"participant", validation.ParticipantAddress,
+				"stage", startBlockHeight)
+			continue
+		}
+
 		// Store the v2 validation (combine message-level height with payload)
 		storedValidation := types.PoCValidationV2{
 			ParticipantAddress:          validation.ParticipantAddress,
@@ -115,13 +133,25 @@ func (k msgServer) SubmitPocValidationsV2(goCtx context.Context, msg *types.MsgS
 			ValidatedWeight:             validation.ValidatedWeight,
 		}
 
-		k.SetPocValidationV2(ctx, storedValidation)
+		if err := k.SetPocValidationV2(ctx, storedValidation); err != nil {
+			k.LogWarn("[SubmitPocValidationsV2] Failed to store validation, skipping", types.PoC,
+				"validator", msg.Creator,
+				"participant", validation.ParticipantAddress,
+				"error", err)
+			continue
+		}
 
+		storedCount++
 		k.LogInfo("[SubmitPocValidationsV2] Validation stored", types.PoC,
 			"validator", msg.Creator,
 			"participant", validation.ParticipantAddress,
 			"validatedWeight", validation.ValidatedWeight)
 	}
+
+	k.LogInfo("[SubmitPocValidationsV2] Batch complete", types.PoC,
+		"validator", msg.Creator,
+		"totalInBatch", len(msg.Validations),
+		"storedCount", storedCount)
 
 	return &types.MsgSubmitPocValidationsV2Response{}, nil
 }

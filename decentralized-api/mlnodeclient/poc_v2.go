@@ -42,10 +42,11 @@ type ValidatedResultV2 struct {
 	FraudDetected  bool    `json:"fraud_detected"`
 }
 
-// ToValidatedWeight converts a ValidatedResultV2 to validated_weight for chain submission.
-// Returns -1 if fraud is detected, otherwise returns n_total.
+// ToValidatedWeight returns NTotal (sample size) on success, -1 on fraud/failure.
+// Chain only checks sign: >0 = valid vote, <=0 = invalid. Actual weight from PoCV2StoreCommit.Count.
+// TODO: Should return committed count, not sample size.
 func (v *ValidatedResultV2) ToValidatedWeight() int64 {
-	if v.FraudDetected {
+	if v.FraudDetected || v.NTotal <= 0 {
 		return -1
 	}
 	return v.NTotal

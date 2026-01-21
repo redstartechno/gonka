@@ -94,7 +94,8 @@ func TestComputeNewWeightsWithStakingValidators(t *testing.T) {
 		PocStageStartBlockHeight:    100,
 		ValidatedWeight:             100,
 	}
-	k.SetPocValidationV2(ctx, validation)
+	err = k.SetPocValidationV2(ctx, validation)
+	require.NoError(t, err)
 
 	// Set up participant
 	participant := types.Participant{
@@ -373,7 +374,8 @@ func TestComputeNewWeights(t *testing.T) {
 					PocStageStartBlockHeight:    100,
 					ValidatedWeight:             100,
 				}
-				k.SetPocValidationV2(ctx, validation)
+				err := k.SetPocValidationV2(ctx, validation)
+				require.NoError(t, err)
 
 				// Set up participant
 				participant := types.Participant{
@@ -432,7 +434,8 @@ func TestComputeNewWeights(t *testing.T) {
 					PocStageStartBlockHeight:    100,
 					ValidatedWeight:             100,
 				}
-				k.SetPocValidationV2(ctx, validation)
+				err := k.SetPocValidationV2(ctx, validation)
+				require.NoError(t, err)
 
 				// Set up participant
 				participant := types.Participant{
@@ -493,7 +496,8 @@ func TestComputeNewWeights(t *testing.T) {
 					PocStageStartBlockHeight:    100,
 					ValidatedWeight:             100, // Valid but low weight
 				}
-				k.SetPocValidationV2(ctx, validation1)
+				err := k.SetPocValidationV2(ctx, validation1)
+				require.NoError(t, err)
 
 				validation2 := types.PoCValidationV2{
 					ParticipantAddress:          testutil.Executor2,
@@ -501,7 +505,8 @@ func TestComputeNewWeights(t *testing.T) {
 					PocStageStartBlockHeight:    100,
 					ValidatedWeight:             0, // Invalid (fraud detected) with high weight
 				}
-				k.SetPocValidationV2(ctx, validation2)
+				err = k.SetPocValidationV2(ctx, validation2)
+				require.NoError(t, err)
 
 				// Set up participant
 				participant := types.Participant{
@@ -606,7 +611,9 @@ func setStoreCommit(ctx sdk.Context, k keeper.Keeper, participant string, pocSta
 		RootHash:                 make([]byte, 32), // dummy root hash
 		CommitBlockHeight:        pocStartHeight,
 	}
-	k.SetPoCV2StoreCommit(ctx, commit)
+	if err := k.SetPoCV2StoreCommit(ctx, commit); err != nil {
+		panic(err) // Test helper - valid addresses expected
+	}
 }
 
 func setWeightDistribution(ctx sdk.Context, k keeper.Keeper, participant string, pocStartHeight int64, nodeWeights []nodeDistWeight) {
@@ -622,7 +629,9 @@ func setWeightDistribution(ctx sdk.Context, k keeper.Keeper, participant string,
 		PocStageStartBlockHeight: pocStartHeight,
 		Weights:                  weights,
 	}
-	k.SetMLNodeWeightDistribution(ctx, distribution)
+	if err := k.SetMLNodeWeightDistribution(ctx, distribution); err != nil {
+		panic(err) // Test helper - valid addresses expected
+	}
 }
 
 func TestComputeNewWeights_AllowlistExcludesParticipant(t *testing.T) {
@@ -671,18 +680,20 @@ func TestComputeNewWeights_AllowlistExcludesParticipant(t *testing.T) {
 	setWeightDistribution(ctx, k, participantB, 100, []nodeDistWeight{{"node-b", 1}})
 
 	// Set up V2 validations for both
-	k.SetPocValidationV2(ctx, types.PoCValidationV2{
+	err = k.SetPocValidationV2(ctx, types.PoCValidationV2{
 		ParticipantAddress:          participantA,
 		ValidatorParticipantAddress: validatorAccAddress2,
 		PocStageStartBlockHeight:    100,
 		ValidatedWeight:             100,
 	})
-	k.SetPocValidationV2(ctx, types.PoCValidationV2{
+	require.NoError(t, err)
+	err = k.SetPocValidationV2(ctx, types.PoCValidationV2{
 		ParticipantAddress:          participantB,
 		ValidatorParticipantAddress: validatorAccAddress2,
 		PocStageStartBlockHeight:    100,
 		ValidatedWeight:             100,
 	})
+	require.NoError(t, err)
 
 	// Set up participants
 	require.NoError(t, k.SetParticipant(ctx, types.Participant{

@@ -8,19 +8,37 @@ import (
 	"github.com/productscience/inference/x/inference/types"
 )
 
-// SetPocValidationV2 stores a PoC v2 validation.
-func (k Keeper) SetPocValidationV2(ctx context.Context, validation types.PoCValidationV2) {
-	participantAddr := sdk.MustAccAddressFromBech32(validation.ParticipantAddress)
-	validatorAddr := sdk.MustAccAddressFromBech32(validation.ValidatorParticipantAddress)
+// HasPocValidationV2 checks if a PoC v2 validation exists for the given key. Returns error on invalid addresses.
+func (k Keeper) HasPocValidationV2(ctx context.Context, pocStageStartBlockHeight int64, participantAddress, validatorAddress string) (bool, error) {
+	participantAddr, err := sdk.AccAddressFromBech32(participantAddress)
+	if err != nil {
+		return false, err
+	}
+	validatorAddr, err := sdk.AccAddressFromBech32(validatorAddress)
+	if err != nil {
+		return false, err
+	}
+	pk := collections.Join3(pocStageStartBlockHeight, participantAddr, validatorAddr)
+	return k.PoCValidationsV2.Has(ctx, pk)
+}
+
+// SetPocValidationV2 stores a PoC v2 validation. Returns error on invalid addresses or storage failure.
+func (k Keeper) SetPocValidationV2(ctx context.Context, validation types.PoCValidationV2) error {
+	participantAddr, err := sdk.AccAddressFromBech32(validation.ParticipantAddress)
+	if err != nil {
+		return err
+	}
+	validatorAddr, err := sdk.AccAddressFromBech32(validation.ValidatorParticipantAddress)
+	if err != nil {
+		return err
+	}
 	pk := collections.Join3(validation.PocStageStartBlockHeight, participantAddr, validatorAddr)
 	k.LogInfo("PoC v2: Storing validation", types.PoC,
 		"epoch", validation.PocStageStartBlockHeight,
 		"participant", validation.ParticipantAddress,
 		"validator", validation.ValidatorParticipantAddress,
 		"validated_weight", validation.ValidatedWeight)
-	if err := k.PoCValidationsV2.Set(ctx, pk, validation); err != nil {
-		panic(err)
-	}
+	return k.PoCValidationsV2.Set(ctx, pk, validation)
 }
 
 // GetPoCValidationsV2ByStage collects all PoCValidationV2 grouped by participant for a specific epoch.
@@ -96,20 +114,22 @@ func (k Keeper) GetAllMLNodeWeightDistributionsForStage(ctx context.Context, poc
 	return result, nil
 }
 
-// SetPoCV2StoreCommit stores a PoCV2StoreCommit (for testing).
-func (k Keeper) SetPoCV2StoreCommit(ctx context.Context, commit types.PoCV2StoreCommit) {
-	addr := sdk.MustAccAddressFromBech32(commit.ParticipantAddress)
-	pk := collections.Join(commit.PocStageStartBlockHeight, addr)
-	if err := k.PoCV2StoreCommits.Set(ctx, pk, commit); err != nil {
-		panic(err)
+// SetPoCV2StoreCommit stores a PoCV2StoreCommit (for testing). Returns error on invalid address or storage failure.
+func (k Keeper) SetPoCV2StoreCommit(ctx context.Context, commit types.PoCV2StoreCommit) error {
+	addr, err := sdk.AccAddressFromBech32(commit.ParticipantAddress)
+	if err != nil {
+		return err
 	}
+	pk := collections.Join(commit.PocStageStartBlockHeight, addr)
+	return k.PoCV2StoreCommits.Set(ctx, pk, commit)
 }
 
-// SetMLNodeWeightDistribution stores an MLNodeWeightDistribution (for testing).
-func (k Keeper) SetMLNodeWeightDistribution(ctx context.Context, distribution types.MLNodeWeightDistribution) {
-	addr := sdk.MustAccAddressFromBech32(distribution.ParticipantAddress)
-	pk := collections.Join(distribution.PocStageStartBlockHeight, addr)
-	if err := k.MLNodeWeightDistributions.Set(ctx, pk, distribution); err != nil {
-		panic(err)
+// SetMLNodeWeightDistribution stores an MLNodeWeightDistribution (for testing). Returns error on invalid address or storage failure.
+func (k Keeper) SetMLNodeWeightDistribution(ctx context.Context, distribution types.MLNodeWeightDistribution) error {
+	addr, err := sdk.AccAddressFromBech32(distribution.ParticipantAddress)
+	if err != nil {
+		return err
 	}
+	pk := collections.Join(distribution.PocStageStartBlockHeight, addr)
+	return k.MLNodeWeightDistributions.Set(ctx, pk, distribution)
 }

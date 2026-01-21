@@ -67,4 +67,5 @@ var (
 	ErrDeprecated                            = sdkerrors.Register(ModuleName, 1161, "this message type is deprecated")
 	ErrPocArtifactVectorEmpty                = sdkerrors.Register(ModuleName, 1162, "artifact vector is empty")
 	ErrNotSupported                          = sdkerrors.Register(ModuleName, 1163, "operation not supported in current mode")
+	ErrInvalidAddress                        = sdkerrors.Register(ModuleName, 1164, "invalid address")
 )
