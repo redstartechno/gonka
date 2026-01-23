@@ -157,10 +157,6 @@ func (m *MockClient) Reset() {
 
 	m.StopError = nil
 	m.NodeStateError = nil
-	m.GetPowStatusError = nil
-	m.InitGenerateError = nil
-	m.InitValidateError = nil
-	m.ValiateBatchError = nil
 	m.InferenceHealthError = nil
 	m.InferenceUpError = nil
 	m.StartTrainingError = nil
@@ -171,13 +167,14 @@ func (m *MockClient) Reset() {
 	m.DeleteModelError = nil
 	m.ListModelsError = nil
 	m.GetDiskSpaceError = nil
+	m.InitGenerateV1Error = nil
+	m.InitValidateV1Error = nil
+	m.ValidateBatchV1Error = nil
+	m.GetPowStatusV1Error = nil
 
 	m.StopCalled = 0
 	m.NodeStateCalled = 0
-	m.GetPowStatusCalled = 0
-	m.InitGenerateCalled = 0
 	m.InitValidateCalled = 0
-	m.ValidateBatchCalled = 0
 	m.InferenceHealthCalled = 0
 	m.InferenceUpCalled = 0
 	m.StartTrainingCalled = 0
@@ -188,10 +185,15 @@ func (m *MockClient) Reset() {
 	m.DeleteModelCalled = 0
 	m.ListModelsCalled = 0
 	m.GetDiskSpaceCalled = 0
+	m.InitGenerateV1Called = 0
+	m.InitValidateV1Called = 0
+	m.ValidateBatchV1Called = 0
+	m.GetPowStatusV1Called = 0
+	m.InitGenerateV2Called = 0
+	m.GenerateV2Called = 0
+	m.GetPowStatusV2Called = 0
+	m.StopPowV2Called = 0
 
-	m.LastInitDto = nil
-	m.LastInitValidateDto = nil
-	m.LastValidateBatch = ProofBatch{}
 	m.LastInferenceModel = ""
 	m.LastInferenceArgs = nil
 	m.LastTrainingParams = struct {
@@ -205,6 +207,8 @@ func (m *MockClient) Reset() {
 	m.LastModelStatusCheck = nil
 	m.LastModelDownload = nil
 	m.LastModelDelete = nil
+	m.PowStatusV1 = ""
+	m.PowStatusV2 = ""
 }
 
 func (m *MockClient) Stop(ctx context.Context) error {
