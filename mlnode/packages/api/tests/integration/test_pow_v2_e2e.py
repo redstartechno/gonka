@@ -165,7 +165,6 @@ class TestPoCv2E2E:
             dtype="bfloat16",
             additional_args=[
                 "--max-model-len", "512",
-                "--enable-poc",
                 "--gpu-memory-utilization", "0.8",
             ]
         )
@@ -322,7 +321,6 @@ class TestPoCv2E2E:
             dtype="bfloat16",
             additional_args=[
                 "--max-model-len", "512",
-                "--enable-poc",
                 "--gpu-memory-utilization", "0.8",
             ]
         )
@@ -407,7 +405,6 @@ class TestPoCv2FraudDetection:
             dtype="bfloat16",
             additional_args=[
                 "--max-model-len", "512",
-                "--enable-poc",
                 "--gpu-memory-utilization", "0.8",
             ]
         )
