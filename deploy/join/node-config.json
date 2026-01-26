@@ -11,8 +11,7 @@
           "--quantization",
           "fp8",
           "--gpu-memory-utilization",
-          "0.8",
-          "--enable-poc"
+          "0.8"
         ]
       }
     }
