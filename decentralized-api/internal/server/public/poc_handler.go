@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"decentralized-api/logging"
+	"decentralized-api/poc"
 	"decentralized-api/poc/artifacts"
 	"encoding/base64"
 	"encoding/binary"
@@ -106,9 +107,8 @@ func (s *Server) postPocProofs(ctx echo.Context) error {
 		return echo.NewHTTPError(http.StatusServiceUnavailable, "artifact store not configured")
 	}
 
-	// V1 mode: proof API is not available (batches are on-chain)
-	if s.phaseTracker != nil && !s.phaseTracker.IsPoCv2Enabled() {
-		return echo.NewHTTPError(http.StatusServiceUnavailable, "proof API requires poc_v2_enabled=true")
+	if s.phaseTracker != nil && !poc.ShouldUseV2FromEpochState(s.phaseTracker.GetCurrentEpochState()) {
+		return echo.NewHTTPError(http.StatusServiceUnavailable, "proof API requires V2 mode")
 	}
 
 	var req PocProofsRequest
@@ -264,9 +264,8 @@ func (s *Server) getPocArtifactsState(ctx echo.Context) error {
 		return echo.NewHTTPError(http.StatusServiceUnavailable, "artifact store not configured")
 	}
 
-	// V1 mode: artifact state API is not available (batches are on-chain)
-	if s.phaseTracker != nil && !s.phaseTracker.IsPoCv2Enabled() {
-		return echo.NewHTTPError(http.StatusServiceUnavailable, "artifact state API requires poc_v2_enabled=true")
+	if s.phaseTracker != nil && !poc.ShouldUseV2FromEpochState(s.phaseTracker.GetCurrentEpochState()) {
+		return echo.NewHTTPError(http.StatusServiceUnavailable, "artifact state API requires V2 mode")
 	}
 
 	heightParam := ctx.QueryParam("height")

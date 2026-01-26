@@ -97,10 +97,7 @@ func (w *CommitWorker) tick() {
 		return
 	}
 
-	isMigrationTracking := epochState.ConfirmationPocV2Enabled &&
-		epochState.ActiveConfirmationPoCEvent != nil &&
-		epochState.ActiveConfirmationPoCEvent.EventSequence == 0
-	if !epochState.PocV2Enabled && !isMigrationTracking {
+	if !ShouldUseV2FromEpochState(epochState) {
 		return
 	}
 

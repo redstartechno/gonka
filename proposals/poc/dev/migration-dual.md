@@ -43,6 +43,43 @@ Notes:
 
 ### DAPI Changes
 
+#### poc/migration.go (centralized pure functions)
+
+```go
+// IsMigrationMode returns true when in migration mode.
+// Migration mode: poc_v2_enabled=false, confirmation_poc_v2_enabled=true.
+func IsMigrationMode(pocV2Enabled, confirmationPocV2Enabled bool) bool {
+    return !pocV2Enabled && confirmationPocV2Enabled
+}
+
+// ShouldUseV2 determines if V2 PoC should be used.
+// - Full V2 mode (pocV2Enabled=true): always V2
+// - Migration mode + confirmation event_sequence == 0: V2
+// - Otherwise: V1
+func ShouldUseV2(pocV2Enabled, confirmationPocV2Enabled bool, confirmationEvent *types.ConfirmationPoCEvent) bool {
+    if pocV2Enabled {
+        return true
+    }
+    if IsMigrationMode(pocV2Enabled, confirmationPocV2Enabled) &&
+        confirmationEvent != nil && confirmationEvent.EventSequence == 0 {
+        return true
+    }
+    return false
+}
+
+// ShouldUseV2FromEpochState is a convenience wrapper for EpochState.
+func ShouldUseV2FromEpochState(epochState *chainphase.EpochState) bool {
+    if epochState == nil {
+        return true // default V2
+    }
+    return ShouldUseV2(
+        epochState.PocV2Enabled,
+        epochState.ConfirmationPocV2Enabled,
+        epochState.ActiveConfirmationPoCEvent,
+    )
+}
+```
+
 #### broker/broker.go
 
 ```go
@@ -65,11 +102,38 @@ func (b *Broker) shouldUseV2ForPoC(confirmationEvent *types.ConfirmationPoCEvent
 }
 ```
 
+#### poc/orchestrator.go
+
+```go
+// shouldUseV2 determines if V2 validation should be used.
+// Handles both full V2 mode and migration mode (event_sequence == 0).
+func (o *orchestratorImpl) shouldUseV2() bool {
+    if o.phaseTracker == nil {
+        return true // default V2
+    }
+    epochState := o.phaseTracker.GetCurrentEpochState()
+    return ShouldUseV2FromEpochState(epochState)
+}
+```
+
 #### mlnode/post_generated_artifacts_v2_handler.go
 
 ```go
 if s.broker != nil && !s.broker.IsV2EndpointsEnabled() {
     return echo.NewHTTPError(http.StatusServiceUnavailable, "V2 endpoints disabled")
+}
+```
+
+#### public/poc_handler.go
+
+```go
+// V1 mode: proof API is not available (batches are on-chain)
+// In migration mode, V2 proofs are enabled for confirmation PoC event_sequence == 0
+if s.phaseTracker != nil {
+    epochState := s.phaseTracker.GetCurrentEpochState()
+    if !poc.ShouldUseV2FromEpochState(epochState) {
+        return echo.NewHTTPError(http.StatusServiceUnavailable, "proof API requires V2 mode")
+    }
 }
 ```
 
@@ -101,7 +165,11 @@ func (am AppModule) updateConfirmationWeights(...) error {
 
 | File | Change |
 |------|--------|
+| `poc/migration.go` | Add `IsMigrationMode()`, `ShouldUseV2()`, `ShouldUseV2FromEpochState()` pure functions |
+| `poc/orchestrator.go` | Use `ShouldUseV2FromEpochState()` for V1/V2 validation dispatch |
+| `poc/commit_worker.go` | Use `ShouldUseV2FromEpochState()` instead of inline migration check |
 | `broker/broker.go` | Add `IsV2EndpointsEnabled()`, `IsMigrationMode()`, `shouldUseV2ForPoC()` |
+| `public/poc_handler.go` | Use `ShouldUseV2FromEpochState()` to allow V2 APIs in migration mode |
 | `mlnode/post_generated_artifacts_v2_handler.go` | Use `IsV2EndpointsEnabled()` |
 | `chainphase/phase_tracker.go` | `IsConfirmationPoCv2Enabled()` (existing) |
 | `module/confirmation_poc.go` | Switch on event_sequence in migration mode |
