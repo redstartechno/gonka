@@ -365,30 +365,22 @@ func (am AppModule) updateConfirmationWeights(ctx context.Context, event *types.
 	}
 	weightScaleFactor := params.PocParams.GetWeightScaleFactorDec()
 
-	// Dispatch to V1 or V2 confirmation weight calculation based on migration state:
-	// - Full V1: V1 (all events)
-	// - Migration: event_sequence == 0 → V2 tracking only, event_sequence >= 1 → V1
-	// - Full V2: V2 (all events)
 	migrationState := GetMigrationStateFromParams(params.PocParams)
 
+	useV2, dryRun := false, false
 	switch migrationState {
 	case ModeFullV2:
-		am.evaluateConfirmation(ctx, event, &epochGroupData, currentValidatorWeights, weightScaleFactor, true)
+		useV2 = true
 	case ModeMigration:
-		// event_sequence == 0: V2 tracking only (event already stored, skip weight evaluation)
-		// event_sequence >= 1: V1 (affects weights)
-		if event.EventSequence > 0 {
-			am.evaluateConfirmation(ctx, event, &epochGroupData, currentValidatorWeights, weightScaleFactor, false)
+		if event.EventSequence == 0 {
+			useV2, dryRun = true, true
 		}
-	default:
-		am.evaluateConfirmation(ctx, event, &epochGroupData, currentValidatorWeights, weightScaleFactor, false)
 	}
+	am.evaluateConfirmation(ctx, event, &epochGroupData, currentValidatorWeights, weightScaleFactor, useV2, dryRun)
 
 	return nil
 }
 
-// evaluateConfirmation evaluates confirmation PoC and updates weights.
-// useV2: true for V2 flow, false for V1 flow.
 func (am AppModule) evaluateConfirmation(
 	ctx context.Context,
 	event *types.ConfirmationPoCEvent,
@@ -396,6 +388,7 @@ func (am AppModule) evaluateConfirmation(
 	currentValidatorWeights map[string]int64,
 	weightScaleFactor mathsdk.LegacyDec,
 	useV2 bool,
+	dryRun bool,
 ) {
 	var confirmationParticipants []*types.ActiveParticipant
 	if useV2 {
@@ -410,7 +403,11 @@ func (am AppModule) evaluateConfirmation(
 	}
 
 	am.LogInfo("evaluateConfirmation: Confirmation weights", types.PoC,
-		"useV2", useV2, "confirmationWeights", confirmationWeights)
+		"useV2", useV2, "dryRun", dryRun, "confirmationWeights", confirmationWeights)
+
+	if dryRun {
+		return
+	}
 
 	notPreservedWeights, err := am.GetNotPreservedTotalWeightByParticipant(ctx, event.EpochIndex)
 	if err != nil {
