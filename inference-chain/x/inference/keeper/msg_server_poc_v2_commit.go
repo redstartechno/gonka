@@ -12,18 +12,25 @@ import (
 
 // PoCV2StoreCommit handles submission of off-chain artifact store commits.
 func (k msgServer) PoCV2StoreCommit(goCtx context.Context, msg *types.MsgPoCV2StoreCommit) (*types.MsgPoCV2StoreCommitResponse, error) {
-	// V2 guard: reject when V1 mode is active
 	params, err := k.GetParams(goCtx)
 	if err != nil {
 		return nil, err
-	}
-	if !params.PocParams.PocV2Enabled {
-		return nil, sdkerrors.Wrap(types.ErrNotSupported, "V2 disabled when poc_v2_enabled=false")
 	}
 
 	ctx := sdk.UnwrapSDKContext(goCtx)
 	currentBlockHeight := ctx.BlockHeight()
 	startBlockHeight := msg.PocStageStartBlockHeight
+
+	// Check for active confirmation PoC event
+	activeEvent, isActive, err := k.Keeper.GetActiveConfirmationPoCEvent(ctx)
+	if err != nil {
+		k.LogError(PocFailureTag+"[PoCV2StoreCommit] Error checking confirmation PoC event", types.PoC, "error", err)
+	}
+
+	isMigrationTracking := params.PocParams.ConfirmationPocV2Enabled && isActive && activeEvent != nil && activeEvent.EventSequence == 0
+	if !params.PocParams.PocV2Enabled && !isMigrationTracking {
+		return nil, sdkerrors.Wrap(types.ErrNotSupported, "V2 disabled when poc_v2_enabled=false")
+	}
 
 	// Validate count and root_hash
 	if msg.Count == 0 {
@@ -33,32 +40,16 @@ func (k msgServer) PoCV2StoreCommit(goCtx context.Context, msg *types.MsgPoCV2St
 		return nil, sdkerrors.Wrap(types.ErrIllegalState, fmt.Sprintf("root_hash must be 32 bytes, got %d", len(msg.RootHash)))
 	}
 
-	// Check for active confirmation PoC event first
-	activeEvent, isActive, err := k.Keeper.GetActiveConfirmationPoCEvent(ctx)
-	if err != nil {
-		k.LogError(PocFailureTag+"[PoCV2StoreCommit] Error checking confirmation PoC event", types.PoC, "error", err)
-	}
-
-	// Validate PoC window (same as SubmitPocBatchesV2)
-	if isActive && activeEvent != nil && activeEvent.Phase == types.ConfirmationPoCPhase_CONFIRMATION_POC_GENERATION {
-		if startBlockHeight != activeEvent.TriggerHeight {
-			return nil, sdkerrors.Wrap(types.ErrPocWrongStartBlockHeight,
-				fmt.Sprintf("confirmation PoC: start block height %d doesn't match event trigger %d", startBlockHeight, activeEvent.TriggerHeight))
-		}
-		confirmParams, err := k.GetParams(ctx)
-		if err != nil {
-			return nil, err
-		}
-		epochParams := confirmParams.EpochParams
+	// Validate PoC window
+	// For confirmation PoC: accept during batch submission window (generation + exchange)
+	// For regular PoC: accept during exchange window
+	if isActive && activeEvent != nil && startBlockHeight == activeEvent.TriggerHeight {
+		epochParams := params.EpochParams
 		if !activeEvent.IsInBatchSubmissionWindow(currentBlockHeight, epochParams) {
 			return nil, sdkerrors.Wrap(types.ErrPocTooLate, "confirmation PoC batch submission window closed")
 		}
 	} else {
-		regularParams, err := k.Keeper.GetParams(goCtx)
-		if err != nil {
-			return nil, err
-		}
-		epochParams := regularParams.EpochParams
+		epochParams := params.EpochParams
 		upcomingEpoch, found := k.Keeper.GetUpcomingEpoch(ctx)
 		if !found {
 			return nil, sdkerrors.Wrap(types.ErrUpcomingEpochNotFound, "failed to get upcoming epoch")
@@ -116,27 +107,28 @@ func (k msgServer) PoCV2StoreCommit(goCtx context.Context, msg *types.MsgPoCV2St
 
 // MLNodeWeightDistribution handles submission of per-node weight distribution.
 func (k msgServer) MLNodeWeightDistribution(goCtx context.Context, msg *types.MsgMLNodeWeightDistribution) (*types.MsgMLNodeWeightDistributionResponse, error) {
-	// V2 guard: reject when V1 mode is active
 	params, err := k.GetParams(goCtx)
 	if err != nil {
 		return nil, err
-	}
-	if !params.PocParams.PocV2Enabled {
-		return nil, sdkerrors.Wrap(types.ErrNotSupported, "V2 disabled when poc_v2_enabled=false")
 	}
 
 	ctx := sdk.UnwrapSDKContext(goCtx)
 	currentBlockHeight := ctx.BlockHeight()
 	startBlockHeight := msg.PocStageStartBlockHeight
 
-	if len(msg.Weights) == 0 {
-		return nil, sdkerrors.Wrap(types.ErrIllegalState, "weights must not be empty")
-	}
-
-	// Check for active confirmation PoC event first
+	// Check for active confirmation PoC event
 	activeEvent, isActive, err := k.Keeper.GetActiveConfirmationPoCEvent(ctx)
 	if err != nil {
 		k.LogError(PocFailureTag+"[MLNodeWeightDistribution] Error checking confirmation PoC event", types.PoC, "error", err)
+	}
+
+	isMigrationTracking := params.PocParams.ConfirmationPocV2Enabled && isActive && activeEvent != nil && activeEvent.EventSequence == 0
+	if !params.PocParams.PocV2Enabled && !isMigrationTracking {
+		return nil, sdkerrors.Wrap(types.ErrNotSupported, "V2 disabled when poc_v2_enabled=false")
+	}
+
+	if len(msg.Weights) == 0 {
+		return nil, sdkerrors.Wrap(types.ErrIllegalState, "weights must not be empty")
 	}
 
 	// Validate window: accept from exchange window through end of validation

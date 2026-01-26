@@ -72,16 +72,10 @@ func ShouldAcceptStoreCommit(epochState *chainphase.EpochState, pocStageStartHei
 
 	currentHeight := epochState.CurrentBlock.Height
 
-	// Confirmation PoC: check batch submission window
 	if epochState.ActiveConfirmationPoCEvent != nil &&
-		epochState.CurrentPhase == types.InferencePhase {
+		epochState.CurrentPhase == types.InferencePhase &&
+		pocStageStartHeight == epochState.ActiveConfirmationPoCEvent.TriggerHeight {
 		event := epochState.ActiveConfirmationPoCEvent
-		if event.Phase != types.ConfirmationPoCPhase_CONFIRMATION_POC_GENERATION {
-			return false
-		}
-		if pocStageStartHeight != event.TriggerHeight {
-			return false
-		}
 		epochParams := &epochState.LatestEpoch.EpochParams
 		return event.IsInBatchSubmissionWindow(currentHeight, epochParams)
 	}

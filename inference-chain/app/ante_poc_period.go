@@ -24,13 +24,11 @@ func (ppd PocPeriodValidationDecorator) checkPocMessageTooLate(ctx sdk.Context, 
 
 	switch m := msg.(type) {
 	case *inferencetypes.MsgSubmitPocBatch:
-		// V1/V2 dispatch: check poc_v2_enabled
 		params, err := ppd.inferenceKeeper.GetParams(ctx)
 		if err != nil {
 			return err
 		}
 		if !params.PocParams.PocV2Enabled {
-			// V1 mode: check timing like main
 			if err := ppd.inferenceKeeper.CheckPoCMessageTooLate(ctx, m.PocStageStartBlockHeight, inferencemodulekeeper.PoCWindowBatch); err != nil {
 				ppd.inferenceKeeper.LogDebug(
 					"AnteHandle: PocPeriodValidation - rejecting MsgSubmitPocBatch as too late",
@@ -44,7 +42,6 @@ func (ppd PocPeriodValidationDecorator) checkPocMessageTooLate(ctx sdk.Context, 
 			}
 			return nil
 		}
-		// V2 mode: V1 batch is deprecated
 		ppd.inferenceKeeper.LogDebug(
 			"AnteHandle: PocPeriodValidation - rejecting deprecated MsgSubmitPocBatch (V2 mode)",
 			inferencetypes.PoC,
@@ -53,13 +50,11 @@ func (ppd PocPeriodValidationDecorator) checkPocMessageTooLate(ctx sdk.Context, 
 		return inferencetypes.ErrDeprecated
 
 	case *inferencetypes.MsgSubmitPocValidation:
-		// V1/V2 dispatch: check poc_v2_enabled
 		params, err := ppd.inferenceKeeper.GetParams(ctx)
 		if err != nil {
 			return err
 		}
 		if !params.PocParams.PocV2Enabled {
-			// V1 mode: check timing like main
 			if err := ppd.inferenceKeeper.CheckPoCMessageTooLate(ctx, m.PocStageStartBlockHeight, inferencemodulekeeper.PoCWindowValidation); err != nil {
 				ppd.inferenceKeeper.LogDebug(
 					"AnteHandle: PocPeriodValidation - rejecting MsgSubmitPocValidation as too late",
@@ -73,21 +68,21 @@ func (ppd PocPeriodValidationDecorator) checkPocMessageTooLate(ctx sdk.Context, 
 			}
 			return nil
 		}
-		// V2 mode: V1 validation is deprecated
 		ppd.inferenceKeeper.LogDebug(
-			"AnteHandle: PocPeriodValidation - rejecting deprecated MsgSubmitPocValidation (V2 mode)",
+			"AnteHandle: PocPeriodValidation - rejecting deprecated MsgSubmitPocValidation",
 			inferencetypes.PoC,
 			"msg_type_url", sdk.MsgTypeURL(msg),
 		)
 		return inferencetypes.ErrDeprecated
 
 	case *inferencetypes.MsgSubmitPocValidationsV2:
-		// V1/V2 dispatch: check poc_v2_enabled
 		params, err := ppd.inferenceKeeper.GetParams(ctx)
 		if err != nil {
 			return err
 		}
-		if !params.PocParams.PocV2Enabled {
+		activeEvent, isActive, _ := ppd.inferenceKeeper.GetActiveConfirmationPoCEvent(ctx)
+		isMigrationTracking := params.PocParams.ConfirmationPocV2Enabled && isActive && activeEvent != nil && activeEvent.EventSequence == 0
+		if !params.PocParams.PocV2Enabled && !isMigrationTracking {
 			ppd.inferenceKeeper.LogDebug(
 				"AnteHandle: PocPeriodValidation - rejecting MsgSubmitPocValidationsV2 (V1 mode)",
 				inferencetypes.PoC,
@@ -95,7 +90,6 @@ func (ppd PocPeriodValidationDecorator) checkPocMessageTooLate(ctx sdk.Context, 
 			)
 			return inferencetypes.ErrNotSupported
 		}
-		// V2 mode: check timing
 		if err := ppd.inferenceKeeper.CheckPoCMessageTooLate(ctx, m.PocStageStartBlockHeight, inferencemodulekeeper.PoCWindowValidation); err != nil {
 			ppd.inferenceKeeper.LogDebug(
 				"AnteHandle: PocPeriodValidation - rejecting MsgSubmitPocValidationsV2 as too late",
@@ -109,12 +103,13 @@ func (ppd PocPeriodValidationDecorator) checkPocMessageTooLate(ctx sdk.Context, 
 		}
 
 	case *inferencetypes.MsgPoCV2StoreCommit:
-		// V2-only message
 		params, err := ppd.inferenceKeeper.GetParams(ctx)
 		if err != nil {
 			return err
 		}
-		if !params.PocParams.PocV2Enabled {
+		activeEvent, isActive, _ := ppd.inferenceKeeper.GetActiveConfirmationPoCEvent(ctx)
+		isMigrationTracking := params.PocParams.ConfirmationPocV2Enabled && isActive && activeEvent != nil && activeEvent.EventSequence == 0
+		if !params.PocParams.PocV2Enabled && !isMigrationTracking {
 			ppd.inferenceKeeper.LogDebug(
 				"AnteHandle: PocPeriodValidation - rejecting MsgPoCV2StoreCommit (V1 mode)",
 				inferencetypes.PoC,
@@ -122,10 +117,9 @@ func (ppd PocPeriodValidationDecorator) checkPocMessageTooLate(ctx sdk.Context, 
 			)
 			return inferencetypes.ErrNotSupported
 		}
-		// V2 mode: check timing (batch window)
 		if err := ppd.inferenceKeeper.CheckPoCMessageTooLate(ctx, m.PocStageStartBlockHeight, inferencemodulekeeper.PoCWindowBatch); err != nil {
 			ppd.inferenceKeeper.LogDebug(
-				"AnteHandle: PocPeriodValidation - rejecting MsgPoCV2StoreCommit as too late",
+				"AnteHandle: PocPeriodValidation - rejecting MsgPoCV2StoreCommit",
 				inferencetypes.PoC,
 				"msg_type_url", sdk.MsgTypeURL(msg),
 				"pocStageStartBlockHeight", m.PocStageStartBlockHeight,
@@ -136,12 +130,13 @@ func (ppd PocPeriodValidationDecorator) checkPocMessageTooLate(ctx sdk.Context, 
 		}
 
 	case *inferencetypes.MsgMLNodeWeightDistribution:
-		// V2-only message
 		params, err := ppd.inferenceKeeper.GetParams(ctx)
 		if err != nil {
 			return err
 		}
-		if !params.PocParams.PocV2Enabled {
+		activeEvent, isActive, _ := ppd.inferenceKeeper.GetActiveConfirmationPoCEvent(ctx)
+		isMigrationTracking := params.PocParams.ConfirmationPocV2Enabled && isActive && activeEvent != nil && activeEvent.EventSequence == 0
+		if !params.PocParams.PocV2Enabled && !isMigrationTracking {
 			ppd.inferenceKeeper.LogDebug(
 				"AnteHandle: PocPeriodValidation - rejecting MsgMLNodeWeightDistribution (V1 mode)",
 				inferencetypes.PoC,
@@ -149,10 +144,9 @@ func (ppd PocPeriodValidationDecorator) checkPocMessageTooLate(ctx sdk.Context, 
 			)
 			return inferencetypes.ErrNotSupported
 		}
-		// V2 mode: check timing (validation window - distribution happens during validation phase)
 		if err := ppd.inferenceKeeper.CheckPoCMessageTooLate(ctx, m.PocStageStartBlockHeight, inferencemodulekeeper.PoCWindowValidation); err != nil {
 			ppd.inferenceKeeper.LogDebug(
-				"AnteHandle: PocPeriodValidation - rejecting MsgMLNodeWeightDistribution as too late",
+				"AnteHandle: PocPeriodValidation - rejecting MsgMLNodeWeightDistribution",
 				inferencetypes.PoC,
 				"msg_type_url", sdk.MsgTypeURL(msg),
 				"pocStageStartBlockHeight", m.PocStageStartBlockHeight,

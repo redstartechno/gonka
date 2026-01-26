@@ -291,6 +291,7 @@ class PoCMigrationTests : TestermintTest() {
         val secondEvent = allEvents.events.find { it.eventSequence > 0 }
         if (secondEvent != null) {
             Logger.info("Second event (seq=${secondEvent.eventSequence}): triggerHeight=${secondEvent.triggerHeight}")
+            genesis.node.waitForNextBlock(15)
             val batchCount = genesis.node.getPocBatchCount(secondEvent.triggerHeight)
             Logger.info("Second event: PoCBatch count = $batchCount")
             assertThat(batchCount).isGreaterThan(0)

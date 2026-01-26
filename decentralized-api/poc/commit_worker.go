@@ -97,8 +97,10 @@ func (w *CommitWorker) tick() {
 		return
 	}
 
-	// V1 mode: CommitWorker is not needed (batches go directly to chain)
-	if !epochState.PocV2Enabled {
+	isMigrationTracking := epochState.ConfirmationPocV2Enabled &&
+		epochState.ActiveConfirmationPoCEvent != nil &&
+		epochState.ActiveConfirmationPoCEvent.EventSequence == 0
+	if !epochState.PocV2Enabled && !isMigrationTracking {
 		return
 	}
 
