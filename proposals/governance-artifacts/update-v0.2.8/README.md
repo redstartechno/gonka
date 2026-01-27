@@ -19,15 +19,9 @@ Existing hosts are **not** required to upgrade their `api` and `node` containers
 Creating the release from this branch (instead of `main`) minimizes the time that the `/deploy/join/` directory on the `main` branch contains container versions that do not match the on-chain binary versions, ensuring a smoother onboarding experience for new hosts.
 
 
-Start after upgrade:
-```
-git pull
-source config.env && docker compose -f docker-compose.postgres.yml up -d
-```
-
 ## Testing
 
-The on-chain upgrade from version `v0.2.7` to `v0.2.8` has been successfully deployed and verified on the testnet, including the PoC V2 parameter migration.
+The on-chain upgrade from version `v0.2.7-post1` to `v0.2.8` has been successfully deployed and verified on the testnet, including the PoC V2 parameter migration.
 
 Reviewers are encouraged to request access to the testnet environment to validate the upgrade or test the on-chain upgrade process on their own private testnets.
 
@@ -39,6 +33,26 @@ Migration tasks:
 - **Burn extra community coins**: Burns all coins from the `pre_programmed_sale` module account (`gonka1rmac644w5hjsyxfggz6e4empxf02vegkt3ppec`) which were inadvertently created during genesis.
 - **Precompute BLS slot keys**: Generates and stores precomputed BLS slot public keys for the current epoch to enable the new optimized verification logic (see PR #609).
 - **Set PoC V2 migration parameters**: Configures dual-mode migration with `ConfirmationPocV2Enabled=true` and `PocV2Enabled=false`, sets model ID to `Qwen/Qwen3-235B-A22B-Instruct-2507-FP8`, sequence length to 1024, and statistical test thresholds for V2 validation.
+
+## PoC V2 Migration
+
+For a smooth transition from PoC V1 to PoC V2, the chain must ensure that the majority of participants have switched to the new MLNode build supporting the `Qwen/Qwen3-235B-A22B-Instruct-2507-FP8` model before PoC V2 becomes the main PoC engine. This upgrade enables **tracking mode** to measure adoption without affecting weights.
+
+**After this upgrade:**
+- Regular PoC continues using V1 (on-chain batches, weight enforcement).
+- First Confirmation PoC per epoch uses V2 for **tracking only** (no weight/slashing impact).
+- V2 tracking results allow monitoring adoption before full activation.
+
+**MLNode upgrade:**
+- New versions: `ghcr.io/product-science/mlnode:3.0.12` (or `3.0.12-blackwell` for Blackwell GPUs).
+- Backward compatible with 3.0.11 — can be upgraded before or after this on-chain upgrade.
+- Must be upgraded before PoC V2 is fully enabled.
+
+**Enabling full PoC V2:**
+- PoC V2 will **not** activate automatically.
+- Once adoption is sufficient, a **separate governance proposal** will set `poc_v2_enabled=true`.
+- The epoch when V2 is enabled runs in grace mode (no punishment).
+- Full V2 enforcement begins the following epoch.
 
 ## Changes
 
