@@ -30,8 +30,8 @@ COLD_KEY_NAME = "gonka-account-key"
 
 INFERENCED_BINARY = SimpleNamespace(
     zip_file=BASE_DIR / "inferenced-linux-amd64.zip",
-    url="https://github.com/product-science/race-releases/releases/download/release%2Fv0.2.8-poc3/inferenced-linux-amd64.zip",
-    checksum="5ab63bfb05ae2ccc85627beb0ff3ced6b0bddf97ba864eae359bdcb0fa730e3e",
+    url="https://github.com/gonka-ai/gonka/releases/download/release%2Fv0.2.7-post1/inferenced-linux-amd64.zip",
+    checksum="ed9b0631af4887d3b7da689ff042461644f4657b1574de756cd07cfb0b5eddbb",
     path=BASE_DIR / "inferenced",
 )
 
