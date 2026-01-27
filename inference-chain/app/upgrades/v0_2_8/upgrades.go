@@ -4,11 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"cosmossdk.io/math"
 	upgradetypes "cosmossdk.io/x/upgrade/types"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/cosmos/cosmos-sdk/types/module"
+	"github.com/cosmos/cosmos-sdk/x/authz"
+	authzkeeper "github.com/cosmos/cosmos-sdk/x/authz/keeper"
 	distrkeeper "github.com/cosmos/cosmos-sdk/x/distribution/keeper"
 	blskeeper "github.com/productscience/inference/x/bls/keeper"
 	blstypes "github.com/productscience/inference/x/bls/types"
@@ -95,6 +98,7 @@ func CreateUpgradeHandler(
 	k keeper.Keeper,
 	bk blskeeper.Keeper,
 	distrKeeper distrkeeper.Keeper,
+	authzKeeper authzkeeper.Keeper,
 ) upgradetypes.UpgradeHandler {
 	return func(ctx context.Context, plan upgradetypes.Plan, fromVM module.VersionMap) (module.VersionMap, error) {
 		k.Logger().Info("starting upgrade to " + UpgradeName)
@@ -121,6 +125,11 @@ func CreateUpgradeHandler(
 
 		if err := distributeBountyRewards(ctx, k, distrKeeper); err != nil {
 			return nil, err
+		}
+
+		if err := migrateAuthzGrantsForPocV2(ctx, authzKeeper, k); err != nil {
+			k.LogError("Error migrating authz grants for PoC V2", types.PoC, "err", err)
+			// Don't fail the upgrade, just log the error
 		}
 
 		toVM, err := mm.RunMigrations(ctx, configurator, fromVM)
@@ -287,6 +296,73 @@ func distributeBountyRewards(ctx context.Context, k keeper.Keeper, distrKeeper d
 		}
 
 		k.Logger().Info("bounty distributed", "address", bounty.Address, "amount", bounty.Amount)
+	}
+
+	return nil
+}
+
+// AuthzMigrationKeeper defines the interface for authz operations needed during migration.
+type AuthzMigrationKeeper interface {
+	IterateGrants(ctx context.Context, handler func(granterAddr, granteeAddr sdk.AccAddress, grant authz.Grant) bool)
+	GetAuthorization(ctx context.Context, grantee, granter sdk.AccAddress, msgType string) (authz.Authorization, *time.Time)
+	SaveGrant(ctx context.Context, grantee, granter sdk.AccAddress, authorization authz.Authorization, expiration *time.Time) error
+}
+
+// migrateAuthzGrantsForPocV2 adds grants for the new V2 PoC message types to all
+// existing granter/grantee pairs that have MsgStartInference authorization.
+// This ensures that existing participants can use the new V2 PoC functionality.
+func migrateAuthzGrantsForPocV2(ctx context.Context, authzKeeper AuthzMigrationKeeper, k keeper.Keeper) error {
+	// New V2 message types to add
+	newMsgTypes := []string{
+		sdk.MsgTypeURL(&types.MsgSubmitPocValidationsV2{}),
+		sdk.MsgTypeURL(&types.MsgPoCV2StoreCommit{}),
+		sdk.MsgTypeURL(&types.MsgMLNodeWeightDistribution{}),
+	}
+
+	// Track granter/grantee pairs that need new grants
+	type grantPair struct {
+		granter    sdk.AccAddress
+		grantee    sdk.AccAddress
+		expiration *time.Time
+	}
+	var pairsToMigrate []grantPair
+
+	// Iterate all grants, find those with MsgStartInference
+	startInferenceMsgType := sdk.MsgTypeURL(&types.MsgStartInference{})
+	authzKeeper.IterateGrants(ctx, func(granterAddr, granteeAddr sdk.AccAddress, grant authz.Grant) bool {
+		if grant.Authorization.GetTypeUrl() == "/cosmos.authz.v1beta1.GenericAuthorization" {
+			var genAuth authz.GenericAuthorization
+			if err := k.Codec().Unmarshal(grant.Authorization.Value, &genAuth); err == nil {
+				if genAuth.Msg == startInferenceMsgType {
+					pairsToMigrate = append(pairsToMigrate, grantPair{
+						granter:    granterAddr,
+						grantee:    granteeAddr,
+						expiration: grant.Expiration,
+					})
+				}
+			}
+		}
+		return false // continue iteration
+	})
+
+	k.LogInfo("Found granter/grantee pairs to migrate for PoC V2", types.PoC, "count", len(pairsToMigrate))
+
+	// Add new grants for each pair
+	for _, pair := range pairsToMigrate {
+		for _, msgType := range newMsgTypes {
+			// Check if grant already exists
+			existing, _ := authzKeeper.GetAuthorization(ctx, pair.grantee, pair.granter, msgType)
+			if existing != nil {
+				continue // already granted
+			}
+
+			auth := authz.NewGenericAuthorization(msgType)
+			if err := authzKeeper.SaveGrant(ctx, pair.grantee, pair.granter, auth, pair.expiration); err != nil {
+				k.LogError("Failed to save V2 grant", types.PoC, "granter", pair.granter, "grantee", pair.grantee, "msgType", msgType, "error", err)
+				continue
+			}
+			k.LogInfo("Added V2 PoC grant", types.PoC, "granter", pair.granter, "grantee", pair.grantee, "msgType", msgType)
+		}
 	}
 
 	return nil
