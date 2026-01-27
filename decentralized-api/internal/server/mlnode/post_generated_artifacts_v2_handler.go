@@ -25,6 +25,10 @@ func (s *Server) postGeneratedArtifactsV2(ctx echo.Context) error {
 		return echo.NewHTTPError(http.StatusServiceUnavailable, "V2 endpoints disabled")
 	}
 
+	if s.artifactStore == nil {
+		return echo.NewHTTPError(http.StatusServiceUnavailable, "artifact store not configured")
+	}
+
 	var body mlnodeclient.GeneratedArtifactBatchV2
 
 	if err := ctx.Bind(&body); err != nil {

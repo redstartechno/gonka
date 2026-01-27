@@ -13,7 +13,8 @@ import (
 // TestTransitionPoCToValidatingCommandV2_Success verifies that the v2 validation
 // transition command returns the correct state without making any network calls.
 func TestTransitionPoCToValidatingCommandV2_Success(t *testing.T) {
-	node := createTestNode("test-node-v2")
+	node := createTestNodeWithStatus("test-node-v2", types.HardwareNodeStatus_POC)
+	node.State.PocCurrentStatus = PocStatusGenerating
 	mockClient := mlnodeclient.NewMockClient()
 	broker := NewTestBroker2(1)
 	worker := NewNodeWorkerWithClient("test-node-v2", node, mockClient, broker)
@@ -33,6 +34,23 @@ func TestTransitionPoCToValidatingCommandV2_Success(t *testing.T) {
 	mockClient.Mu.Lock()
 	defer mockClient.Mu.Unlock()
 	assert.Equal(t, 0, mockClient.StopCalled, "Stop() should not be called")
+}
+
+// TestTransitionPoCToValidatingCommandV2_RejectsFailedNode verifies that the command
+// rejects transitions when node is in FAILED state.
+func TestTransitionPoCToValidatingCommandV2_RejectsFailedNode(t *testing.T) {
+	node := createTestNodeWithStatus("test-node-v2-failed", types.HardwareNodeStatus_FAILED)
+	mockClient := mlnodeclient.NewMockClient()
+	broker := NewTestBroker2(1)
+	worker := NewNodeWorkerWithClient("test-node-v2-failed", node, mockClient, broker)
+	defer worker.Shutdown()
+
+	cmd := TransitionPoCToValidatingCommandV2{}
+	result := cmd.Execute(context.Background(), worker)
+
+	assert.False(t, result.Succeeded, "Command should fail for FAILED node")
+	assert.Contains(t, result.Error, "FAILED", "Error should mention FAILED state")
+	assert.Equal(t, types.HardwareNodeStatus_FAILED, result.FinalStatus, "FinalStatus should remain FAILED")
 }
 
 // TestTransitionPoCToValidatingCommandV2_CancelledContext verifies that the command

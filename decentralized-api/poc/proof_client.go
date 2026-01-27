@@ -27,6 +27,7 @@ import (
 var (
 	ErrProofVerificationFailed = errors.New("proof verification failed")
 	ErrDuplicateNonces         = errors.New("duplicate nonces detected")
+	ErrIncompleteCoverage      = errors.New("response does not cover all requested leaf indices")
 )
 
 // ProofClient fetches and verifies MMR proofs from participant APIs.
@@ -165,6 +166,11 @@ func (c *ProofClient) FetchAndVerifyProofs(
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 
+	// Validate coverage: response must contain exactly the requested leaf indices
+	if err := validateLeafCoverage(req.LeafIndices, proofResp.Proofs); err != nil {
+		return nil, err
+	}
+
 	// Verify each proof
 	verified := make([]VerifiedArtifact, 0, len(proofResp.Proofs))
 	for _, item := range proofResp.Proofs {
@@ -219,6 +225,38 @@ func CheckDuplicateNonces(artifacts []VerifiedArtifact) error {
 		}
 		seen[a.Nonce] = struct{}{}
 	}
+	return nil
+}
+
+// validateLeafCoverage checks that the response covers exactly the requested leaf indices.
+// Returns error if there are missing indices or duplicates.
+func validateLeafCoverage(requested []uint32, proofs []ProofItem) error {
+	if len(proofs) != len(requested) {
+		return fmt.Errorf("%w: expected %d proofs, got %d", ErrIncompleteCoverage, len(requested), len(proofs))
+	}
+	if len(requested) == 0 {
+		return nil
+	}
+
+	// Build set of requested indices
+	requestedSet := make(map[uint32]struct{}, len(requested))
+	for _, idx := range requested {
+		requestedSet[idx] = struct{}{}
+	}
+
+	// Check each proof's leaf index
+	seen := make(map[uint32]struct{}, len(proofs))
+	for _, p := range proofs {
+		if _, duplicate := seen[p.LeafIndex]; duplicate {
+			return fmt.Errorf("%w: duplicate leaf index %d", ErrIncompleteCoverage, p.LeafIndex)
+		}
+		seen[p.LeafIndex] = struct{}{}
+
+		if _, ok := requestedSet[p.LeafIndex]; !ok {
+			return fmt.Errorf("%w: unexpected leaf index %d", ErrIncompleteCoverage, p.LeafIndex)
+		}
+	}
+
 	return nil
 }
 

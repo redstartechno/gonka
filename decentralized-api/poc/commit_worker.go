@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -282,9 +283,16 @@ func getWeightDistribution(distribution map[string]uint32, targetCount uint32) (
 
 	ratio := float64(targetCount) / float64(localSum)
 
+	keys := make([]string, 0, len(distribution))
+	for nodeId := range distribution {
+		keys = append(keys, nodeId)
+	}
+	sort.Strings(keys)
+
 	weights := make([]*inference.MLNodeWeight, 0, len(distribution))
 	var scaledSum uint32
-	for nodeId, count := range distribution {
+	for _, nodeId := range keys {
+		count := distribution[nodeId]
 		scaled := uint32(float64(count) * ratio)
 		weights = append(weights, &inference.MLNodeWeight{
 			NodeId: nodeId,

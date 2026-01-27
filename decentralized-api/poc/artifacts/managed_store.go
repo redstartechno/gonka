@@ -16,8 +16,14 @@ import (
 )
 
 // ManagedArtifactStore wraps per-stage ArtifactStores with automatic pruning.
-// - Creates separate directories for each poc_stage_start_block_height
-// - Automatically prunes old stores in background, keeping the newest N
+//
+// Lifecycle:
+//   - Short-lived stores, one per PoC stage (poc_stage_start_block_height)
+//   - Writes go only to the newest store (via GetOrCreateStore)
+//   - Reads happen from the newest store after writes complete
+//   - Old stores are pruned when count exceeds retainCount (default 10)
+//
+// The large retention buffer ensures pruned stores are "cold" with no active use.
 type ManagedArtifactStore struct {
 	mu          sync.RWMutex
 	baseDir     string

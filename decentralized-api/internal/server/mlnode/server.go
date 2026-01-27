@@ -13,7 +13,7 @@ type Server struct {
 	e             *echo.Echo
 	recorder      cosmos_client.CosmosMessageClient
 	broker        *broker.Broker
-	artifactStore *artifacts.ManagedArtifactStore // Optional: for off-chain PoC artifacts
+	artifactStore *artifacts.ManagedArtifactStore
 }
 
 // ServerOption configures optional Server dependencies.
@@ -26,7 +26,6 @@ func WithArtifactStore(store *artifacts.ManagedArtifactStore) ServerOption {
 	}
 }
 
-// TODO breacking changes: url path, support on mlnode side
 func NewServer(recorder cosmos_client.CosmosMessageClient, broker *broker.Broker, opts ...ServerOption) *Server {
 	e := echo.New()
 

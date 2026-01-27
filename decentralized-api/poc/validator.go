@@ -235,6 +235,7 @@ func (v *OffChainValidator) ValidateAll(pocStageStartBlockHeight int64, pocStart
 			defer wg.Done()
 			v.worker(
 				ctx,
+				cancel,
 				workerID,
 				workChan,
 				proofClient,
@@ -272,6 +273,7 @@ func (v *OffChainValidator) ValidateAll(pocStageStartBlockHeight int64, pocStart
 // Failed items are re-queued for retry instead of blocking on retries.
 func (v *OffChainValidator) worker(
 	ctx context.Context,
+	cancel context.CancelFunc,
 	workerID int,
 	workChan chan participantWork,
 	proofClient *ProofClient,
@@ -346,6 +348,7 @@ func (v *OffChainValidator) worker(
 			statsMu.Unlock()
 
 			if done {
+				cancel()
 				return
 			}
 		}
@@ -387,8 +390,8 @@ func (v *OffChainValidator) validateParticipant(
 	if err != nil {
 		logging.Warn("OffChainValidator: proof fetch/verify failed", types.PoC,
 			"participant", work.address, "attempt", work.attempt, "error", err)
-		// Proof verification failures are permanent - no point retrying
-		if errors.Is(err, ErrProofVerificationFailed) {
+		// Proof verification failures and incomplete coverage are permanent - no point retrying
+		if errors.Is(err, ErrProofVerificationFailed) || errors.Is(err, ErrIncompleteCoverage) {
 			return validateFailPermanent
 		}
 		// Transient error (network/timeout) - retry
@@ -452,15 +455,18 @@ func (v *OffChainValidator) validateParticipant(
 	return validateFailRetry
 }
 
-// sampleLeafIndices generates deterministic leaf indices for sampling.
+// sampleLeafIndices generates deterministic leaf indices using lazy Fisher-Yates.
+// Important: count comes from on-chain commits and can be very large - must stay O(sampleSize).
 func sampleLeafIndices(validatorPubKey string, blockHash string, blockHeight int64, count uint32, sampleSize int) []uint32 {
 	if count == 0 {
 		return nil
 	}
 
 	n := int(count)
+	if sampleSize <= 0 {
+		return nil
+	}
 	if sampleSize >= n {
-		// Return all indices
 		indices := make([]uint32, n)
 		for i := 0; i < n; i++ {
 			indices[i] = uint32(i)
@@ -468,7 +474,6 @@ func sampleLeafIndices(validatorPubKey string, blockHash string, blockHeight int
 		return indices
 	}
 
-	// Create deterministic seed
 	seedInput := fmt.Sprintf("%s:%s:%d", validatorPubKey, blockHash, blockHeight)
 	hash := sha256.Sum256([]byte(seedInput))
 	seed := int64(binary.BigEndian.Uint64(hash[:8]))
@@ -476,17 +481,27 @@ func sampleLeafIndices(validatorPubKey string, blockHash string, blockHeight int
 	source := rand.NewSource(seed)
 	rng := rand.New(source)
 
-	// Sample without replacement using Fisher-Yates partial shuffle
-	indices := make([]uint32, n)
-	for i := 0; i < n; i++ {
-		indices[i] = uint32(i)
+	// Lazy Fisher-Yates: track swaps instead of full array
+	swaps := make(map[uint32]uint32, sampleSize*2)
+	get := func(i uint32) uint32 {
+		if v, ok := swaps[i]; ok {
+			return v
+		}
+		return i
 	}
 
 	result := make([]uint32, sampleSize)
 	for i := 0; i < sampleSize; i++ {
 		j := i + rng.Intn(n-i)
-		indices[i], indices[j] = indices[j], indices[i]
-		result[i] = indices[i]
+		ii := uint32(i)
+		jj := uint32(j)
+
+		vi := get(ii)
+		vj := get(jj)
+		swaps[ii] = vj
+		swaps[jj] = vi
+
+		result[i] = vj
 	}
 
 	return result

@@ -180,11 +180,11 @@ func (k msgServer) MLNodeWeightDistribution(goCtx context.Context, msg *types.Ms
 		return nil, sdkerrors.Wrap(types.ErrIllegalState, "no store commit found for this stage")
 	}
 
-	var sum uint32
+	var sum uint64
 	for _, w := range msg.Weights {
-		sum += w.Weight
+		sum += uint64(w.Weight)
 	}
-	if sum != commit.Count {
+	if sum != uint64(commit.Count) {
 		return nil, sdkerrors.Wrap(types.ErrIllegalState,
 			fmt.Sprintf("weight sum %d does not match committed count %d", sum, commit.Count))
 	}

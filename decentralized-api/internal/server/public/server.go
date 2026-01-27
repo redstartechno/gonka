@@ -132,8 +132,8 @@ func NewServer(
 	// PoC proofs endpoint with IP rate limiting (100 req/min per IP)
 	pocProofsRateLimiter := echomw.RateLimiter(echomw.NewRateLimiterMemoryStoreWithConfig(
 		echomw.RateLimiterMemoryStoreConfig{
-			Rate:      100.0 / 60.0, // 100 requests per minute
-			Burst:     10,
+			Rate:      300.0 / 60.0, // 100 requests per minute
+			Burst:     30,
 			ExpiresIn: 3 * time.Minute,
 		},
 	))

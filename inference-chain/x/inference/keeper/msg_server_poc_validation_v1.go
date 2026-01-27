@@ -79,7 +79,9 @@ func (k msgServer) submitPocValidationV1(goCtx context.Context, msg *types.MsgSu
 		// Store validation using trigger_height as key
 		validation := toPoCValidationV1(msg, currentBlockHeight)
 		validation.PocStageStartBlockHeight = activeEvent.TriggerHeight // Use trigger_height as key
-		k.SetPoCValidation(ctx, *validation)
+		if err := k.SetPoCValidation(ctx, *validation); err != nil {
+			return nil, err
+		}
 		k.LogInfo("[SubmitPocValidation] Confirmation PoC validation stored", types.PoC,
 			"participant", msg.ParticipantAddress,
 			"validatorParticipant", msg.Creator,
@@ -132,7 +134,9 @@ func (k msgServer) submitPocValidationV1(goCtx context.Context, msg *types.MsgSu
 	}
 
 	validation := toPoCValidationV1(msg, currentBlockHeight)
-	k.SetPoCValidation(ctx, *validation)
+	if err := k.SetPoCValidation(ctx, *validation); err != nil {
+		return nil, err
+	}
 
 	return &types.MsgSubmitPocValidationResponse{}, nil
 }

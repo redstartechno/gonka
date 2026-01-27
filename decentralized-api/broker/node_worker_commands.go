@@ -301,6 +301,19 @@ func (c TransitionPoCToValidatingCommandV2) Execute(ctx context.Context, worker 
 		return result
 	}
 
+	// Validate node is in a state that can transition to POC/Validating.
+	// Accept only POC or INFERENCE (matching filterNodesForValidation criteria).
+	currentStatus := worker.node.State.CurrentStatus
+	if currentStatus != types.HardwareNodeStatus_POC && currentStatus != types.HardwareNodeStatus_INFERENCE {
+		result.Succeeded = false
+		result.Error = "cannot transition to POC/Validating: node is " + currentStatus.String()
+		result.FinalStatus = currentStatus
+		result.FinalPocStatus = worker.node.State.PocCurrentStatus
+		logging.Warn("[TransitionPoCToValidatingCommandV2] Rejecting transition due to invalid state", types.PoC,
+			"node_id", worker.nodeId, "current_status", currentStatus.String())
+		return result
+	}
+
 	// No network call - just transition broker state.
 	// The v2 orchestrator handles StopPowV2 and GenerateV2 validation requests.
 	result.Succeeded = true
