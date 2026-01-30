@@ -402,6 +402,10 @@ services:
   proxy:
     environment:
       - IS_TEST_NET={is_test_net}
+      - DISABLE_GONKA_API=false
+      - DISABLE_CHAIN_API=false
+      - DISABLE_CHAIN_RPC=false
+      - DISABLE_CHAIN_GRPC=false
   proxy-ssl:
     environment:
       - IS_TEST_NET={is_test_net}
@@ -491,6 +495,12 @@ def create_docker_compose_override(init_only=True, node_id=None):
       - INIT_ONLY=true
       - IS_GENESIS=true
       - COIN_DENOM=ngonka
+  proxy:
+    environment:
+      - DISABLE_GONKA_API=false
+      - DISABLE_CHAIN_API=false
+      - DISABLE_CHAIN_RPC=false
+      - DISABLE_CHAIN_GRPC=false
 """
     else:
         override_file = working_dir / "docker-compose.runtime-override.yml"
@@ -520,6 +530,12 @@ def create_docker_compose_override(init_only=True, node_id=None):
       - IS_GENESIS=true
       - GENESIS_SEEDS={genesis_seeds}
       - COIN_DENOM=ngonka
+  proxy:
+    environment:
+      - DISABLE_GONKA_API=false
+      - DISABLE_CHAIN_API=false
+      - DISABLE_CHAIN_RPC=false
+      - DISABLE_CHAIN_GRPC=false
 """
     
     with open(override_file, 'w') as f:
