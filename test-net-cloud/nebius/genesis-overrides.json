@@ -95,7 +95,7 @@
             "value": "25",
             "exponent": -1
           },
-          "model_id": "Qwen/Qwen2.5-7B-Instruct",
+          "model_id": "Qwen/Qwen3-4B-Instruct-2507",
           "seq_len": 256,
           "poc_v2_enabled": false,
           "confirmation_poc_v2_enabled": true,
