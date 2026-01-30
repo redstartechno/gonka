@@ -292,6 +292,16 @@ func (cm *ConfigManager) GetBandwidthParams() BandwidthParamsCache {
 	return cm.currentConfig.BandwidthParams
 }
 
+func (cm *ConfigManager) SetTransferAgentAccessCache(cache TransferAgentAccessCache) {
+	cm.mutex.Lock()
+	defer cm.mutex.Unlock()
+	cm.currentConfig.TransferAgentAccessCache = cache
+}
+
+func (cm *ConfigManager) GetTransferAgentAccessCache() TransferAgentAccessCache {
+	return cm.currentConfig.TransferAgentAccessCache
+}
+
 func (cm *ConfigManager) GetHeight() int64 {
 	return cm.currentConfig.CurrentHeight
 }
