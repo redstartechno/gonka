@@ -9,7 +9,7 @@ import (
 	"github.com/productscience/inference/x/inference/types"
 )
 
-const preservedModelId = "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8"
+const preservedModelId = "Qwen/Qwen3-4B-Instruct-2507"
 
 // allowedTransferAgents is the list of bech32 addresses allowed to act as Transfer Agents.
 // TODO: Fill in the actual addresses before deploying the upgrade.
