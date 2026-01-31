@@ -4,6 +4,7 @@ import (
 	"context"
 
 	upgradetypes "cosmossdk.io/x/upgrade/types"
+	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/cosmos/cosmos-sdk/types/module"
 	"github.com/productscience/inference/x/inference/keeper"
 	"github.com/productscience/inference/x/inference/types"
@@ -22,6 +23,33 @@ var allowedTransferAgents = []string{
 	"gonka1gndhek2h2y5849wf6tmw6gnw9qn4vysgljed0u",
 }
 
+var toRemoveFromParticipantAllowlist = []string{
+	"gonka1slnscxc26qm7vvpn5qs9yzq9n0l82r4ywkl054",
+	"gonka1u60q4n3ymcglvhglylchpyvc04kvvurl967mgk",
+	"gonka19m47kxgeecyvl4xll882zxwcc7hva5slfxnvq5",
+	"gonka1z4ldfav9tl7x3w9aqfry89zd0kt7sa2lhff6te",
+	"gonka1vttxzd68fur26l9lew5netz6wxnx7hmmzdkqrn",
+	"gonka1s5vtmnn8tqvqfh7gd9hv48kkt2t4mkh7s85zh6",
+	"gonka15ye48c3rp57hwt9t6tzc6h0t5sh88zvj0yznwn",
+	"gonka178p3vw9zxs885l4a29g3sep0v9uplfq4pzvmrq",
+	"gonka1l4vfzkwd555pvxqzr3ksphgwgv8xsh89ytmjp0",
+	"gonka1qmpm8tsynnfkqe9902dd6ny4lc5hvp8q7wkrpc",
+	"gonka1zv89w02sdfzwy74s9vcthk38dnfsw36s4h7s93",
+	"gonka199lgrq8l9xcqqnr0agajzl78c4dpfvwnsc4elm",
+	"gonka1fxdt48vp78uxa7apuuamv4clwafxagnjg9eulc",
+	"gonka1v5ggga7lslfg2e57m9anxud40v2s4t9dw8yj68",
+	"gonka1d0cekvf368psxff6ur7pl42vvs225rzu9a76nj",
+	"gonka1000rv0ddp9yk6djr4y29mt0gu3m4p8mg4kmjcv",
+	"gonka1000xjetteyu7gy726vnhdxq69y3meq04gvnk4d",
+	"gonka1000xmydnfvphwy4n5yww4ex6nwk9mqslf2gnhs",
+	"gonka1nkmwp905ka4dzvuwvdaudgjj7yjk8h5aslfw73",
+	"gonka14a0856a3q78pmesxpc946xm9nsj3f275l9f5pa",
+	"gonka1hkz4qdpl2z4zvlyt6mxfsx04yxfp7sjhnyu2xn",
+	"gonka1l44nacmpmt83kavvevmhlh8elspjtjn6wvwzm0",
+	"gonka1lecmns7dj5wm8f53pe6c8nueukqafknel2wt2m",
+	"gonka1lmgutdlel0fny79zvlsh9aw3c0dw75gtscka3g",
+}
+
 func CreateUpgradeHandler(
 	mm *module.Manager,
 	configurator module.Configurator,
@@ -38,6 +66,7 @@ func CreateUpgradeHandler(
 		setAllowedTransferAgents(ctx, k)
 		setParticipantAccessParams(ctx, k)
 		enablePocV2(ctx, k)
+		removeFromParticipantAllowlist(ctx, k)
 		resetPocSlotsForEffectiveEpoch(ctx, k)
 		resetPocSlotsInEpochGroupData(ctx, k)
 
@@ -147,6 +176,28 @@ func setParticipantAccessParams(ctx context.Context, k keeper.Keeper) {
 	k.LogInfo("set participant access params", types.Upgrades,
 		"new_participant_registration_start_height", params.ParticipantAccessParams.NewParticipantRegistrationStartHeight,
 		"participant_allowlist_until_block_height", params.ParticipantAccessParams.ParticipantAllowlistUntilBlockHeight)
+}
+
+func removeFromParticipantAllowlist(ctx context.Context, k keeper.Keeper) {
+	removedCount := 0
+	for _, addrStr := range toRemoveFromParticipantAllowlist {
+		addr, err := sdk.AccAddressFromBech32(addrStr)
+		if err != nil {
+			k.LogError("failed to parse address for allowlist removal", types.Upgrades,
+				"address", addrStr, "error", err)
+			continue
+		}
+
+		if err := k.ParticipantAllowListSet.Remove(ctx, addr); err != nil {
+			k.LogError("failed to remove address from participant allowlist", types.Upgrades,
+				"address", addrStr, "error", err)
+			continue
+		}
+		removedCount++
+	}
+
+	k.LogInfo("removed participants from allowlist", types.Upgrades,
+		"removed_count", removedCount, "total_requested", len(toRemoveFromParticipantAllowlist))
 }
 
 // resetPocSlotsForUpcomingEpoch clears POC_SLOT=true allocations for all nodes in the upcoming epoch.
