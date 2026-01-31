@@ -10,7 +10,7 @@ import (
 // Default enforced model for v0.2.9 upgrade
 const defaultEnforcedModelId = "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8"
 
-var defaultEnforcedModelArgs = []string{"--tensor-parallel-size", "4"}
+var defaultEnforcedModelArgs = []string{"--tensor-parallel-size", "4", "--max-model-len", "240000"}
 
 // getEnforcedModel returns the enforced model ID and args from env vars or defaults.
 // Returns empty string if enforcement is disabled (ENFORCED_MODEL_ID="").
