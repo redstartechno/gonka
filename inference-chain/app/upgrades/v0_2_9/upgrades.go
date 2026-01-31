@@ -111,6 +111,7 @@ func enablePocV2(ctx context.Context, k keeper.Keeper) {
 		return
 	}
 	params.EpochParams.InferenceValidationCutoff = 2
+	params.EpochParams.PocValidationDuration = 480
 
 	if err := k.SetParams(ctx, params); err != nil {
 		k.LogError("failed to set params with poc v2 enabled", types.Upgrades, "error", err)
