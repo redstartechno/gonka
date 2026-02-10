@@ -179,7 +179,7 @@ func TestReadRequestBody_NormalSize(t *testing.T) {
 	body := []byte(`{"model": "test", "messages": [{"role": "user", "content": "Hello"}]}`)
 	req := createTestRequest(body)
 
-	result, err := readRequestBody(req)
+	result, err := readRequestBody(req, nil)
 	require.NoError(t, err)
 	require.Equal(t, body, result)
 }
@@ -193,7 +193,7 @@ func TestReadRequestBody_ExceedsMaxSize(t *testing.T) {
 	}
 	req := createTestRequest(oversizedBody)
 
-	_, err := readRequestBody(req)
+	_, err := readRequestBody(req, nil)
 	require.Error(t, err)
 	// http.MaxBytesReader returns an error when limit is exceeded
 }
@@ -207,7 +207,7 @@ func TestReadRequestBody_ExactlyMaxSize(t *testing.T) {
 	}
 	req := createTestRequest(exactBody)
 
-	result, err := readRequestBody(req)
+	result, err := readRequestBody(req, nil)
 	require.NoError(t, err)
 	require.Len(t, result, MaxRequestBodySize)
 }
@@ -216,7 +216,7 @@ func TestReadRequestBody_ExactlyMaxSize(t *testing.T) {
 func TestReadRequestBody_EmptyBody(t *testing.T) {
 	req := createTestRequest([]byte{})
 
-	result, err := readRequestBody(req)
+	result, err := readRequestBody(req, nil)
 	require.NoError(t, err)
 	require.Empty(t, result)
 }

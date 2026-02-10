@@ -212,7 +212,7 @@ func cleanupExpiredAuthKeys(currentBlockHeight int64) {
 func (s *Server) postChat(ctx echo.Context) error {
 	logging.Debug("PostChat. Received request", types.Inferences, "path", ctx.Request().URL.Path)
 
-	chatRequest, err := readRequest(ctx.Request(), s.recorder.GetAccountAddress())
+	chatRequest, err := readRequest(ctx.Request(), ctx.Response().Writer, s.recorder.GetAccountAddress())
 	if err != nil {
 		return err
 	}
@@ -927,8 +927,8 @@ func getInferenceErrorMessage(resp *http.Response) string {
 	}
 }
 
-func readRequest(request *http.Request, transferAddress string) (*ChatRequest, error) {
-	body, err := readRequestBody(request)
+func readRequest(request *http.Request, writer http.ResponseWriter, transferAddress string) (*ChatRequest, error) {
+	body, err := readRequestBody(request, writer)
 	if err != nil {
 		logging.Error("Unable to read request body", types.Server, "error", err)
 		return nil, err
@@ -963,15 +963,15 @@ func readRequest(request *http.Request, transferAddress string) (*ChatRequest, e
 	}, nil
 }
 
-func readRequestBody(r *http.Request) ([]byte, error) {
+func readRequestBody(r *http.Request, writer http.ResponseWriter) ([]byte, error) {
 	// Limit request body size to prevent memory exhaustion attacks
-	r.Body = http.MaxBytesReader(nil, r.Body, MaxRequestBodySize)
+	r.Body = http.MaxBytesReader(writer, r.Body, MaxRequestBodySize)
+	defer r.Body.Close()
 
 	var buf bytes.Buffer
 	if _, err := io.Copy(&buf, r.Body); err != nil {
 		return nil, err
 	}
-	defer r.Body.Close()
 	return buf.Bytes(), nil
 }
 
