@@ -97,6 +97,7 @@ Key points:
 
 ### API hardening and reliability fixes
 * [PR #634](https://github.com/gonka-ai/gonka/pull/634): add request body size limits to reduce DoS risk.
+* [PR #727](https://github.com/gonka-ai/gonka/pull/727): follow-up for #634, pass response writer to `http.MaxBytesReader` and align tests.
 * [PR #638](https://github.com/gonka-ai/gonka/pull/638): fix unsafe type assertions in request processing.
 * [PR #644](https://github.com/gonka-ai/gonka/pull/644): avoid rewriting static config on each startup.
 * [PR #661](https://github.com/gonka-ai/gonka/pull/661): prevent API crash on short network drops.
