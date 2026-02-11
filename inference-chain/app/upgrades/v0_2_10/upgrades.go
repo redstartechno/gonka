@@ -81,6 +81,7 @@ func CreateUpgradeHandler(
 
 		setValidationSlots(ctx, k)
 		setPocNormalizationEnabled(ctx, k)
+		setPocTimingParams(ctx, k)
 
 		if err := distributeBountyRewards(ctx, k, distrKeeper); err != nil {
 			return nil, err
@@ -142,6 +143,45 @@ func setPocNormalizationEnabled(ctx context.Context, k keeper.Keeper) {
 	}
 
 	k.LogInfo("set poc normalization enabled", types.Upgrades, "poc_normalization_enabled", params.PocParams.PocNormalizationEnabled)
+}
+
+// setPocTimingParams updates PoC timing parameters:
+// - Reduces poc_stage_duration from 60 to 35 blocks
+// - Reduces poc_validation_duration from 480 to 240 blocks
+// - Scales weight_scale_factor proportionally from 0.262 to 0.449 to maintain same total weight
+func setPocTimingParams(ctx context.Context, k keeper.Keeper) {
+	params, err := k.GetParams(ctx)
+	if err != nil {
+		k.LogError("failed to get params during upgrade", types.Upgrades, "error", err)
+		return
+	}
+
+	if params.EpochParams == nil {
+		k.LogError("epoch params not initialized", types.Upgrades)
+		return
+	}
+	if params.PocParams == nil {
+		k.LogError("poc params not initialized", types.Upgrades)
+		return
+	}
+
+	// Update PoC timing: reduce from 60 to 35 blocks
+	params.EpochParams.PocStageDuration = 35
+	// Update validation duration: reduce from 480 to 240 blocks
+	params.EpochParams.PocValidationDuration = 240
+	// Scale weight factor proportionally: 0.262 * (60/35) ≈ 0.449
+	// Keeps total weight accumulation the same: 0.449 * 35 ≈ 0.262 * 60
+	params.PocParams.WeightScaleFactor = &types.Decimal{Value: 449, Exponent: -3}
+
+	if err := k.SetParams(ctx, params); err != nil {
+		k.LogError("failed to set poc timing params", types.Upgrades, "error", err)
+		return
+	}
+
+	k.LogInfo("set poc timing params", types.Upgrades,
+		"poc_stage_duration", params.EpochParams.PocStageDuration,
+		"poc_validation_duration", params.EpochParams.PocValidationDuration,
+		"weight_scale_factor", 0.449)
 }
 
 func distributeBountyRewards(ctx context.Context, k keeper.Keeper, distrKeeper distrkeeper.Keeper) error {
