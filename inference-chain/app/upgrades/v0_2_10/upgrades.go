@@ -87,18 +87,16 @@ var bountyRewards = []BountyReward{
 	{Address: "gonka1f0elpwnx7ezytdlck35003nz6qk8kzvurvnj4a", Amount: Gonka(2500)},
 
 	// PR review of upgrade v.0.2.8.
-	{Address: "gonka1ejkupq3cy6p8xd64ew2wlzveml86ckpzn9dl56", Amount: Gonka(2500)}, 
+	{Address: "gonka1ejkupq3cy6p8xd64ew2wlzveml86ckpzn9dl56", Amount: Gonka(2500)},
 
 	// PR review of upgrade v.0.2.8.
-	{Address: "gonka1zqss46r6jf6dhhyaa777kc2ppvjhn0ufkx4y57", Amount: Gonka(2500)}, 
+	{Address: "gonka1zqss46r6jf6dhhyaa777kc2ppvjhn0ufkx4y57", Amount: Gonka(2500)},
 
 	// PR review of upgrade v.0.2.9.
 	{Address: "gonka12jaf7m4eysyqt32mrgarum6z96vt55tckvcleq", Amount: Gonka(2500)},
 
 	// PR review of upgrade v.0.2.9.
 	{Address: "gonka18enyz7h6hh5zjveee5wnhkhrcexamfz0zdxxqe", Amount: Gonka(2500)},
-
-	
 }
 
 func CreateUpgradeHandler(
@@ -230,7 +228,7 @@ func setPocTimingParams(ctx context.Context, k keeper.Keeper) {
 // Adds --enable-auto-tool-choice and --tool-call-parser hermes for tool calling support.
 // Updates validation threshold from 0.970917 to 0.958.
 func updateQwenModel(ctx context.Context, k keeper.Keeper) {
-	modelID := "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8"
+	modelID := "Qwen/Qwen3-4B-Instruct-2507"
 
 	model, found := k.GetGovernanceModel(ctx, modelID)
 	if !found {
@@ -240,7 +238,7 @@ func updateQwenModel(ctx context.Context, k keeper.Keeper) {
 
 	// Add tool calling arguments
 	model.ModelArgs = []string{
-		"--max-model-len", "240000",
+		"--max-model-len", "14000",
 		"--enable-auto-tool-choice",
 		"--tool-call-parser", "hermes",
 	}
@@ -261,7 +259,7 @@ func updateQwenModel(ctx context.Context, k keeper.Keeper) {
 // The governance model update (updateQwenModel) handles future epochs, while this function
 // updates the already-frozen snapshot for the current epoch.
 func updateCurrentEpochModelSnapshot(ctx context.Context, k keeper.Keeper) {
-	modelID := "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8"
+	modelID := "Qwen/Qwen3-4B-Instruct-2507"
 
 	// Get current epoch index
 	currentEpochIndex, found := k.GetEffectiveEpochIndex(ctx)
@@ -288,7 +286,7 @@ func updateCurrentEpochModelSnapshot(ctx context.Context, k keeper.Keeper) {
 	}
 
 	epochGroupData.ModelSnapshot.ModelArgs = []string{
-		"--max-model-len", "240000",
+		"--max-model-len", "14000",
 		"--enable-auto-tool-choice",
 		"--tool-call-parser", "hermes",
 	}
@@ -312,7 +310,7 @@ func addPunishmentGraceEpoch(ctx context.Context, k keeper.Keeper) {
 	}
 
 	binomTestP0 := &types.Decimal{Value: 5, Exponent: -1} // 0.5
-	if err := k.AddPunishmentGraceEpoch(ctx, epochIndex, binomTestP0, 3000); err != nil {
+	if err := k.AddPunishmentGraceEpoch(ctx, epochIndex, binomTestP0, 200); err != nil {
 		k.LogError("failed to add grace epoch", types.Upgrades, "error", err)
 		return
 	}
