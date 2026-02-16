@@ -150,11 +150,8 @@ func (k *Keeper) SettleAccounts(ctx context.Context, currentEpochIndex uint64, p
 	// Check if this is a grace epoch and override BinomTestP0 if so
 	validationParams := params.ValidationParams
 	if validationParams == nil {
-		k.LogError("ValidationParams not found", types.Settle)
-		return fmt.Errorf(
-			"validationParams not found for epoch %d. Please ensure that the epochParams module is enabled and that the epochParams genesis state is set correctly",
-			currentEpochIndex,
-		)
+		validationParams = types.DefaultValidationParams()
+		k.LogWarn("ValidationParams not found, using default ones", types.Settle)
 	}
 
 	if graceParams, ok := k.GetPunishmentGraceEpoch(ctx, currentEpochIndex); ok && graceParams.BinomTestP0 != nil {
