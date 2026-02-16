@@ -117,6 +117,7 @@ func CreateUpgradeHandler(
 		setValidationSlots(ctx, k)
 		setPocNormalizationEnabled(ctx, k)
 		setPocTimingParams(ctx, k)
+		updateQwenModel(ctx, k)
 
 		if err := distributeBountyRewards(ctx, k, distrKeeper); err != nil {
 			return nil, err
@@ -217,6 +218,36 @@ func setPocTimingParams(ctx context.Context, k keeper.Keeper) {
 		"poc_stage_duration", params.EpochParams.PocStageDuration,
 		"poc_validation_duration", params.EpochParams.PocValidationDuration,
 		"weight_scale_factor", 0.449)
+}
+
+// updateQwenModel updates the Qwen model with tool calling arguments and increased threshold.
+// Adds --enable-auto-tool-choice and --tool-call-parser hermes for tool calling support.
+// Updates validation threshold from 0.970917 to 0.958.
+func updateQwenModel(ctx context.Context, k keeper.Keeper) {
+	modelID := "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8"
+
+	model, found := k.GetGovernanceModel(ctx, modelID)
+	if !found {
+		k.LogError("model not found during upgrade", types.Upgrades, "model_id", modelID)
+		return
+	}
+
+	// Add tool calling arguments
+	model.ModelArgs = []string{
+		"--max-model-len", "240000",
+		"--enable-auto-tool-choice",
+		"--tool-call-parser", "hermes",
+	}
+
+	// Update validation threshold from 0.970917 to 0.958
+	model.ValidationThreshold = &types.Decimal{Value: 958, Exponent: -3}
+
+	k.SetModel(ctx, model)
+
+	k.LogInfo("updated model", types.Upgrades,
+		"model_id", modelID,
+		"model_args", model.ModelArgs,
+		"validation_threshold", 0.958)
 }
 
 func distributeBountyRewards(ctx context.Context, k keeper.Keeper, distrKeeper distrkeeper.Keeper) error {
