@@ -208,9 +208,9 @@ func setPocTimingParams(ctx context.Context, k keeper.Keeper) {
 	params.EpochParams.PocValidationDuration = 10
 	// Deprecated: set to 0, nonce acceptance now ends at poc_generation_end
 	params.EpochParams.PocExchangeDuration = 0
-	// Scale weight factor proportionally: 0.262 * (60/35) ≈ 0.449
-	// Keeps total weight accumulation the same: 0.449 * 35 ≈ 0.262 * 60
-	params.PocParams.WeightScaleFactor = &types.Decimal{Value: 449, Exponent: -3}
+	// Scale weight factor proportionally: 0.262 * (48/35) ≈ 0.3593
+	// Keeps total weight accumulation the same: 0.3593 * 35 ≈ 0.262 * 48
+	params.PocParams.WeightScaleFactor = &types.Decimal{Value: 3593, Exponent: -4}
 
 	if err := k.SetParams(ctx, params); err != nil {
 		k.LogError("failed to set poc timing params", types.Upgrades, "error", err)

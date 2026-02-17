@@ -462,8 +462,8 @@ func (v *OffChainValidator) validateParticipant(
 	if err != nil {
 		logging.Warn("OffChainValidator: proof fetch/verify failed", types.PoC,
 			"participant", work.address, "attempt", work.attempt, "error", err)
-		// Proof verification failures and incomplete coverage are permanent - no point retrying
-		if errors.Is(err, ErrProofVerificationFailed) || errors.Is(err, ErrIncompleteCoverage) {
+		// Proof verification failures, incomplete coverage, and invalid vector data are permanent - no point retrying
+		if errors.Is(err, ErrProofVerificationFailed) || errors.Is(err, ErrIncompleteCoverage) || errors.Is(err, ErrInvalidVectorData) {
 			return validateFailPermanent
 		}
 		// Transient error (network/timeout) - retry
