@@ -63,6 +63,7 @@ var (
 	MLNodeWeightDistributionPrefix    = collections.NewPrefix(40)
 	PocV2EnabledEpochPrefix           = collections.NewPrefix(41)
 	PoCValidationSnapshotPrefix       = collections.NewPrefix(42)
+	PunishmentGraceEpochsPrefix       = collections.NewPrefix(43)
 	ParamsKey                         = []byte("p_inference")
 )
 

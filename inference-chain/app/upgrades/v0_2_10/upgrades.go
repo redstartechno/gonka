@@ -117,6 +117,9 @@ func CreateUpgradeHandler(
 		setValidationSlots(ctx, k)
 		setPocNormalizationEnabled(ctx, k)
 		setPocTimingParams(ctx, k)
+		updateQwenModel(ctx, k)
+		updateCurrentEpochModelSnapshot(ctx, k)
+		addPunishmentGraceEpoch(ctx, k)
 
 		if err := distributeBountyRewards(ctx, k, distrKeeper); err != nil {
 			return nil, err
@@ -184,6 +187,7 @@ func setPocNormalizationEnabled(ctx context.Context, k keeper.Keeper) {
 // - Reduces poc_stage_duration from 60 to 35 blocks
 // - Reduces poc_validation_duration from 480 to 240 blocks
 // - Scales weight_scale_factor proportionally from 0.262 to 0.449 to maintain same total weight
+// - Sets poc_exchange_duration to 0 (deprecated, acceptance now ends at poc_generation_end)
 func setPocTimingParams(ctx context.Context, k keeper.Keeper) {
 	params, err := k.GetParams(ctx)
 	if err != nil {
@@ -204,6 +208,8 @@ func setPocTimingParams(ctx context.Context, k keeper.Keeper) {
 	params.EpochParams.PocStageDuration = 35
 	// Update validation duration: reduce from 480 to 240 blocks
 	params.EpochParams.PocValidationDuration = 240
+	// Deprecated: set to 0, nonce acceptance now ends at poc_generation_end
+	params.EpochParams.PocExchangeDuration = 0
 	// Scale weight factor proportionally: 0.262 * (60/35) ≈ 0.449
 	// Keeps total weight accumulation the same: 0.449 * 35 ≈ 0.262 * 60
 	params.PocParams.WeightScaleFactor = &types.Decimal{Value: 449, Exponent: -3}
@@ -216,7 +222,101 @@ func setPocTimingParams(ctx context.Context, k keeper.Keeper) {
 	k.LogInfo("set poc timing params", types.Upgrades,
 		"poc_stage_duration", params.EpochParams.PocStageDuration,
 		"poc_validation_duration", params.EpochParams.PocValidationDuration,
+		"poc_exchange_duration", params.EpochParams.PocExchangeDuration,
 		"weight_scale_factor", 0.449)
+}
+
+// updateQwenModel updates the Qwen model with tool calling arguments and increased threshold.
+// Adds --enable-auto-tool-choice and --tool-call-parser hermes for tool calling support.
+// Updates validation threshold from 0.970917 to 0.958.
+func updateQwenModel(ctx context.Context, k keeper.Keeper) {
+	modelID := "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8"
+
+	model, found := k.GetGovernanceModel(ctx, modelID)
+	if !found {
+		k.LogError("model not found during upgrade", types.Upgrades, "model_id", modelID)
+		return
+	}
+
+	// Add tool calling arguments
+	model.ModelArgs = []string{
+		"--max-model-len", "240000",
+		"--enable-auto-tool-choice",
+		"--tool-call-parser", "hermes",
+	}
+
+	// Update validation threshold from 0.970917 to 0.958
+	model.ValidationThreshold = &types.Decimal{Value: 958, Exponent: -3}
+
+	k.SetModel(ctx, model)
+
+	k.LogInfo("updated model", types.Upgrades,
+		"model_id", modelID,
+		"model_args", model.ModelArgs,
+		"validation_threshold", 0.958)
+}
+
+// updateCurrentEpochModelSnapshot updates the ModelSnapshot in the current epoch's EpochGroupData.
+// This ensures API nodes get the new model args immediately without waiting for the next epoch.
+// The governance model update (updateQwenModel) handles future epochs, while this function
+// updates the already-frozen snapshot for the current epoch.
+func updateCurrentEpochModelSnapshot(ctx context.Context, k keeper.Keeper) {
+	modelID := "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8"
+
+	// Get current epoch index
+	currentEpochIndex, found := k.GetEffectiveEpochIndex(ctx)
+	if !found {
+		k.LogError("no current epoch found during snapshot update", types.Upgrades)
+		return
+	}
+
+	// Get the model subgroup's EpochGroupData
+	epochGroupData, found := k.GetEpochGroupData(ctx, currentEpochIndex, modelID)
+	if !found {
+		k.LogError("no epoch group data found for model", types.Upgrades,
+			"epoch_index", currentEpochIndex,
+			"model_id", modelID)
+		return
+	}
+
+	// Update the ModelSnapshot with new args
+	if epochGroupData.ModelSnapshot == nil {
+		k.LogError("model snapshot is nil in epoch group data", types.Upgrades,
+			"epoch_index", currentEpochIndex,
+			"model_id", modelID)
+		return
+	}
+
+	epochGroupData.ModelSnapshot.ModelArgs = []string{
+		"--max-model-len", "240000",
+		"--enable-auto-tool-choice",
+		"--tool-call-parser", "hermes",
+	}
+	epochGroupData.ModelSnapshot.ValidationThreshold = &types.Decimal{Value: 958, Exponent: -3}
+
+	// Save updated epoch group data
+	k.SetEpochGroupData(ctx, epochGroupData)
+
+	k.LogInfo("updated model snapshot in current epoch", types.Upgrades,
+		"epoch_index", currentEpochIndex,
+		"model_id", modelID,
+		"model_args", epochGroupData.ModelSnapshot.ModelArgs,
+		"validation_threshold", 0.958)
+}
+
+func addPunishmentGraceEpoch(ctx context.Context, k keeper.Keeper) {
+	epochIndex, found := k.GetEffectiveEpochIndex(ctx)
+	if !found {
+		k.LogError("no current epoch found", types.Upgrades)
+		return
+	}
+
+	binomTestP0 := &types.Decimal{Value: 5, Exponent: -1} // 0.5
+	if err := k.AddPunishmentGraceEpoch(ctx, epochIndex, binomTestP0, 3000); err != nil {
+		k.LogError("failed to add grace epoch", types.Upgrades, "error", err)
+		return
+	}
+	k.LogInfo("added grace epoch", types.Upgrades, "epoch", epochIndex)
 }
 
 func distributeBountyRewards(ctx context.Context, k keeper.Keeper, distrKeeper distrkeeper.Keeper) error {

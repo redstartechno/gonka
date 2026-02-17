@@ -10,6 +10,12 @@ The binary versions will be updated via an on-chain upgrade proposal. For more i
 
 Existing hosts are **not** required to upgrade their `api` and `node` containers. The updated container versions are intended for new hosts who join after the on-chain upgrade is complete.
 
+To apply the new vLLM model parameters, mlnode must be restarted after the on-chain upgrade. The safest approach is:
+
+```
+docker restart join-mlnode-1
+```
+
 ## Proposed Process
 
 1. Active hosts review this proposal on GitHub.
@@ -31,6 +37,7 @@ The on-chain migration logic is defined in [`upgrades.go`](https://github.com/go
 Migrations:
 - **Validation slots default**: explicitly sets `PocParams.ValidationSlots=0` during migration. This keeps existing O(N^2) validation behavior after upgrade until sampling is enabled by governance parameter update.
 - **PoC normalization default**: explicitly sets `PocParams.PocNormalizationEnabled=true` during migration to enable time-based weight normalization.
+- **Model parameter update**: Updates `Qwen/Qwen3-235B-A22B-Instruct-2507-FP8` with tool calling args (`--enable-auto-tool-choice`, `--tool-call-parser hermes`) and validation threshold `0.958`.
 
 ## PoC Validation Sampling Optimization
 
@@ -55,6 +62,13 @@ Key points:
 - Applies to both regular PoC and confirmation PoC weight calculations.
 - Enabled by default in this upgrade (`PocNormalizationEnabled=true`).
 
+## Upgrade Grace Period
+
+To ensure a smooth upgrade transition:
+- Confirmation PoC will not be triggered for the first 3000 blocks (~5 hours) after upgrade.
+- Miss/invalid punishment rates are relaxed for the entire grace epoch (binom_test_p0 set to 0.5).
+- Regular PoC operates normally during the grace period.
+
 ## Changes
 
 ### [PR #710](https://github.com/gonka-ai/gonka/pull/710) PoC Validation Sampling Optimization
@@ -67,6 +81,12 @@ Key points:
 * Introduces `PocNormalizationEnabled` in PoC params and uses validation snapshot timestamps to compute normalization factor.
 * Integrates normalization into both regular PoC and confirmation PoC weight calculations.
 * Upgrade handler enables normalization by default for `v0.2.10`.
+
+### [PR #767](https://github.com/gonka-ai/gonka/pull/767) Upgrade grace period, tool calling, and PoC timing fix
+* Adds grace epoch protection for the upgrade epoch: extended CPoC window (3000 blocks) and relaxed miss/invalid thresholds.
+* Updates Qwen model with tool calling support (`--enable-auto-tool-choice`, `--tool-call-parser hermes`).
+* Adjusts validation threshold from 0.970917 to 0.958.
+* Deprecates `poc_exchange_duration` parameter (set to 0 in upgrade). API artifact acceptance now aligns with chain exchange windows using explicit block height checks instead of relying on phase alone. Fixes a gap where chain accepted nonces longer than API.
 
 ### [PR #708](https://github.com/gonka-ai/gonka/pull/708) IBC Upgrade to v8.7.0
 * Upgrades IBC stack to v8.7.0.

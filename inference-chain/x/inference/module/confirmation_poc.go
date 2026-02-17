@@ -107,6 +107,11 @@ func (am AppModule) checkConfirmationPoCTrigger(
 	if upgradeProtectionWindow <= 0 {
 		upgradeProtectionWindow = 500 // Default to 500 blocks if not set
 	}
+	// Check if current epoch is a grace epoch with extended protection window
+	if graceParams, ok := am.keeper.GetPunishmentGraceEpoch(ctx, epochContext.EpochIndex); ok && graceParams.UpgradeProtectionWindow > 0 {
+		upgradeProtectionWindow = graceParams.UpgradeProtectionWindow
+		am.LogDebug("using grace UpgradeProtectionWindow", types.PoC, "epoch", epochContext.EpochIndex, "window", upgradeProtectionWindow)
+	}
 	hasUpgrade, reason, err := am.keeper.HasUpgradeInWindow(ctx, blockHeight, upgradeProtectionWindow)
 	if err != nil {
 		return fmt.Errorf("failed to check upgrade window: %w", err)
