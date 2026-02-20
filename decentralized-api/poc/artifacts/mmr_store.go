@@ -25,11 +25,13 @@ var (
 	ErrCapacityExceeded    = errors.New("store capacity exceeded")
 )
 
-// ArtifactStore provides append-only storage for PoC artifacts with MMR commitments.
+var _ ArtifactStore = (*MMRArtifactStore)(nil)
+
+// MMRArtifactStore provides append-only storage for PoC artifacts with MMR commitments.
 //
 // Uses single file on disk + in-memory state (offsets, MMR, nonce map).
 // On restart, state is rebuilt by reading the data file (~2-3 sec for 1M artifacts, 1 cpu core).
-type ArtifactStore struct {
+type MMRArtifactStore struct {
 	mu     sync.RWMutex
 	dir    string
 	closed bool
@@ -57,7 +59,8 @@ type bufferedArtifact struct {
 	nodeId string
 }
 
-func Open(dir string) (*ArtifactStore, error) {
+// Open opens or creates an MMR artifact store in the given directory.
+func Open(dir string) (*MMRArtifactStore, error) {
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return nil, fmt.Errorf("create dir: %w", err)
 	}
@@ -76,7 +79,7 @@ func Open(dir string) (*ArtifactStore, error) {
 		return nil, fmt.Errorf("open nodes file: %w", err)
 	}
 
-	s := &ArtifactStore{
+	s := &MMRArtifactStore{
 		dir:               dir,
 		dataFile:          dataFile,
 		nodesFile:         nodesFile,
@@ -97,7 +100,7 @@ func Open(dir string) (*ArtifactStore, error) {
 	return s, nil
 }
 
-func (s *ArtifactStore) recover() error {
+func (s *MMRArtifactStore) recover() error {
 	info, err := s.dataFile.Stat()
 	if err != nil {
 		return fmt.Errorf("stat data file: %w", err)
@@ -154,7 +157,7 @@ func (s *ArtifactStore) recover() error {
 	return nil
 }
 
-func (s *ArtifactStore) recoverNodeCounts() error {
+func (s *MMRArtifactStore) recoverNodeCounts() error {
 	info, err := s.nodesFile.Stat()
 	if err != nil {
 		return fmt.Errorf("stat nodes file: %w", err)
@@ -183,12 +186,12 @@ func (s *ArtifactStore) recoverNodeCounts() error {
 
 // Add appends an artifact if nonce is not already in the store.
 // Deprecated: Use AddWithNode to track per-node distribution.
-func (s *ArtifactStore) Add(nonce int32, vector []byte) error {
+func (s *MMRArtifactStore) Add(nonce int32, vector []byte) error {
 	return s.AddWithNode(nonce, vector, "")
 }
 
 // AddWithNode appends an artifact and tracks which node contributed it.
-func (s *ArtifactStore) AddWithNode(nonce int32, vector []byte, nodeId string) error {
+func (s *MMRArtifactStore) AddWithNode(nonce int32, vector []byte, nodeId string) error {
 	leafHash := hashLeaf(encodeLeaf(nonce, vector))
 
 	s.mu.Lock()
@@ -220,7 +223,7 @@ func (s *ArtifactStore) AddWithNode(nonce int32, vector []byte, nodeId string) e
 	return nil
 }
 
-func (s *ArtifactStore) Flush() error {
+func (s *MMRArtifactStore) Flush() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -232,7 +235,7 @@ func (s *ArtifactStore) Flush() error {
 }
 
 // flushLocked flushes buffered artifacts to disk. Caller must hold s.mu.
-func (s *ArtifactStore) flushLocked() error {
+func (s *MMRArtifactStore) flushLocked() error {
 	if len(s.buffer) == 0 {
 		return nil
 	}
@@ -272,7 +275,7 @@ func (s *ArtifactStore) flushLocked() error {
 	return nil
 }
 
-func (s *ArtifactStore) flushNodeCountsLocked() error {
+func (s *MMRArtifactStore) flushNodeCountsLocked() error {
 	// Copy current counts to flushed
 	for k, v := range s.nodeCounts {
 		s.flushedNodeCounts[k] = v
@@ -299,7 +302,7 @@ func (s *ArtifactStore) flushNodeCountsLocked() error {
 }
 
 // GetRoot returns the current MMR root hash (32 bytes), or nil if empty.
-func (s *ArtifactStore) GetRoot() []byte {
+func (s *MMRArtifactStore) GetRoot() []byte {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -314,7 +317,7 @@ func (s *ArtifactStore) GetRoot() []byte {
 // This enables snapshot binding validation: callers can verify that a
 // (root_hash, count) pair matches the store's historical state.
 // Returns nil if snapshotCount is 0, error if snapshotCount exceeds current count.
-func (s *ArtifactStore) GetRootAt(snapshotCount uint32) ([]byte, error) {
+func (s *MMRArtifactStore) GetRootAt(snapshotCount uint32) ([]byte, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -335,7 +338,7 @@ func (s *ArtifactStore) GetRootAt(snapshotCount uint32) ([]byte, error) {
 
 // GetFlushedRoot returns the root and count of ONLY persisted artifacts.
 // Safe to report externally - survives process crashes.
-func (s *ArtifactStore) GetFlushedRoot() (count uint32, root []byte) {
+func (s *MMRArtifactStore) GetFlushedRoot() (count uint32, root []byte) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -346,14 +349,14 @@ func (s *ArtifactStore) GetFlushedRoot() (count uint32, root []byte) {
 	return s.flushedLeafCount, bagPeaks(s.mmrNodes, s.flushedLeafCount)
 }
 
-func (s *ArtifactStore) Count() uint32 {
+func (s *MMRArtifactStore) Count() uint32 {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.nextLeafIndex
 }
 
 // GetNodeDistribution returns a copy of the flushed node distribution.
-func (s *ArtifactStore) GetNodeDistribution() map[string]uint32 {
+func (s *MMRArtifactStore) GetNodeDistribution() map[string]uint32 {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -366,7 +369,7 @@ func (s *ArtifactStore) GetNodeDistribution() map[string]uint32 {
 
 // GetNodeCounts returns a copy of the current (unflushed) node distribution.
 // Useful for logging/debugging to see real-time artifact counts per node.
-func (s *ArtifactStore) GetNodeCounts() map[string]uint32 {
+func (s *MMRArtifactStore) GetNodeCounts() map[string]uint32 {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -377,7 +380,7 @@ func (s *ArtifactStore) GetNodeCounts() map[string]uint32 {
 	return result
 }
 
-func (s *ArtifactStore) GetArtifact(leafIndex uint32) (nonce int32, vector []byte, err error) {
+func (s *MMRArtifactStore) GetArtifact(leafIndex uint32) (nonce int32, vector []byte, err error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -406,7 +409,7 @@ func (s *ArtifactStore) GetArtifact(leafIndex uint32) (nonce int32, vector []byt
 }
 
 // GetProof generates a merkle proof for leafIndex at snapshotCount.
-func (s *ArtifactStore) GetProof(leafIndex uint32, snapshotCount uint32) ([][]byte, error) {
+func (s *MMRArtifactStore) GetProof(leafIndex uint32, snapshotCount uint32) ([][]byte, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -425,7 +428,7 @@ func (s *ArtifactStore) GetProof(leafIndex uint32, snapshotCount uint32) ([][]by
 	return generateProof(s.mmrNodes, leafIndex, snapshotCount)
 }
 
-func (s *ArtifactStore) Close() error {
+func (s *MMRArtifactStore) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
