@@ -36,8 +36,7 @@ type MMRArtifactStore struct {
 	dir    string
 	closed bool
 
-	dataFile  *os.File // artifacts.data: [LE32 len][LE32 nonce][vector]...
-	nodesFile *os.File // nodes.data: JSON map of node_id -> count
+	dataFile *os.File // artifacts.data: [LE32 len][LE32 nonce][vector]...
 
 	buffer           []bufferedArtifact
 	offsets          []uint64
@@ -66,23 +65,15 @@ func Open(dir string) (*MMRArtifactStore, error) {
 	}
 
 	dataPath := filepath.Join(dir, "artifacts.data")
-	nodesPath := filepath.Join(dir, "nodes.json")
 
 	dataFile, err := os.OpenFile(dataPath, os.O_RDWR|os.O_CREATE, 0644)
 	if err != nil {
 		return nil, fmt.Errorf("open data file: %w", err)
 	}
 
-	nodesFile, err := os.OpenFile(nodesPath, os.O_RDWR|os.O_CREATE, 0644)
-	if err != nil {
-		dataFile.Close()
-		return nil, fmt.Errorf("open nodes file: %w", err)
-	}
-
 	s := &MMRArtifactStore{
 		dir:               dir,
 		dataFile:          dataFile,
-		nodesFile:         nodesFile,
 		buffer:            make([]bufferedArtifact, 0, 1024),
 		offsets:           make([]uint64, 0, 1024),
 		nonceToLeafIndex:  make(map[int32]uint32),
@@ -93,7 +84,6 @@ func Open(dir string) (*MMRArtifactStore, error) {
 
 	if err := s.recover(); err != nil {
 		s.dataFile.Close()
-		s.nodesFile.Close()
 		return nil, fmt.Errorf("recover: %w", err)
 	}
 
@@ -158,20 +148,26 @@ func (s *MMRArtifactStore) recover() error {
 }
 
 func (s *MMRArtifactStore) recoverNodeCounts() error {
-	info, err := s.nodesFile.Stat()
+	nodesPath := filepath.Join(s.dir, "nodes.json")
+
+	f, err := os.Open(nodesPath)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("open nodes file: %w", err)
+	}
+	defer f.Close()
+
+	info, err := f.Stat()
 	if err != nil {
 		return fmt.Errorf("stat nodes file: %w", err)
 	}
-
 	if info.Size() == 0 {
 		return nil
 	}
 
-	if _, err := s.nodesFile.Seek(0, io.SeekStart); err != nil {
-		return fmt.Errorf("seek nodes file: %w", err)
-	}
-
-	decoder := json.NewDecoder(s.nodesFile)
+	decoder := json.NewDecoder(f)
 	if err := decoder.Decode(&s.flushedNodeCounts); err != nil {
 		return fmt.Errorf("decode nodes file: %w", err)
 	}
@@ -281,21 +277,35 @@ func (s *MMRArtifactStore) flushNodeCountsLocked() error {
 		s.flushedNodeCounts[k] = v
 	}
 
-	// Truncate and rewrite
-	if err := s.nodesFile.Truncate(0); err != nil {
-		return fmt.Errorf("truncate nodes file: %w", err)
-	}
-	if _, err := s.nodesFile.Seek(0, io.SeekStart); err != nil {
-		return fmt.Errorf("seek nodes file: %w", err)
+	nodesPath := filepath.Join(s.dir, "nodes.json")
+	tmpPath := nodesPath + ".tmp"
+
+	f, err := os.Create(tmpPath)
+	if err != nil {
+		return fmt.Errorf("create temp nodes file: %w", err)
 	}
 
-	encoder := json.NewEncoder(s.nodesFile)
+	encoder := json.NewEncoder(f)
 	if err := encoder.Encode(s.flushedNodeCounts); err != nil {
+		f.Close()
+		os.Remove(tmpPath)
 		return fmt.Errorf("encode nodes file: %w", err)
 	}
 
-	if err := s.nodesFile.Sync(); err != nil {
+	if err := f.Sync(); err != nil {
+		f.Close()
+		os.Remove(tmpPath)
 		return fmt.Errorf("sync nodes file: %w", err)
+	}
+
+	if err := f.Close(); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("close temp nodes file: %w", err)
+	}
+
+	if err := os.Rename(tmpPath, nodesPath); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("rename nodes file: %w", err)
 	}
 
 	return nil
@@ -449,10 +459,6 @@ func (s *MMRArtifactStore) Close() error {
 
 	if err := s.dataFile.Close(); err != nil {
 		return fmt.Errorf("close data file: %w", err)
-	}
-
-	if err := s.nodesFile.Close(); err != nil {
-		return fmt.Errorf("close nodes file: %w", err)
 	}
 
 	return nil

@@ -183,12 +183,12 @@ Reuse current `artifacts.data` format - artifacts stored in arrival order. On lo
 ```
 Per PoC stage directory:
   artifacts.data    - [len][nonce][vector]... in arrival order (reuse current format!)
-  roots.json        - {count: root_hash} for committed snapshots
+  nodes.json        - {node_id: count} for ML node attribution (atomic writes)
 ```
 
-**Critical: roots.json writes must be ATOMIC** (write to temp file, then rename). This is the source of truth for what was committed on-chain.
-
 Arrival-order is implicit in `artifacts.data` - no separate nonces file needed.
+
+Root hashes are computed on demand from tree state - no separate roots file needed. The `flushedRoots` in-memory cache stores roots at flush boundaries for fast lookup.
 
 ### Snapshots
 
@@ -196,7 +196,7 @@ Arrival-order is implicit in `artifacts.data` - no separate nonces file needed.
 
 **Approach**:
 - Snapshot at count N = SMST built from first N artifacts in `artifacts.data`
-- `GetRootAt(count)`: O(1) lookup in `roots.json`
+- `GetRootAt(count)`: O(1) lookup in `flushedRoots` cache, or rebuild tree
 - `GetProof(index, count)`: rebuild SMST from `artifacts[0:count]`, generate proof
 
 **Rebuild cost**: ~6s for 5M. Mitigations:

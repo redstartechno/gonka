@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"sync"
@@ -19,13 +20,12 @@ type SMSTArtifactStore struct {
 	dir    string
 	closed bool
 
-	dataFile  *os.File
-	nodesFile *os.File
+	dataFile *os.File
 
-	buffer         []bufferedArtifact
-	offsets        []uint64          // arrival order -> disk offset
-	nonceToOffset  map[int32]uint64  // nonce -> disk offset (for fast lookup)
-	smst           *SMST
+	buffer        []bufferedArtifact
+	offsets       []uint64         // arrival order -> disk offset
+	nonceToOffset map[int32]uint64 // nonce -> disk offset (for fast lookup)
+	smst          *SMST
 
 	flushedLeafCount  uint32
 	flushedDataOffset uint64
@@ -47,23 +47,15 @@ func OpenSMST(dir string) (*SMSTArtifactStore, error) {
 	}
 
 	dataPath := filepath.Join(dir, "artifacts.data")
-	nodesPath := filepath.Join(dir, "nodes.json")
 
 	dataFile, err := os.OpenFile(dataPath, os.O_RDWR|os.O_CREATE, 0644)
 	if err != nil {
 		return nil, fmt.Errorf("open data file: %w", err)
 	}
 
-	nodesFile, err := os.OpenFile(nodesPath, os.O_RDWR|os.O_CREATE, 0644)
-	if err != nil {
-		dataFile.Close()
-		return nil, fmt.Errorf("open nodes file: %w", err)
-	}
-
 	s := &SMSTArtifactStore{
 		dir:               dir,
 		dataFile:          dataFile,
-		nodesFile:         nodesFile,
 		buffer:            make([]bufferedArtifact, 0, 1024),
 		offsets:           make([]uint64, 0, 1024),
 		nonceToOffset:     make(map[int32]uint64),
@@ -75,7 +67,6 @@ func OpenSMST(dir string) (*SMSTArtifactStore, error) {
 
 	if err := s.recover(); err != nil {
 		s.dataFile.Close()
-		s.nodesFile.Close()
 		return nil, fmt.Errorf("recover: %w", err)
 	}
 
@@ -138,20 +129,26 @@ func (s *SMSTArtifactStore) recover() error {
 }
 
 func (s *SMSTArtifactStore) recoverNodeCounts() error {
-	info, err := s.nodesFile.Stat()
+	nodesPath := filepath.Join(s.dir, "nodes.json")
+
+	f, err := os.Open(nodesPath)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("open nodes file: %w", err)
+	}
+	defer f.Close()
+
+	info, err := f.Stat()
 	if err != nil {
 		return fmt.Errorf("stat nodes file: %w", err)
 	}
-
 	if info.Size() == 0 {
 		return nil
 	}
 
-	if _, err := s.nodesFile.Seek(0, io.SeekStart); err != nil {
-		return fmt.Errorf("seek nodes file: %w", err)
-	}
-
-	decoder := json.NewDecoder(s.nodesFile)
+	decoder := json.NewDecoder(f)
 	if err := decoder.Decode(&s.flushedNodeCounts); err != nil {
 		return fmt.Errorf("decode nodes file: %w", err)
 	}
@@ -255,20 +252,35 @@ func (s *SMSTArtifactStore) flushNodeCountsLocked() error {
 		s.flushedNodeCounts[k] = v
 	}
 
-	if err := s.nodesFile.Truncate(0); err != nil {
-		return fmt.Errorf("truncate nodes file: %w", err)
-	}
-	if _, err := s.nodesFile.Seek(0, io.SeekStart); err != nil {
-		return fmt.Errorf("seek nodes file: %w", err)
+	nodesPath := filepath.Join(s.dir, "nodes.json")
+	tmpPath := nodesPath + ".tmp"
+
+	f, err := os.Create(tmpPath)
+	if err != nil {
+		return fmt.Errorf("create temp nodes file: %w", err)
 	}
 
-	encoder := json.NewEncoder(s.nodesFile)
+	encoder := json.NewEncoder(f)
 	if err := encoder.Encode(s.flushedNodeCounts); err != nil {
+		f.Close()
+		os.Remove(tmpPath)
 		return fmt.Errorf("encode nodes file: %w", err)
 	}
 
-	if err := s.nodesFile.Sync(); err != nil {
+	if err := f.Sync(); err != nil {
+		f.Close()
+		os.Remove(tmpPath)
 		return fmt.Errorf("sync nodes file: %w", err)
+	}
+
+	if err := f.Close(); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("close temp nodes file: %w", err)
+	}
+
+	if err := os.Rename(tmpPath, nodesPath); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("rename nodes file: %w", err)
 	}
 
 	return nil
@@ -482,15 +494,22 @@ func (s *SMSTArtifactStore) rebuildTreeAt(count uint32) *SMST {
 		flushedToRead = s.flushedLeafCount
 	}
 
+	var skipped uint32
 	for i := uint32(0); i < flushedToRead; i++ {
 		offset := s.offsets[i]
 		nonce, vector, _, err := readArtifactAt(s.dataFile, int64(offset))
 		if err != nil {
+			skipped++
 			continue
 		}
 		leafData := encodeLeaf(nonce, vector)
 		leafHash := smstHashLeaf(leafData)
-		tree.Insert(nonce, leafHash)
+		if _, err := tree.Insert(nonce, leafHash); err != nil {
+			log.Printf("[WARN] SMST rebuildTreeAt: insert failed for nonce %d: %v (possible data corruption)", nonce, err)
+		}
+	}
+	if skipped > 0 {
+		log.Printf("[WARN] SMST rebuildTreeAt: skipped %d/%d artifacts due to read errors", skipped, flushedToRead)
 	}
 
 	// Read remaining from buffer if needed
@@ -539,10 +558,6 @@ func (s *SMSTArtifactStore) Close() error {
 
 	if err := s.dataFile.Close(); err != nil {
 		return fmt.Errorf("close data file: %w", err)
-	}
-
-	if err := s.nodesFile.Close(); err != nil {
-		return fmt.Errorf("close nodes file: %w", err)
 	}
 
 	return nil
