@@ -129,13 +129,15 @@ func DecodeSMSTProof(data []byte) ([]SMSTProofElement, error) {
 }
 
 // DecodeProofElements decodes proof from slice format ([][]byte where each is 36 bytes).
+// Returns nil if any element is malformed (not exactly 36 bytes).
 func DecodeProofElements(proof [][]byte) []SMSTProofElement {
 	elements := make([]SMSTProofElement, len(proof))
 	for i, data := range proof {
-		if len(data) >= 36 {
-			elements[i].SiblingHash = data[:32]
-			elements[i].SiblingCount = binary.LittleEndian.Uint32(data[32:36])
+		if len(data) != 36 {
+			return nil
 		}
+		elements[i].SiblingHash = data[:32]
+		elements[i].SiblingCount = binary.LittleEndian.Uint32(data[32:36])
 	}
 	return elements
 }
@@ -149,5 +151,38 @@ func VerifySMSTProofSlice(rootHash []byte, count uint32, nonce int32, leafData [
 	}
 
 	elements := DecodeProofElements(proof)
+	if elements == nil {
+		return false
+	}
 	return VerifySMSTProofWithCounts(rootHash, count, nonce, leafData, elements)
+}
+
+// VerifySMSTProofWithDenseIndex verifies an SMST proof and checks that the nonce
+// is at the claimed dense index position. The sibling counts in the proof are
+// committed by the root hash, making the index binding cryptographically sound.
+func VerifySMSTProofWithDenseIndex(rootHash []byte, count uint32, denseIndex uint32, nonce int32, leafData []byte, proof [][]byte) bool {
+	if len(proof) == 0 || denseIndex >= count {
+		return false
+	}
+
+	elements := DecodeProofElements(proof)
+	if elements == nil {
+		return false
+	}
+
+	if !VerifySMSTProofWithCounts(rootHash, count, nonce, leafData, elements) {
+		return false
+	}
+
+	depth := len(elements)
+	path := smstNoncePath(nonce, depth)
+
+	computedIndex := uint32(0)
+	for i := 0; i < depth; i++ {
+		if path[i] {
+			computedIndex += elements[i].SiblingCount
+		}
+	}
+
+	return computedIndex == denseIndex
 }

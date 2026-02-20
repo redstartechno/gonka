@@ -472,7 +472,9 @@ func (v *OffChainValidator) validateParticipant(
 		return validateFailRetry
 	}
 
-	// Check for duplicate nonces (fraud) - permanent failure
+	// Check for duplicate nonces in response (defense-in-depth).
+	// SMST proofs with index-binding structurally prevent cross-index duplication,
+	// but this guards against a malformed response returning the same artifact twice.
 	if err := CheckDuplicateNonces(verified); err != nil {
 		logging.Warn("OffChainValidator: duplicate nonces detected (fraud)", types.PoC,
 			"participant", work.address, "error", err)

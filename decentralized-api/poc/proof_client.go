@@ -200,13 +200,11 @@ func (c *ProofClient) FetchAndVerifyProofs(
 			proofHashes[i] = hash
 		}
 
-		// Build leaf data (same format as stored: nonce(LE32) || vector)
 		leafData := buildLeafData(item.NonceValue, vectorBytes)
 
-		// Verify SMST proof
-		if !artifacts.VerifySMSTProofSlice(req.RootHash, req.Count, item.NonceValue, leafData, proofHashes) {
+		if !artifacts.VerifySMSTProofWithDenseIndex(req.RootHash, req.Count, item.LeafIndex, item.NonceValue, leafData, proofHashes) {
 			logging.Warn("SMST proof verification failed", types.PoC,
-				"participant", req.ParticipantAddress, "leafIndex", item.LeafIndex)
+				"participant", req.ParticipantAddress, "leafIndex", item.LeafIndex, "nonce", item.NonceValue)
 			return nil, fmt.Errorf("%w: leaf %d", ErrProofVerificationFailed, item.LeafIndex)
 		}
 

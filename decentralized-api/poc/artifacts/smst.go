@@ -179,34 +179,6 @@ func (s *SMST) pathToNonce(path []bool) int32 {
 	return int32(n)
 }
 
-// GetProofByNonce generates a proof for a specific nonce.
-func (s *SMST) GetProofByNonce(nonce int32) ([][]byte, error) {
-	if !s.hasNonce[nonce] {
-		return nil, ErrLeafIndexOutOfRange
-	}
-
-	path := s.noncePath(nonce)
-	proof := make([][]byte, 0, s.depth)
-	s.collectProof(s.root, path, 0, &proof)
-
-	return proof, nil
-}
-
-func (s *SMST) collectProof(node *smstNode, path []bool, level int, proof *[][]byte) {
-	if level == s.depth || node == nil {
-		return
-	}
-
-	goRight := path[level]
-	if goRight {
-		*proof = append(*proof, s.nodeHash(node.left, level+1))
-		s.collectProof(node.right, path, level+1, proof)
-	} else {
-		*proof = append(*proof, s.nodeHash(node.right, level+1))
-		s.collectProof(node.left, path, level+1, proof)
-	}
-}
-
 // Count returns the number of leaves in the tree.
 func (s *SMST) Count() uint32 {
 	return s.leafCount
@@ -253,23 +225,33 @@ func (s *SMST) expandDepth(newDepth int) {
 		return
 	}
 
+	// Precompute empty hashes for new depths
 	for i := s.depth + 1; i <= newDepth; i++ {
 		s.emptyHash = append(s.emptyHash, smstHashNode(s.emptyHash[i-1], s.emptyHash[i-1], 0))
 	}
 
-	diff := newDepth - s.depth
+	// Update depth first so nodeHash uses correct empty hash indices
+	oldDepth := s.depth
+	s.depth = newDepth
+
+	// Wrap existing tree: old root becomes left child at each level.
+	// Right sibling at each wrapper level is empty with height = (newDepth - level).
+	// We wrap from inside out: first wrapper is at level (newDepth - oldDepth - 1),
+	// last wrapper is at level 0.
+	diff := newDepth - oldDepth
 	for i := 0; i < diff; i++ {
 		if s.root != nil {
+			// This wrapper will be at level (diff - 1 - i) in final tree
+			level := diff - 1 - i
+			siblingHeight := newDepth - level - 1
 			newRoot := &smstNode{
 				left:  s.root,
 				count: s.root.count,
 			}
-			newRoot.hash = smstHashNode(s.root.hash, s.emptyHash[newDepth-1-i], newRoot.count)
+			newRoot.hash = smstHashNode(s.root.hash, s.emptyHash[siblingHeight], newRoot.count)
 			s.root = newRoot
 		}
 	}
-
-	s.depth = newDepth
 }
 
 func smstHashLeaf(data []byte) []byte {

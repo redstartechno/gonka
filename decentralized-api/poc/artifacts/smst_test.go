@@ -263,26 +263,37 @@ func TestSMSTStoreGetArtifact(t *testing.T) {
 }
 
 func TestSMSTVerifyProof(t *testing.T) {
-	tree := NewSMST(24)
+	dir := t.TempDir()
+	store, err := OpenSMST(dir)
+	if err != nil {
+		t.Fatalf("OpenSMST: %v", err)
+	}
+	defer store.Close()
 
 	nonces := []int32{10, 20, 30, 40, 50}
 	for _, n := range nonces {
-		leafData := encodeLeaf(n, []byte{byte(n)})
-		leafHash := smstHashLeaf(leafData)
-		tree.Insert(n, leafHash)
+		if err := store.Add(n, []byte{byte(n)}); err != nil {
+			t.Fatalf("Add(%d): %v", n, err)
+		}
 	}
+	store.Flush()
 
-	_, count := tree.GetRoot()
+	count, rootHash := store.GetFlushedRoot()
 
 	for i := uint32(0); i < count; i++ {
-		nonce, proof, err := tree.GetLeafByDenseIndex(i)
+		nonce, vector, err := store.GetArtifact(i)
 		if err != nil {
-			t.Fatalf("GetLeafByDenseIndex(%d) failed: %v", i, err)
+			t.Fatalf("GetArtifact(%d): %v", i, err)
 		}
 
-		proofByNonce, _ := tree.GetProofByNonce(nonce)
-		if len(proofByNonce) != len(proof) {
-			t.Errorf("proof length mismatch: dense=%d, nonce=%d", len(proof), len(proofByNonce))
+		proof, err := store.GetProof(i, count)
+		if err != nil {
+			t.Fatalf("GetProof(%d): %v", i, err)
+		}
+
+		leafData := encodeLeaf(nonce, vector)
+		if !VerifySMSTProofSlice(rootHash, count, nonce, leafData, proof) {
+			t.Errorf("Proof verification failed for index %d (nonce=%d)", i, nonce)
 		}
 	}
 }
@@ -1204,4 +1215,341 @@ func TestSMSTDuplicateNoncePreventionEndToEnd(t *testing.T) {
 	}
 
 	t.Log("Duplicate prevention working correctly")
+}
+
+// Regression tests for risk hardening
+
+func TestSMSTDepthExpansionHashCorrectness(t *testing.T) {
+	// Verify that proofs remain valid and verifiable after depth expansion.
+	dir := t.TempDir()
+	store, err := OpenSMST(dir)
+	if err != nil {
+		t.Fatalf("OpenSMST: %v", err)
+	}
+	defer store.Close()
+
+	// Insert nonces that fit in default depth
+	nonces := []int32{1, 5, 10, 100}
+	for _, n := range nonces {
+		if err := store.Add(n, []byte{byte(n)}); err != nil {
+			t.Fatalf("Add(%d): %v", n, err)
+		}
+	}
+	store.Flush()
+
+	countBefore := store.Count()
+	rootBefore := store.GetRoot()
+
+	// Verify proofs work before expansion
+	for i := uint32(0); i < countBefore; i++ {
+		nonce, vector, _ := store.GetArtifact(i)
+		proof, _ := store.GetProof(i, countBefore)
+		leafData := encodeLeaf(nonce, vector)
+		if !VerifySMSTProofSlice(rootBefore, countBefore, nonce, leafData, proof) {
+			t.Errorf("proof verification failed BEFORE expansion for index %d", i)
+		}
+	}
+
+	// Force expansion with large nonce (> 2^24 to exceed default depth)
+	largeNonce := int32(1 << 25)
+	if err := store.Add(largeNonce, []byte{0xFF}); err != nil {
+		t.Fatalf("Add(%d): %v", largeNonce, err)
+	}
+	store.Flush()
+
+	countAfter := store.Count()
+	rootAfter := store.GetRoot()
+
+	if bytes.Equal(rootBefore, rootAfter) {
+		t.Errorf("root should change after expansion")
+	}
+
+	// Verify proofs work AFTER expansion for ALL artifacts including originals
+	for i := uint32(0); i < countAfter; i++ {
+		nonce, vector, _ := store.GetArtifact(i)
+		proof, err := store.GetProof(i, countAfter)
+		if err != nil {
+			t.Errorf("GetProof(%d) after expansion: %v", i, err)
+			continue
+		}
+		leafData := encodeLeaf(nonce, vector)
+		if !VerifySMSTProofSlice(rootAfter, countAfter, nonce, leafData, proof) {
+			t.Errorf("proof verification FAILED after expansion for index %d (nonce=%d)", i, nonce)
+		}
+	}
+}
+
+func TestSMSTDepthExpansionIncremental(t *testing.T) {
+	// Start with depth 4 and expand incrementally to depth 24.
+	// After each expansion, verify ALL previous artifacts still have valid proofs.
+	// Tests the expansion algorithm by working directly with SMST at small initial depth.
+
+	initialDepth := 4
+	finalDepth := 24
+
+	tree := NewSMST(initialDepth)
+
+	// Track all inserted items
+	type item struct {
+		nonce  int32
+		vector []byte
+	}
+	var inserted []item
+
+	// Helper to build proof with counts directly from tree (like store does)
+	buildProofWithCounts := func(tree *SMST, nonce int32) []SMSTProofElement {
+		path := tree.noncePath(nonce)
+		elements := make([]SMSTProofElement, 0, tree.depth)
+
+		var collect func(node *smstNode, level int)
+		collect = func(node *smstNode, level int) {
+			if level == tree.depth || node == nil {
+				return
+			}
+			goRight := path[level]
+			if goRight {
+				elements = append(elements, SMSTProofElement{
+					SiblingHash:  tree.nodeHash(node.left, level+1),
+					SiblingCount: tree.nodeCount(node.left),
+				})
+				collect(node.right, level+1)
+			} else {
+				elements = append(elements, SMSTProofElement{
+					SiblingHash:  tree.nodeHash(node.right, level+1),
+					SiblingCount: tree.nodeCount(node.right),
+				})
+				collect(node.left, level+1)
+			}
+		}
+		collect(tree.root, 0)
+		return elements
+	}
+
+	// Helper to verify all proofs
+	verifyAll := func(stage string) bool {
+		rootHash, count := tree.GetRoot()
+		allPassed := true
+		for _, it := range inserted {
+			proofElements := buildProofWithCounts(tree, it.nonce)
+			leafData := encodeLeaf(it.nonce, it.vector)
+			if !VerifySMSTProofWithCounts(rootHash, count, it.nonce, leafData, proofElements) {
+				t.Errorf("[%s] Proof FAILED for nonce=%d", stage, it.nonce)
+				allPassed = false
+			}
+		}
+		return allPassed
+	}
+
+	// Insert initial nonces that fit in depth 4 (0-15)
+	initialNonces := []int32{0, 1, 5, 10, 15}
+	for _, n := range initialNonces {
+		vec := []byte{byte(n)}
+		leafHash := smstHashLeaf(encodeLeaf(n, vec))
+		if _, err := tree.Insert(n, leafHash); err != nil {
+			t.Fatalf("Initial Insert(%d): %v", n, err)
+		}
+		inserted = append(inserted, item{n, vec})
+	}
+
+	if tree.Depth() != initialDepth {
+		t.Errorf("Expected initial depth %d, got %d", initialDepth, tree.Depth())
+	}
+
+	t.Logf("Initial: depth=%d, count=%d", tree.Depth(), tree.Count())
+	if !verifyAll("initial") {
+		t.Fatal("Initial verification failed")
+	}
+
+	// Expand incrementally from depth 5 to finalDepth
+	for targetDepth := initialDepth + 1; targetDepth <= finalDepth; targetDepth++ {
+		// Nonce requiring depth D has highest bit at position D-1
+		// 2^(D-1) requires exactly depth D
+		triggerNonce := int32(1<<(targetDepth-1)) + int32(targetDepth)
+
+		vec := []byte{byte(triggerNonce), byte(triggerNonce >> 8), byte(triggerNonce >> 16)}
+		leafHash := smstHashLeaf(encodeLeaf(triggerNonce, vec))
+
+		depthBefore := tree.Depth()
+		if _, err := tree.Insert(triggerNonce, leafHash); err != nil {
+			t.Fatalf("Insert(nonce=%d) for depth %d: %v", triggerNonce, targetDepth, err)
+		}
+		inserted = append(inserted, item{triggerNonce, vec})
+
+		if tree.Depth() < targetDepth {
+			t.Errorf("Expected depth >= %d, got %d", targetDepth, tree.Depth())
+		}
+
+		expanded := depthBefore != tree.Depth()
+		if expanded {
+			t.Logf("Expanded: %d -> %d (nonce=%d, count=%d)",
+				depthBefore, tree.Depth(), triggerNonce, tree.Count())
+		}
+
+		// Verify ALL proofs still work
+		stage := fmt.Sprintf("depth=%d", tree.Depth())
+		if !verifyAll(stage) {
+			t.Fatalf("Verification failed after expanding to depth %d", tree.Depth())
+		}
+	}
+
+	t.Logf("SUCCESS: depth %d->%d, %d items, all proofs verified at each step",
+		initialDepth, tree.Depth(), len(inserted))
+}
+
+func TestSMSTMalformedProofRejection(t *testing.T) {
+	dir := t.TempDir()
+	store, err := OpenSMST(dir)
+	if err != nil {
+		t.Fatalf("OpenSMST: %v", err)
+	}
+	defer store.Close()
+
+	nonces := []int32{10, 20, 30, 40, 50}
+	for _, n := range nonces {
+		if err := store.Add(n, []byte{byte(n)}); err != nil {
+			t.Fatalf("Add(%d): %v", n, err)
+		}
+	}
+	store.Flush()
+
+	count, rootHash := store.GetFlushedRoot()
+	nonce, vector, _ := store.GetArtifact(2)
+	leafData := encodeLeaf(nonce, vector)
+
+	// Test 1: Empty proof should fail
+	if VerifySMSTProofSlice(rootHash, count, nonce, leafData, nil) {
+		t.Error("empty proof should fail verification")
+	}
+	if VerifySMSTProofSlice(rootHash, count, nonce, leafData, [][]byte{}) {
+		t.Error("empty slice proof should fail verification")
+	}
+
+	// Test 2: Malformed proof element (wrong size) should fail
+	if VerifySMSTProofSlice(rootHash, count, nonce, leafData, [][]byte{make([]byte, 35)}) {
+		t.Error("malformed proof (35 bytes) should fail verification")
+	}
+	if VerifySMSTProofSlice(rootHash, count, nonce, leafData, [][]byte{make([]byte, 37)}) {
+		t.Error("malformed proof (37 bytes) should fail verification")
+	}
+
+	// Test 3: Proof with correct size but wrong content should fail
+	wrongContent := make([][]byte, 24) // default depth
+	for i := range wrongContent {
+		wrongContent[i] = make([]byte, 36)
+		copy(wrongContent[i], []byte("wrong hash content here!!!!!!!!!"))
+	}
+	if VerifySMSTProofSlice(rootHash, count, nonce, leafData, wrongContent) {
+		t.Error("proof with wrong content should fail verification")
+	}
+}
+
+func TestSMSTIndexBindingVerification(t *testing.T) {
+	dir, _ := os.MkdirTemp("", "smst-index-binding-*")
+	defer os.RemoveAll(dir)
+
+	store, err := OpenSMST(dir)
+	if err != nil {
+		t.Fatalf("OpenSMST failed: %v", err)
+	}
+	defer store.Close()
+
+	// Insert artifacts with specific nonces
+	nonces := []int32{100, 200, 300, 400, 500}
+	for _, n := range nonces {
+		if err := store.AddWithNode(n, []byte{byte(n)}, "node1"); err != nil {
+			t.Fatalf("AddWithNode(%d) failed: %v", n, err)
+		}
+	}
+
+	if err := store.Flush(); err != nil {
+		t.Fatalf("Flush failed: %v", err)
+	}
+
+	count, rootHash := store.GetFlushedRoot()
+
+	// Test each artifact at its correct dense index
+	for expectedIndex := uint32(0); expectedIndex < count; expectedIndex++ {
+		nonce, vector, err := store.GetArtifact(expectedIndex)
+		if err != nil {
+			t.Fatalf("GetArtifact(%d) failed: %v", expectedIndex, err)
+		}
+
+		proof, err := store.GetProof(expectedIndex, count)
+		if err != nil {
+			t.Fatalf("GetProof(%d, %d) failed: %v", expectedIndex, count, err)
+		}
+
+		leafData := encodeLeaf(nonce, vector)
+
+		// Correct index should verify
+		if !VerifySMSTProofWithDenseIndex(rootHash, count, expectedIndex, nonce, leafData, proof) {
+			t.Errorf("Valid proof at index %d should verify", expectedIndex)
+		}
+
+		// Wrong index should NOT verify
+		wrongIndex := (expectedIndex + 1) % count
+		if VerifySMSTProofWithDenseIndex(rootHash, count, wrongIndex, nonce, leafData, proof) {
+			t.Errorf("Proof at index %d should NOT verify when claimed at index %d", expectedIndex, wrongIndex)
+		}
+	}
+
+	// Test: taking proof from index 0 and claiming it's for index 2 should fail
+	nonce0, vector0, _ := store.GetArtifact(0)
+	proof0, _ := store.GetProof(0, count)
+	leafData0 := encodeLeaf(nonce0, vector0)
+
+	if VerifySMSTProofWithDenseIndex(rootHash, count, 2, nonce0, leafData0, proof0) {
+		t.Error("Proof for index 0 should NOT verify when claimed at index 2")
+	}
+}
+
+func TestSMSTRebuildFailsOnCorruption(t *testing.T) {
+	dir, _ := os.MkdirTemp("", "smst-corruption-*")
+	defer os.RemoveAll(dir)
+
+	// Create store and add artifacts
+	store, err := OpenSMST(dir)
+	if err != nil {
+		t.Fatalf("OpenSMST failed: %v", err)
+	}
+
+	for i := int32(0); i < 10; i++ {
+		if err := store.AddWithNode(i, []byte{byte(i)}, "node1"); err != nil {
+			t.Fatalf("AddWithNode(%d) failed: %v", i, err)
+		}
+	}
+
+	if err := store.Flush(); err != nil {
+		t.Fatalf("Flush failed: %v", err)
+	}
+
+	store.Close()
+
+	// Corrupt the data file by truncating it
+	dataPath := dir + "/artifacts.data"
+	info, _ := os.Stat(dataPath)
+	originalSize := info.Size()
+
+	// Truncate to half
+	if err := os.Truncate(dataPath, originalSize/2); err != nil {
+		t.Fatalf("Truncate failed: %v", err)
+	}
+
+	// Reopen store (recovery should handle truncation gracefully)
+	store2, err := OpenSMST(dir)
+	if err != nil {
+		// Recovery failed entirely - this is acceptable behavior for severe corruption
+		t.Logf("Recovery failed (acceptable): %v", err)
+		return
+	}
+	defer store2.Close()
+
+	// Store opened, but GetRootAt for the original count should fail
+	// because not all artifacts are readable
+	_, err = store2.GetRootAt(10)
+	if err == nil {
+		t.Error("GetRootAt should fail when data file is corrupted")
+	} else {
+		t.Logf("GetRootAt correctly failed: %v", err)
+	}
 }
