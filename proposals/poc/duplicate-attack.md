@@ -113,49 +113,28 @@ At each node:
 
 **Why duplicates are impossible**: Position determined by nonce value. One slot per nonce. Inserting same nonce overwrites, doesn't duplicate.
 
-### Option A: SMST During Generation
+### Option A: SMST During Generation (Selected)
 
 Maintain SMST incrementally. Commit root every 5 seconds.
 
 - Pro: Single structure, duplicates impossible at all times
+- Pro: No equivalence proof needed - SMST is the only structure
 - Con: Insert O(24) vs MMR O(1), needs snapshot handling for historical commits
 
-Q: Is O(24) insert overhead acceptable? Estimated ~100ms per 5-sec window at 83K inserts.
-A: If confirmed - seems like nothing
+Insert overhead: ~100ms per 5-sec window at 83K inserts - acceptable.
 
-### Option B: MMR + Post-Generation SMST (Recommended)
+### Option B: MMR + Post-Generation SMST (Rejected)
 
-Keep current MMR during generation. Build SMST after generation completes.
-
-```
-Generation:     artifact --> append to MMR --> (every 5 sec) commit (mmr_root, count)
-Post-gen:       load final MMR artifacts --> build SMST --> publish (smst_root, count)
-Validation:     sample from SMST --> return artifact + proof
-```
-
-**Critical constraint**: SMST must contain exactly the artifacts from the final MMR commit. Otherwise attacker could mask duplicates by adding legitimate nonces after last commit.
-
-### Equivalence Proof
-
-Simple count comparison is insufficient:
-- Attacker has 100K in MMR (5K duplicates = 95K unique)
-- Adds 5K legitimate nonces after last MMR commit
-- SMST has 100K unique, counts match, fraud undetected
-
-**Possible solutions**:
-1. Cryptographic binding: SMST leaves include MMR leaf index
-2. Block height cutoff enforced in SMST construction
-3. Commit SMST alongside final MMR commit
-
-Q: What's the minimal proof that SMST contains exactly the MMR artifacts?
+Rejected due to equivalence proof complexity. Would require proving MMR and SMST contain exactly the same artifacts, with no way to add nonces after last MMR commit. Option A avoids this entirely.
 
 ### Complexity
 
 | Operation | Cost |
 |:----------|:-----|
-| Generation (MMR append) | O(1) per artifact |
-| Post-gen SMST build (5M) | 5M * 24 = 120M hashes, ~6s |
-| Proof generation | O(24) |
+| Insert | O(D) = O(24) hashes per artifact |
+| 5-sec window (83K inserts) | ~2M hashes, ~100ms |
+| Proof generation | O(D) = O(24) |
+| Tree rebuild from disk (5M) | ~6s |
 
 ## Implementation Plan
 
@@ -197,29 +176,45 @@ type ArtifactStore interface {
 
 Note: `leafIndex` renamed to `denseIndex`. For MMR it's sequential position, for SMST it's sum-navigated position.
 
-### SMST Snapshots
+### Persistence
 
-Current MMR: `GetRootAt(count)` works because first N leaves are always indices 0..N-1.
+Reuse current `artifacts.data` format - artifacts stored in arrival order. On load, extract nonces to rebuild SMST.
 
-SMST challenge: first N artifacts could be any N nonces (sparse). Same count can produce different trees depending on which nonces arrived.
-
-**Why snapshots are needed**: Multiple commits happen during generation (every 5 sec). We don't know which commit will be the final one recorded on-chain. Validators query against a specific committed (root, count) pair and need proofs for that exact snapshot.
-
-**Approach: Arrival-order tracking**
-
-```go
-arrivedNonces []int32           // nonces in arrival order, 5M * 4 = 20MB
-snapshotRoots map[uint32][]byte // count -> root hash, tiny
+```
+Per PoC stage directory:
+  artifacts.data    - [len][nonce][vector]... in arrival order (reuse current format!)
+  roots.json        - {count: root_hash} for committed snapshots
 ```
 
-- Snapshot at count N = SMST built from `arrivedNonces[0:N]`
-- `GetRootAt(count)`: O(1) lookup in `snapshotRoots`
-- `GetProof(index, count)`: rebuild SMST from `arrivedNonces[0:count]`, generate proof
+**Critical: roots.json writes must be ATOMIC** (write to temp file, then rename). This is the source of truth for what was committed on-chain.
 
-**Rebuild cost**: ~6s for 5M nonces. Mitigations:
-- **Prebuild on distribution submit**: In `commit_worker.go`, `submitWeightDistribution()` queries on-chain for final committed count (`resp.Count`). Trigger SMST build here - before validators request proofs.
-- All validators query the same count, so single prebuild serves all requests
-- Cache remains in memory until epoch ends
+Arrival-order is implicit in `artifacts.data` - no separate nonces file needed.
+
+### Snapshots
+
+**Why needed**: Multiple commits during generation (every 5 sec). We don't know which commit will be final on-chain. Validators query specific (root, count) pair.
+
+**Approach**:
+- Snapshot at count N = SMST built from first N artifacts in `artifacts.data`
+- `GetRootAt(count)`: O(1) lookup in `roots.json`
+- `GetProof(index, count)`: rebuild SMST from `artifacts[0:count]`, generate proof
+
+**Rebuild cost**: ~6s for 5M. Mitigations:
+- **Prebuild on distribution submit**: `submitWeightDistribution()` queries on-chain for final committed count. Trigger SMST build here - before validators request proofs.
+- All validators query same count, single prebuild serves all
+- Cache remains in memory until store pruned
+
+### Recovery
+
+On restart, rebuild state from `artifacts.data`:
+
+| Scenario | Recovery |
+|:---------|:---------|
+| During generation | Read artifacts, rebuild SMST, continue accepting inserts |
+| After generation, before prebuild | Read artifacts, wait for prebuild trigger |
+| After prebuild | Read artifacts, rebuild SMST at committed count |
+
+Load time: ~6s for 5M artifacts (matches current MMR approach).
 
 ### Proof Format
 
@@ -232,10 +227,11 @@ Recommendation: At upgrade block, all new commits use SMST. Old commits already 
 | File | Change |
 |:-----|:-------|
 | `artifacts/store.go` | Extract interface, rename to `mmr_store.go` |
-| `artifacts/smst.go` | New SMST tree implementation |
+| `artifacts/smst.go` | New SMST tree + `VerifyProof()` |
 | `artifacts/smst_store.go` | New store using SMST |
 | `artifacts/interface.go` | Interface definition |
 | `artifacts/managed_store.go` | Use interface instead of concrete type |
+| `poc/proof_client.go` | Call SMST `VerifyProof()` based on config |
 | `params.proto` | Add `bool use_smst = 13` |
 | `apiconfig/config_manager.go` | Select implementation based on param |
 | `poc/commit_worker.go` | Trigger SMST prebuild in `submitWeightDistribution()` |
@@ -248,6 +244,7 @@ Create stress tests measuring:
 - Write throughput: inserts/sec (in-memory and with flush)
 - Read throughput: proofs/sec
 - Proof size: bytes per proof
+- Load from disk: time to rebuild tree from `artifacts.data`
 - Document results in `proposals/poc/duplicate-attack-perf.md`
 
 Expected proof sizes:
@@ -273,7 +270,10 @@ Expected proof sizes:
 **Phase 4: Benchmark SMST**
 
 - Run same stress tests as Phase 1
-- Compare throughput
+- Additional SMST-specific tests:
+  - Load 5M tree from disk to memory (target: <10s)
+  - Reset 5M tree to 4.9M state by rebuild (measure time)
+- Compare throughput with MMR
 - Document results
 
 **Phase 5: Integration**
@@ -300,17 +300,12 @@ Verified: proof verification is **off-chain only**, in DAPI:
 
 No on-chain verification in `inference-chain`. This simplifies the upgrade - only DAPI code needs SMST verifier.
 
-### Snapshot Storage
+### Cache Eviction
 
-Arrival-order approach requires:
-- 20MB for nonces (single list, not per-snapshot)
-- Small map for (count -> root) pairs
-
-Rebuild cost (~6s) is eliminated by prebuild:
-- `submitWeightDistribution()` queries on-chain for final count
-- Trigger SMST build immediately after (before validators query)
-- All validators use same count, single build serves all
-- No on-demand rebuild needed
+Reuse existing `managed_store.go` cleanup (already implemented for MMR):
+- `retainCount` = 10 (keeps last 10 PoC stages)
+- `cleanupLoop` runs every 30 seconds, prunes oldest stores
+- SMST store evicted same as MMR store - no changes needed
 
 ### Migration
 
