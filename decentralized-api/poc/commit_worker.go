@@ -219,6 +219,12 @@ func (w *CommitWorker) submitWeightDistribution(pocHeight int64) {
 		logging.Warn("CommitWorker: flush failed", types.PoC, "pocHeight", pocHeight, "error", err)
 	}
 
+	// Prebuild tree at committed count for fast proof queries.
+	// For SMST this builds the sparse tree; for MMR this is a no-op.
+	if err := store.PrebuildSnapshot(resp.Count); err != nil {
+		logging.Warn("CommitWorker: prebuild failed", types.PoC, "pocHeight", pocHeight, "count", resp.Count, "error", err)
+	}
+
 	distribution := store.GetNodeDistribution()
 	if len(distribution) == 0 {
 		logging.Debug("CommitWorker: empty distribution", types.PoC, "pocHeight", pocHeight)

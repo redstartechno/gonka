@@ -22,9 +22,10 @@ type SMSTArtifactStore struct {
 	dataFile  *os.File
 	nodesFile *os.File
 
-	buffer    []bufferedArtifact
-	artifacts []storedArtifact
-	smst      *SMST
+	buffer         []bufferedArtifact
+	offsets        []uint64          // arrival order -> disk offset
+	nonceToOffset  map[int32]uint64  // nonce -> disk offset (for fast lookup)
+	smst           *SMST
 
 	flushedLeafCount  uint32
 	flushedDataOffset uint64
@@ -35,12 +36,6 @@ type SMSTArtifactStore struct {
 
 	prebuiltSnapshot *SMST
 	prebuiltCount    uint32
-}
-
-type storedArtifact struct {
-	nonce  int32
-	vector []byte
-	offset uint64
 }
 
 var _ ArtifactStore = (*SMSTArtifactStore)(nil)
@@ -70,7 +65,8 @@ func OpenSMST(dir string) (*SMSTArtifactStore, error) {
 		dataFile:          dataFile,
 		nodesFile:         nodesFile,
 		buffer:            make([]bufferedArtifact, 0, 1024),
-		artifacts:         make([]storedArtifact, 0, 1024),
+		offsets:           make([]uint64, 0, 1024),
+		nonceToOffset:     make(map[int32]uint64),
 		smst:              NewSMST(smstDefaultDepth),
 		flushedRoots:      make(map[uint32][]byte),
 		nodeCounts:        make(map[string]uint32),
@@ -123,12 +119,8 @@ func (s *SMSTArtifactStore) recover() error {
 			return fmt.Errorf("insert nonce %d: %w", nonce, err)
 		}
 
-		s.artifacts = append(s.artifacts, storedArtifact{
-			nonce:  nonce,
-			vector: vector,
-			offset: offset,
-		})
-
+		s.offsets = append(s.offsets, offset)
+		s.nonceToOffset[nonce] = offset
 		offset += uint64(n)
 	}
 
@@ -186,6 +178,10 @@ func (s *SMSTArtifactStore) AddWithNode(nonce int32, vector []byte, nodeId strin
 		return ErrStoreClosed
 	}
 
+	if s.smst.Count() >= MaxLeafCount {
+		return ErrCapacityExceeded
+	}
+
 	if _, err := s.smst.Insert(nonce, leafHash); err != nil {
 		return err
 	}
@@ -223,11 +219,8 @@ func (s *SMSTArtifactStore) flushLocked() error {
 	offset := s.flushedDataOffset
 
 	for _, art := range s.buffer {
-		s.artifacts = append(s.artifacts, storedArtifact{
-			nonce:  art.nonce,
-			vector: art.vector,
-			offset: offset,
-		})
+		s.offsets = append(s.offsets, offset)
+		s.nonceToOffset[art.nonce] = offset
 
 		n, err := writeArtifact(w, art.nonce, art.vector)
 		if err != nil {
@@ -284,6 +277,10 @@ func (s *SMSTArtifactStore) flushNodeCountsLocked() error {
 func (s *SMSTArtifactStore) GetRoot() []byte {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+
+	if s.smst.Count() == 0 {
+		return nil
+	}
 
 	root, _ := s.smst.GetRoot()
 	return root
@@ -366,19 +363,39 @@ func (s *SMSTArtifactStore) GetArtifact(denseIndex uint32) (nonce int32, vector 
 		return 0, nil, ErrStoreClosed
 	}
 
-	totalCount := uint32(len(s.artifacts)) + uint32(len(s.buffer))
-	if denseIndex >= totalCount {
+	if denseIndex >= s.smst.Count() {
 		return 0, nil, ErrLeafIndexOutOfRange
 	}
 
-	if denseIndex < uint32(len(s.artifacts)) {
-		art := s.artifacts[denseIndex]
-		return art.nonce, art.vector, nil
+	// Use SMST tree to find nonce at this dense index (tree traversal order)
+	nonce, _, err = s.smst.GetLeafByDenseIndex(denseIndex)
+	if err != nil {
+		return 0, nil, err
 	}
 
-	bufIdx := denseIndex - uint32(len(s.artifacts))
-	art := s.buffer[bufIdx]
-	return art.nonce, art.vector, nil
+	// Look up artifact data by nonce
+	return s.getArtifactByNonce(nonce)
+}
+
+// getArtifactByNonce finds artifact data using nonce-to-offset index (O(1) lookup).
+func (s *SMSTArtifactStore) getArtifactByNonce(targetNonce int32) (int32, []byte, error) {
+	// Check flushed artifacts first (via index)
+	if offset, ok := s.nonceToOffset[targetNonce]; ok {
+		nonce, vector, _, err := readArtifactAt(s.dataFile, int64(offset))
+		if err != nil {
+			return 0, nil, fmt.Errorf("read artifact: %w", err)
+		}
+		return nonce, vector, nil
+	}
+
+	// Search in buffer (not yet flushed)
+	for _, art := range s.buffer {
+		if art.nonce == targetNonce {
+			return art.nonce, art.vector, nil
+		}
+	}
+
+	return 0, nil, ErrLeafIndexOutOfRange
 }
 
 func (s *SMSTArtifactStore) GetProof(denseIndex uint32, snapshotCount uint32) ([][]byte, error) {
@@ -459,19 +476,32 @@ func encodeProofForTransport(proof []SMSTProofElement) [][]byte {
 func (s *SMSTArtifactStore) rebuildTreeAt(count uint32) *SMST {
 	tree := NewSMST(s.smst.depth)
 
-	for i := uint32(0); i < count && i < uint32(len(s.artifacts)); i++ {
-		art := s.artifacts[i]
-		leafData := encodeLeaf(art.nonce, art.vector)
-		leafHash := smstHashLeaf(leafData)
-		tree.Insert(art.nonce, leafHash)
+	// Read flushed artifacts from disk
+	flushedToRead := count
+	if flushedToRead > s.flushedLeafCount {
+		flushedToRead = s.flushedLeafCount
 	}
 
-	remaining := count - uint32(len(s.artifacts))
-	for i := uint32(0); i < remaining && i < uint32(len(s.buffer)); i++ {
-		art := s.buffer[i]
-		leafData := encodeLeaf(art.nonce, art.vector)
+	for i := uint32(0); i < flushedToRead; i++ {
+		offset := s.offsets[i]
+		nonce, vector, _, err := readArtifactAt(s.dataFile, int64(offset))
+		if err != nil {
+			continue
+		}
+		leafData := encodeLeaf(nonce, vector)
 		leafHash := smstHashLeaf(leafData)
-		tree.Insert(art.nonce, leafHash)
+		tree.Insert(nonce, leafHash)
+	}
+
+	// Read remaining from buffer if needed
+	if count > s.flushedLeafCount {
+		remaining := count - s.flushedLeafCount
+		for i := uint32(0); i < remaining && i < uint32(len(s.buffer)); i++ {
+			art := s.buffer[i]
+			leafData := encodeLeaf(art.nonce, art.vector)
+			leafHash := smstHashLeaf(leafData)
+			tree.Insert(art.nonce, leafHash)
+		}
 	}
 
 	return tree

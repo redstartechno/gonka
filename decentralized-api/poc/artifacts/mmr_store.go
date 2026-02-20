@@ -428,6 +428,11 @@ func (s *MMRArtifactStore) GetProof(leafIndex uint32, snapshotCount uint32) ([][
 	return generateProof(s.mmrNodes, leafIndex, snapshotCount)
 }
 
+// PrebuildSnapshot is a no-op for MMR (O(1) proof generation).
+func (s *MMRArtifactStore) PrebuildSnapshot(count uint32) error {
+	return nil
+}
+
 func (s *MMRArtifactStore) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

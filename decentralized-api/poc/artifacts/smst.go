@@ -23,11 +23,11 @@ type smstNode struct {
 // Sum property: each node stores count = left.count + right.count.
 // Enables dense index navigation in sparse tree.
 type SMST struct {
-	root       *smstNode
-	depth      int
-	emptyHash  [][]byte
-	leafCount  uint32
-	nonceToIdx map[int32]uint32
+	root      *smstNode
+	depth     int
+	emptyHash [][]byte
+	leafCount uint32
+	hasNonce  map[int32]bool // tracks which nonces exist (for duplicate detection)
 }
 
 // NewSMST creates a new sparse merkle sum tree.
@@ -41,9 +41,9 @@ func NewSMST(depth int) *SMST {
 	}
 
 	s := &SMST{
-		depth:      depth,
-		emptyHash:  make([][]byte, depth+1),
-		nonceToIdx: make(map[int32]uint32),
+		depth:     depth,
+		emptyHash: make([][]byte, depth+1),
+		hasNonce:  make(map[int32]bool),
 	}
 
 	s.emptyHash[0] = smstHashEmpty()
@@ -55,10 +55,10 @@ func NewSMST(depth int) *SMST {
 }
 
 // Insert adds a leaf at the position determined by nonce.
-// Returns the dense index (position in count-based ordering).
+// Returns the new leaf count after insertion.
 // Returns error if nonce already exists.
 func (s *SMST) Insert(nonce int32, leafHash []byte) (uint32, error) {
-	if _, exists := s.nonceToIdx[nonce]; exists {
+	if s.hasNonce[nonce] {
 		return 0, ErrDuplicateNonce
 	}
 
@@ -70,11 +70,10 @@ func (s *SMST) Insert(nonce int32, leafHash []byte) (uint32, error) {
 	path := s.noncePath(nonce)
 	s.root = s.insertAt(s.root, path, 0, leafHash)
 
-	denseIdx := s.leafCount
-	s.nonceToIdx[nonce] = denseIdx
+	s.hasNonce[nonce] = true
 	s.leafCount++
 
-	return denseIdx, nil
+	return s.leafCount, nil
 }
 
 func (s *SMST) insertAt(node *smstNode, path []bool, level int, leafHash []byte) *smstNode {
@@ -182,7 +181,7 @@ func (s *SMST) pathToNonce(path []bool) int32 {
 
 // GetProofByNonce generates a proof for a specific nonce.
 func (s *SMST) GetProofByNonce(nonce int32) ([][]byte, error) {
-	if _, exists := s.nonceToIdx[nonce]; !exists {
+	if !s.hasNonce[nonce] {
 		return nil, ErrLeafIndexOutOfRange
 	}
 
@@ -220,8 +219,7 @@ func (s *SMST) Depth() int {
 
 // HasNonce checks if a nonce exists in the tree.
 func (s *SMST) HasNonce(nonce int32) bool {
-	_, exists := s.nonceToIdx[nonce]
-	return exists
+	return s.hasNonce[nonce]
 }
 
 func (s *SMST) noncePath(nonce int32) []bool {

@@ -2,53 +2,10 @@ package artifacts
 
 import "encoding/binary"
 
-// VerifySMSTProof verifies a sparse merkle sum tree proof.
-// The proof contains sibling hashes from leaf to root.
-// Depth is inferred from proof length.
-func VerifySMSTProof(rootHash []byte, count uint32, denseIndex uint32, nonce int32, leafData []byte, proof [][]byte) bool {
-	if denseIndex >= count {
-		return false
-	}
-	if len(proof) == 0 {
-		return false
-	}
-
-	depth := len(proof)
-	leafHash := smstHashLeaf(leafData)
-	path := smstNoncePath(nonce, depth)
-
-	currentHash := leafHash
-	currentCount := uint32(1)
-
-	for i := depth - 1; i >= 0; i-- {
-		siblingHash := proof[i]
-		goRight := path[i]
-
-		var leftHash, rightHash []byte
-		var leftCount, rightCount uint32
-
-		if goRight {
-			leftHash = siblingHash
-			rightHash = currentHash
-			leftCount = inferSiblingCount(denseIndex, currentCount, true)
-			rightCount = currentCount
-		} else {
-			leftHash = currentHash
-			rightHash = siblingHash
-			leftCount = currentCount
-			rightCount = inferSiblingCount(denseIndex, currentCount, false)
-		}
-
-		currentCount = leftCount + rightCount
-		currentHash = smstHashNode(leftHash, rightHash, currentCount)
-	}
-
-	if currentCount != count {
-		return false
-	}
-
-	return bytesEqual(currentHash, rootHash)
-}
+// Note: Simple proof verification without counts is NOT possible for SMST.
+// SMST proofs MUST include sibling counts to verify correctly because the
+// internal node hash includes the count. Use VerifySMSTProofWithCounts or
+// VerifySMSTProofSlice instead.
 
 func smstNoncePath(nonce int32, depth int) []bool {
 	path := make([]bool, depth)
@@ -58,13 +15,6 @@ func smstNoncePath(nonce int32, depth int) []bool {
 		path[i] = bit == 1
 	}
 	return path
-}
-
-func inferSiblingCount(denseIndex, currentCount uint32, isLeftSibling bool) uint32 {
-	if isLeftSibling {
-		return denseIndex
-	}
-	return 0
 }
 
 func bytesEqual(a, b []byte) bool {
@@ -176,4 +126,28 @@ func DecodeSMSTProof(data []byte) ([]SMSTProofElement, error) {
 	}
 
 	return proof, nil
+}
+
+// DecodeProofElements decodes proof from slice format ([][]byte where each is 36 bytes).
+func DecodeProofElements(proof [][]byte) []SMSTProofElement {
+	elements := make([]SMSTProofElement, len(proof))
+	for i, data := range proof {
+		if len(data) >= 36 {
+			elements[i].SiblingHash = data[:32]
+			elements[i].SiblingCount = binary.LittleEndian.Uint32(data[32:36])
+		}
+	}
+	return elements
+}
+
+// VerifySMSTProofSlice verifies an SMST proof in slice format ([][]byte).
+// Each proof element is 36 bytes: 32 bytes hash + 4 bytes count (LE).
+// This matches the format returned by SMSTArtifactStore.GetProof().
+func VerifySMSTProofSlice(rootHash []byte, count uint32, nonce int32, leafData []byte, proof [][]byte) bool {
+	if len(proof) == 0 {
+		return false
+	}
+
+	elements := DecodeProofElements(proof)
+	return VerifySMSTProofWithCounts(rootHash, count, nonce, leafData, elements)
 }

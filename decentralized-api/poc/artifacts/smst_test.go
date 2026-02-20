@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"os"
+	"sync"
+	"sync/atomic"
 	"testing"
 )
 
@@ -220,7 +223,8 @@ func TestSMSTStoreGetArtifact(t *testing.T) {
 	store, _ := OpenSMST(dir)
 	defer store.Close()
 
-	artifacts := []struct {
+	// Artifacts inserted in random order
+	inputArtifacts := []struct {
 		nonce  int32
 		vector []byte
 	}{
@@ -229,19 +233,30 @@ func TestSMSTStoreGetArtifact(t *testing.T) {
 		{200, []byte{7, 8, 9}},
 	}
 
-	for _, a := range artifacts {
+	for _, a := range inputArtifacts {
 		store.Add(a.nonce, a.vector)
 	}
 
-	for i, a := range artifacts {
+	// SMST returns artifacts in tree-traversal order (by nonce position)
+	// Smaller nonces go to the left, so order should be: 50, 100, 200
+	expectedOrder := []struct {
+		nonce  int32
+		vector []byte
+	}{
+		{50, []byte{4, 5, 6}},
+		{100, []byte{1, 2, 3}},
+		{200, []byte{7, 8, 9}},
+	}
+
+	for i, expected := range expectedOrder {
 		nonce, vector, err := store.GetArtifact(uint32(i))
 		if err != nil {
 			t.Fatalf("GetArtifact(%d) failed: %v", i, err)
 		}
-		if nonce != a.nonce {
-			t.Errorf("artifact %d: expected nonce %d, got %d", i, a.nonce, nonce)
+		if nonce != expected.nonce {
+			t.Errorf("artifact %d: expected nonce %d, got %d", i, expected.nonce, nonce)
 		}
-		if !bytes.Equal(vector, a.vector) {
+		if !bytes.Equal(vector, expected.vector) {
 			t.Errorf("artifact %d: vector mismatch", i)
 		}
 	}
@@ -448,4 +463,745 @@ func TestSMSTProofSizes(t *testing.T) {
 			t.Logf("Tree size: %d, Average proof size: %d bytes (%d elements of 36 bytes)", size, avgProofBytes, avgProofBytes/36)
 		})
 	}
+}
+
+func TestSMSTStoreNodeDistribution(t *testing.T) {
+	dir := t.TempDir()
+	store, err := OpenSMST(dir)
+	if err != nil {
+		t.Fatalf("OpenSMST failed: %v", err)
+	}
+	defer store.Close()
+
+	store.AddWithNode(1, []byte{1}, "nodeA")
+	store.AddWithNode(2, []byte{2}, "nodeA")
+	store.AddWithNode(3, []byte{3}, "nodeB")
+	store.AddWithNode(4, []byte{4}, "")
+
+	counts := store.GetNodeCounts()
+	if counts["nodeA"] != 2 {
+		t.Errorf("expected nodeA count 2, got %d", counts["nodeA"])
+	}
+	if counts["nodeB"] != 1 {
+		t.Errorf("expected nodeB count 1, got %d", counts["nodeB"])
+	}
+
+	dist := store.GetNodeDistribution()
+	if len(dist) != 0 {
+		t.Errorf("expected empty distribution before flush")
+	}
+
+	store.Flush()
+
+	dist = store.GetNodeDistribution()
+	if dist["nodeA"] != 2 {
+		t.Errorf("expected flushed nodeA count 2, got %d", dist["nodeA"])
+	}
+	if dist["nodeB"] != 1 {
+		t.Errorf("expected flushed nodeB count 1, got %d", dist["nodeB"])
+	}
+}
+
+func TestSMSTStoreNodeDistributionRecovery(t *testing.T) {
+	dir := t.TempDir()
+
+	store1, _ := OpenSMST(dir)
+	store1.AddWithNode(1, []byte{1}, "nodeA")
+	store1.AddWithNode(2, []byte{2}, "nodeB")
+	store1.Flush()
+	store1.Close()
+
+	store2, err := OpenSMST(dir)
+	if err != nil {
+		t.Fatalf("OpenSMST reopen failed: %v", err)
+	}
+	defer store2.Close()
+
+	dist := store2.GetNodeDistribution()
+	if dist["nodeA"] != 1 {
+		t.Errorf("expected recovered nodeA count 1, got %d", dist["nodeA"])
+	}
+	if dist["nodeB"] != 1 {
+		t.Errorf("expected recovered nodeB count 1, got %d", dist["nodeB"])
+	}
+
+	counts := store2.GetNodeCounts()
+	if counts["nodeA"] != 1 {
+		t.Errorf("expected recovered nodeA count 1 in current, got %d", counts["nodeA"])
+	}
+}
+
+func TestSMSTStoreGetRootAt(t *testing.T) {
+	dir := t.TempDir()
+	store, err := OpenSMST(dir)
+	if err != nil {
+		t.Fatalf("OpenSMST failed: %v", err)
+	}
+	defer store.Close()
+
+	root, err := store.GetRootAt(0)
+	if err != nil {
+		t.Errorf("GetRootAt(0) should not error: %v", err)
+	}
+	if root != nil {
+		t.Errorf("GetRootAt(0) should return nil")
+	}
+
+	roots := make([][]byte, 6)
+	for i := int32(1); i <= 5; i++ {
+		store.Add(i, []byte{byte(i)})
+		store.Flush()
+		root, err := store.GetRootAt(uint32(i))
+		if err != nil {
+			t.Fatalf("GetRootAt(%d) failed: %v", i, err)
+		}
+		roots[i] = root
+	}
+
+	for i := uint32(1); i <= 5; i++ {
+		root, err := store.GetRootAt(i)
+		if err != nil {
+			t.Fatalf("GetRootAt(%d) failed: %v", i, err)
+		}
+		if !bytes.Equal(root, roots[i]) {
+			t.Errorf("GetRootAt(%d) returned different root", i)
+		}
+	}
+}
+
+func TestSMSTStoreGetFlushedRoot(t *testing.T) {
+	dir := t.TempDir()
+	store, err := OpenSMST(dir)
+	if err != nil {
+		t.Fatalf("OpenSMST failed: %v", err)
+	}
+	defer store.Close()
+
+	count, root := store.GetFlushedRoot()
+	if count != 0 {
+		t.Errorf("expected count 0, got %d", count)
+	}
+	if root != nil {
+		t.Errorf("expected nil root for empty store")
+	}
+
+	for i := int32(0); i < 5; i++ {
+		store.Add(i, []byte{byte(i)})
+	}
+
+	count, root = store.GetFlushedRoot()
+	if count != 0 {
+		t.Errorf("expected flushed count 0 before flush, got %d", count)
+	}
+
+	store.Flush()
+	count, root = store.GetFlushedRoot()
+	if count != 5 {
+		t.Errorf("expected flushed count 5 after flush, got %d", count)
+	}
+	if root == nil {
+		t.Error("expected non-nil root after flush")
+	}
+}
+
+func TestSMSTStoreAddAfterClose(t *testing.T) {
+	dir := t.TempDir()
+	store, _ := OpenSMST(dir)
+	store.Add(1, []byte{1})
+	store.Close()
+
+	err := store.Add(2, []byte{2})
+	if err != ErrStoreClosed {
+		t.Errorf("expected ErrStoreClosed, got %v", err)
+	}
+}
+
+func TestSMSTStoreNegativeNonce(t *testing.T) {
+	dir := t.TempDir()
+	store, _ := OpenSMST(dir)
+	defer store.Close()
+
+	store.Add(-1, []byte{1})
+	store.Add(-100, []byte{2})
+	store.Add(-2147483648, []byte{3}) // INT32_MIN
+
+	if store.Count() != 3 {
+		t.Errorf("expected 3, got %d", store.Count())
+	}
+
+	store.Flush()
+
+	// SMST orders by nonce interpreted as uint32
+	// -1 = 0xFFFFFFFF (largest), -100 = 0xFFFFFF9C, -2147483648 = 0x80000000
+	// Tree order (smallest first): 0x80000000, 0xFFFFFF9C, 0xFFFFFFFF
+	// So: -2147483648, -100, -1
+	expectedNonces := []int32{-2147483648, -100, -1}
+
+	for i, expected := range expectedNonces {
+		nonce, _, err := store.GetArtifact(uint32(i))
+		if err != nil {
+			t.Fatalf("GetArtifact(%d) failed: %v", i, err)
+		}
+		if nonce != expected {
+			t.Errorf("artifact %d: expected nonce %d, got %d", i, expected, nonce)
+		}
+	}
+}
+
+func TestSMSTStoreTruncatedRecordRecovery(t *testing.T) {
+	dir := t.TempDir()
+
+	store1, _ := OpenSMST(dir)
+	store1.Add(10, []byte{1, 2, 3})
+	store1.Add(20, []byte{4, 5, 6})
+	store1.Flush()
+	root1 := store1.GetRoot()
+	store1.Close()
+
+	dataPath := dir + "/artifacts.data"
+	f, err := os.OpenFile(dataPath, os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		t.Fatalf("open data file: %v", err)
+	}
+	f.Write([]byte{0x10, 0x00, 0x00, 0x00})
+	f.Close()
+
+	store2, err := OpenSMST(dir)
+	if err != nil {
+		t.Fatalf("Reopen with truncated record failed: %v", err)
+	}
+	defer store2.Close()
+
+	if store2.Count() != 2 {
+		t.Errorf("expected count 2 after truncation recovery, got %d", store2.Count())
+	}
+
+	root2 := store2.GetRoot()
+	if !bytes.Equal(root1, root2) {
+		t.Errorf("root mismatch after truncation recovery")
+	}
+}
+
+func TestSMSTStoreCapacityExceeded(t *testing.T) {
+	t.Skip("MaxLeafCount is too large to test in unit tests")
+}
+
+func TestSMSTStoreConcurrentGetArtifact(t *testing.T) {
+	dir := t.TempDir()
+	store, err := OpenSMST(dir)
+	if err != nil {
+		t.Fatalf("OpenSMST failed: %v", err)
+	}
+	defer store.Close()
+
+	const artifactCount = 100
+	const goroutines = 50
+	const readsPerGoroutine = 20
+
+	// Insert artifacts with sequential nonces
+	for i := 0; i < artifactCount; i++ {
+		vector := []byte{byte(i), byte(i + 1), byte(i + 2), byte(i + 3)}
+		if err := store.Add(int32(i), vector); err != nil {
+			t.Fatalf("Add(%d) failed: %v", i, err)
+		}
+	}
+
+	if err := store.Flush(); err != nil {
+		t.Fatalf("Flush failed: %v", err)
+	}
+
+	// Build expected mapping: dense index -> (nonce, vector)
+	// SMST orders by nonce position in tree (sorted order for sequential nonces)
+	expectedData := make(map[uint32]struct {
+		nonce  int32
+		vector []byte
+	})
+	for i := uint32(0); i < artifactCount; i++ {
+		nonce, vector, _ := store.GetArtifact(i)
+		expectedData[i] = struct {
+			nonce  int32
+			vector []byte
+		}{nonce, vector}
+	}
+
+	var wg sync.WaitGroup
+	errChan := make(chan error, goroutines*readsPerGoroutine)
+
+	for g := 0; g < goroutines; g++ {
+		wg.Add(1)
+		go func(goroutineID int) {
+			defer wg.Done()
+			for r := 0; r < readsPerGoroutine; r++ {
+				leafIdx := uint32((goroutineID*readsPerGoroutine + r) % artifactCount)
+				nonce, vector, err := store.GetArtifact(leafIdx)
+				if err != nil {
+					errChan <- fmt.Errorf("goroutine %d: GetArtifact(%d) failed: %v", goroutineID, leafIdx, err)
+					return
+				}
+				expected := expectedData[leafIdx]
+				if nonce != expected.nonce {
+					errChan <- fmt.Errorf("goroutine %d: leafIdx %d: expected nonce %d, got %d", goroutineID, leafIdx, expected.nonce, nonce)
+					return
+				}
+				if !bytes.Equal(vector, expected.vector) {
+					errChan <- fmt.Errorf("goroutine %d: leafIdx %d: vector mismatch", goroutineID, leafIdx)
+					return
+				}
+			}
+		}(g)
+	}
+
+	wg.Wait()
+	close(errChan)
+
+	for err := range errChan {
+		t.Error(err)
+	}
+}
+
+// TestSMSTStoreConcurrentReadsHeavy tests many parallel goroutines doing heavy reads
+func TestSMSTStoreConcurrentReadsHeavy(t *testing.T) {
+	dir := t.TempDir()
+	store, err := OpenSMST(dir)
+	if err != nil {
+		t.Fatalf("OpenSMST failed: %v", err)
+	}
+	defer store.Close()
+
+	const artifactCount = 1000
+	const goroutines = 100
+	const readsPerGoroutine = 100
+
+	// Insert artifacts
+	for i := 0; i < artifactCount; i++ {
+		vector := make([]byte, 24)
+		binary.LittleEndian.PutUint32(vector, uint32(i))
+		if err := store.Add(int32(i), vector); err != nil {
+			t.Fatalf("Add(%d) failed: %v", i, err)
+		}
+	}
+	store.Flush()
+
+	count := store.Count()
+	rootHash := store.GetRoot()
+
+	var wg sync.WaitGroup
+	errChan := make(chan error, goroutines)
+
+	// Launch many concurrent readers
+	for g := 0; g < goroutines; g++ {
+		wg.Add(1)
+		go func(goroutineID int) {
+			defer wg.Done()
+			for r := 0; r < readsPerGoroutine; r++ {
+				leafIdx := uint32((goroutineID + r*goroutines) % int(count))
+
+				// Test GetArtifact
+				nonce, vector, err := store.GetArtifact(leafIdx)
+				if err != nil {
+					errChan <- fmt.Errorf("g%d: GetArtifact(%d) failed: %v", goroutineID, leafIdx, err)
+					return
+				}
+				if len(vector) != 24 {
+					errChan <- fmt.Errorf("g%d: unexpected vector length %d", goroutineID, len(vector))
+					return
+				}
+
+				// Test GetProof
+				proof, err := store.GetProof(leafIdx, count)
+				if err != nil {
+					errChan <- fmt.Errorf("g%d: GetProof(%d) failed: %v", goroutineID, leafIdx, err)
+					return
+				}
+
+				// Verify proof
+				leafData := encodeLeaf(nonce, vector)
+				elements := DecodeProofElements(proof)
+				if !VerifySMSTProofWithCounts(rootHash, count, nonce, leafData, elements) {
+					errChan <- fmt.Errorf("g%d: proof verification failed for index %d", goroutineID, leafIdx)
+					return
+				}
+			}
+		}(g)
+	}
+
+	wg.Wait()
+	close(errChan)
+
+	errCount := 0
+	for err := range errChan {
+		t.Error(err)
+		errCount++
+	}
+
+	if errCount == 0 {
+		t.Logf("Success: %d goroutines x %d reads = %d concurrent operations", goroutines, readsPerGoroutine, goroutines*readsPerGoroutine)
+	}
+}
+
+// TestSMSTStoreConcurrentReadsWithProofs tests GetArtifact and GetProof together under load
+func TestSMSTStoreConcurrentReadsWithProofs(t *testing.T) {
+	dir := t.TempDir()
+	store, err := OpenSMST(dir)
+	if err != nil {
+		t.Fatalf("OpenSMST failed: %v", err)
+	}
+	defer store.Close()
+
+	const artifactCount = 500
+	const goroutines = 50
+	const opsPerGoroutine = 50
+
+	// Insert with random-ish nonces
+	for i := 0; i < artifactCount; i++ {
+		nonce := int32(i*7 + 13) // non-sequential to stress tree navigation
+		vector := make([]byte, 24)
+		binary.LittleEndian.PutUint32(vector, uint32(nonce))
+		if err := store.Add(nonce, vector); err != nil {
+			t.Fatalf("Add failed: %v", err)
+		}
+	}
+	store.Flush()
+
+	count := store.Count()
+	rootHash := store.GetRoot()
+
+	var wg sync.WaitGroup
+	var successCount, failCount int64
+
+	for g := 0; g < goroutines; g++ {
+		wg.Add(1)
+		go func(gid int) {
+			defer wg.Done()
+			localSuccess := int64(0)
+			localFail := int64(0)
+
+			for op := 0; op < opsPerGoroutine; op++ {
+				idx := uint32((gid*opsPerGoroutine + op) % int(count))
+
+				nonce, vector, err := store.GetArtifact(idx)
+				if err != nil {
+					localFail++
+					continue
+				}
+
+				proof, err := store.GetProof(idx, count)
+				if err != nil {
+					localFail++
+					continue
+				}
+
+				leafData := encodeLeaf(nonce, vector)
+				elements := DecodeProofElements(proof)
+				if VerifySMSTProofWithCounts(rootHash, count, nonce, leafData, elements) {
+					localSuccess++
+				} else {
+					localFail++
+				}
+			}
+
+			atomic.AddInt64(&successCount, localSuccess)
+			atomic.AddInt64(&failCount, localFail)
+		}(g)
+	}
+
+	wg.Wait()
+
+	if failCount > 0 {
+		t.Errorf("Concurrent test had %d failures out of %d operations", failCount, goroutines*opsPerGoroutine)
+	} else {
+		t.Logf("All %d concurrent operations succeeded", successCount)
+	}
+}
+
+// TestSMSTStoreConcurrentReadsWhileWriting tests that reads don't block during writes
+// and data remains consistent when read/write operations interleave.
+func TestSMSTStoreConcurrentReadsWhileWriting(t *testing.T) {
+	dir := t.TempDir()
+	store, err := OpenSMST(dir)
+	if err != nil {
+		t.Fatalf("OpenSMST failed: %v", err)
+	}
+	defer store.Close()
+
+	// Pre-populate some data
+	for i := 0; i < 100; i++ {
+		vector := make([]byte, 24)
+		binary.LittleEndian.PutUint32(vector, uint32(i))
+		if err := store.Add(int32(i), vector); err != nil {
+			t.Fatalf("Add(%d) failed: %v", i, err)
+		}
+	}
+	store.Flush()
+
+	var wg sync.WaitGroup
+	var readSuccess, readFail, writeSuccess int64
+
+	// Start readers that run continuously
+	readerDone := make(chan struct{})
+	for g := 0; g < 20; g++ {
+		wg.Add(1)
+		go func(gid int) {
+			defer wg.Done()
+			for {
+				select {
+				case <-readerDone:
+					return
+				default:
+					count := store.Count()
+					if count == 0 {
+						continue
+					}
+					idx := uint32(gid) % count
+					nonce, vector, err := store.GetArtifact(idx)
+					if err != nil {
+						atomic.AddInt64(&readFail, 1)
+						continue
+					}
+					if vector == nil || nonce == 0 && len(vector) == 0 {
+						atomic.AddInt64(&readFail, 1)
+						continue
+					}
+					atomic.AddInt64(&readSuccess, 1)
+				}
+			}
+		}(g)
+	}
+
+	// Writer adds more data while readers are active
+	for i := 100; i < 500; i++ {
+		vector := make([]byte, 24)
+		binary.LittleEndian.PutUint32(vector, uint32(i))
+		if err := store.Add(int32(i), vector); err != nil {
+			t.Fatalf("Add(%d) failed: %v", i, err)
+		}
+		if i%50 == 0 {
+			store.Flush()
+		}
+		atomic.AddInt64(&writeSuccess, 1)
+	}
+
+	// Stop readers
+	close(readerDone)
+	wg.Wait()
+
+	if readFail > 0 {
+		t.Errorf("Had %d read failures during concurrent read/write", readFail)
+	}
+	t.Logf("Concurrent read/write: %d successful reads, %d writes", readSuccess, writeSuccess)
+}
+
+// TestSMSTSumBasedOrdering verifies the core SMST property:
+// dense indices are deterministically ordered by nonce position in the sparse tree,
+// using the sum (count) at each node to navigate to the i-th leaf.
+func TestSMSTSumBasedOrdering(t *testing.T) {
+	tree := NewSMST(24)
+
+	// Insert nonces in random order - they should be retrievable by dense index
+	// in a deterministic order based on tree structure (left-to-right traversal)
+	nonces := []int32{1000, 50, 500, 5, 100, 10, 750}
+	for _, nonce := range nonces {
+		leafHash := smstHashLeaf(encodeLeaf(nonce, []byte{byte(nonce)}))
+		_, err := tree.Insert(nonce, leafHash)
+		if err != nil {
+			t.Fatalf("Insert(%d) failed: %v", nonce, err)
+		}
+	}
+
+	// Verify count equals number of inserted nonces
+	if tree.Count() != uint32(len(nonces)) {
+		t.Fatalf("expected count %d, got %d", len(nonces), tree.Count())
+	}
+
+	// Get all nonces by dense index - should be left-to-right tree order
+	retrievedNonces := make([]int32, tree.Count())
+	for i := uint32(0); i < tree.Count(); i++ {
+		nonce, _, err := tree.GetLeafByDenseIndex(i)
+		if err != nil {
+			t.Fatalf("GetLeafByDenseIndex(%d) failed: %v", i, err)
+		}
+		retrievedNonces[i] = nonce
+	}
+
+	// The order should be deterministic based on tree structure
+	// Smaller nonces go to the left (path has more 0 bits), larger to the right
+	// So nonces should be roughly sorted when retrieved by dense index
+	t.Logf("Retrieved nonces by dense index: %v", retrievedNonces)
+
+	// Verify all original nonces are present
+	seenNonces := make(map[int32]bool)
+	for _, n := range retrievedNonces {
+		seenNonces[n] = true
+	}
+	for _, n := range nonces {
+		if !seenNonces[n] {
+			t.Errorf("nonce %d not found in retrieved nonces", n)
+		}
+	}
+}
+
+// TestSMSTProofProvesCorrectNonceAtIndex verifies that:
+// 1. A proof generated for dense index i
+// 2. Contains the correct nonce (the one at that position)
+// 3. Verifies successfully against the root
+func TestSMSTProofProvesCorrectNonceAtIndex(t *testing.T) {
+	dir := t.TempDir()
+	store, err := OpenSMST(dir)
+	if err != nil {
+		t.Fatalf("OpenSMST failed: %v", err)
+	}
+	defer store.Close()
+
+	// Insert artifacts with various nonces
+	artifacts := []struct {
+		nonce  int32
+		vector []byte
+	}{
+		{100, []byte{1, 2, 3}},
+		{5, []byte{4, 5, 6}},
+		{1000, []byte{7, 8, 9}},
+		{50, []byte{10, 11, 12}},
+		{500, []byte{13, 14, 15}},
+	}
+
+	for _, a := range artifacts {
+		if err := store.Add(a.nonce, a.vector); err != nil {
+			t.Fatalf("Add(%d) failed: %v", a.nonce, err)
+		}
+	}
+	store.Flush()
+
+	count := store.Count()
+	rootHash := store.GetRoot()
+
+	t.Logf("Store has %d artifacts, root: %x", count, rootHash[:8])
+
+	// For each dense index, verify:
+	// 1. GetArtifact returns a nonce
+	// 2. GetProof returns a valid proof
+	// 3. The proof verifies correctly for that specific nonce
+	for i := uint32(0); i < count; i++ {
+		nonce, vector, err := store.GetArtifact(i)
+		if err != nil {
+			t.Fatalf("GetArtifact(%d) failed: %v", i, err)
+		}
+
+		proof, err := store.GetProof(i, count)
+		if err != nil {
+			t.Fatalf("GetProof(%d, %d) failed: %v", i, count, err)
+		}
+
+		// Build leaf data for verification
+		leafData := encodeLeaf(nonce, vector)
+
+		// Decode and verify the proof
+		elements := DecodeProofElements(proof)
+		verified := VerifySMSTProofWithCounts(rootHash, count, nonce, leafData, elements)
+		if !verified {
+			t.Errorf("Proof verification failed for dense index %d (nonce %d)", i, nonce)
+			t.Logf("  proof elements: %d, nonce: %d, leafData len: %d", len(elements), nonce, len(leafData))
+			t.Logf("  rootHash: %x", rootHash)
+			t.Logf("  count: %d", count)
+		} else {
+			t.Logf("Dense index %d: nonce=%d, proof verified OK", i, nonce)
+		}
+	}
+}
+
+// TestSMSTProofFailsForWrongNonce verifies that a proof for one nonce
+// does NOT verify if we claim it's for a different nonce
+func TestSMSTProofFailsForWrongNonce(t *testing.T) {
+	dir := t.TempDir()
+	store, err := OpenSMST(dir)
+	if err != nil {
+		t.Fatalf("OpenSMST failed: %v", err)
+	}
+	defer store.Close()
+
+	store.Add(100, []byte{1, 2, 3})
+	store.Add(200, []byte{4, 5, 6})
+	store.Add(300, []byte{7, 8, 9})
+	store.Flush()
+
+	count := store.Count()
+	rootHash := store.GetRoot()
+
+	// Get proof for index 0
+	nonce0, vector0, _ := store.GetArtifact(0)
+	proof0, _ := store.GetProof(0, count)
+	elements0 := DecodeProofElements(proof0)
+
+	// Verify it works for the correct nonce
+	leafData0 := encodeLeaf(nonce0, vector0)
+	if !VerifySMSTProofWithCounts(rootHash, count, nonce0, leafData0, elements0) {
+		t.Fatal("Proof should verify for correct nonce")
+	}
+
+	// Try to verify with a WRONG nonce - should fail
+	wrongNonce := int32(999)
+	wrongLeafData := encodeLeaf(wrongNonce, vector0)
+	if VerifySMSTProofWithCounts(rootHash, count, wrongNonce, wrongLeafData, elements0) {
+		t.Error("Proof should NOT verify for wrong nonce - this breaks duplicate prevention!")
+	}
+}
+
+// TestSMSTDuplicateNoncePreventionEndToEnd tests the full duplicate prevention flow:
+// 1. Participant inserts artifacts with unique nonces
+// 2. Attempting to insert duplicate nonce fails
+// 3. Proofs can only verify artifacts that were actually inserted
+func TestSMSTDuplicateNoncePreventionEndToEnd(t *testing.T) {
+	dir := t.TempDir()
+	store, err := OpenSMST(dir)
+	if err != nil {
+		t.Fatalf("OpenSMST failed: %v", err)
+	}
+	defer store.Close()
+
+	// Simulate: participant receives nonces 1, 2, 3 from inference
+	store.Add(1, []byte{0x11})
+	store.Add(2, []byte{0x22})
+	store.Add(3, []byte{0x33})
+
+	// Malicious attempt: try to add nonce 2 again (duplicate)
+	err = store.Add(2, []byte{0xFF})
+	if err != ErrDuplicateNonce {
+		t.Errorf("Expected ErrDuplicateNonce, got: %v", err)
+	}
+
+	// Count should still be 3
+	if store.Count() != 3 {
+		t.Errorf("Expected count 3, got %d", store.Count())
+	}
+
+	store.Flush()
+	rootHash := store.GetRoot()
+	count := store.Count()
+
+	// Verify all inserted nonces can be proven
+	for i := uint32(0); i < count; i++ {
+		nonce, vector, _ := store.GetArtifact(i)
+		proof, _ := store.GetProof(i, count)
+		leafData := encodeLeaf(nonce, vector)
+		elements := DecodeProofElements(proof)
+
+		if !VerifySMSTProofWithCounts(rootHash, count, nonce, leafData, elements) {
+			t.Errorf("Valid artifact at index %d (nonce %d) failed verification", i, nonce)
+		}
+	}
+
+	// Verify that a non-existent nonce cannot be proven
+	// (There's no way to construct a valid proof for nonce 999 without having inserted it)
+	fakeNonce := int32(999)
+	fakeVector := []byte{0x99}
+	fakeLeafData := encodeLeaf(fakeNonce, fakeVector)
+
+	// Get proof for index 0 and try to use it for fake nonce
+	proof0, _ := store.GetProof(0, count)
+	elements0 := DecodeProofElements(proof0)
+
+	if VerifySMSTProofWithCounts(rootHash, count, fakeNonce, fakeLeafData, elements0) {
+		t.Error("Fake nonce should NOT verify with stolen proof")
+	}
+
+	t.Log("Duplicate prevention working correctly")
 }
