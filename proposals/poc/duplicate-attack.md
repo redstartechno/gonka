@@ -228,7 +228,8 @@ Recommendation: At upgrade block, all new commits use SMST. Old commits already 
 | File | Change |
 |:-----|:-------|
 | `artifacts/store.go` | Extract interface, rename to `mmr_store.go` |
-| `artifacts/smst.go` | New SMST tree + `VerifyProof()` |
+| `artifacts/smst.go` | New SMST tree implementation |
+| `artifacts/smst_verify.go` | Proof verification logic |
 | `artifacts/smst_store.go` | New store using SMST |
 | `artifacts/interface.go` | Interface definition |
 | `artifacts/managed_store.go` | Use SMST directly |
@@ -296,7 +297,7 @@ With disk persistence, both bottleneck on I/O.
 
 Verified: proof verification is **off-chain only**, in DAPI:
 - `decentralized-api/poc/proof_client.go` - `FetchAndVerifyProofs()`
-- `decentralized-api/poc/artifacts/mmr.go` - `VerifyProof()`
+- `decentralized-api/poc/artifacts/smst_verify.go` - `VerifySMSTProofWithDenseIndex()`
 
 No on-chain verification in `inference-chain`. This simplifies the upgrade - only DAPI code needs SMST verifier.
 

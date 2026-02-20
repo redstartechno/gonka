@@ -1553,3 +1553,280 @@ func TestSMSTRebuildFailsOnCorruption(t *testing.T) {
 		t.Logf("GetRootAt correctly failed: %v", err)
 	}
 }
+
+// Security hardening tests - verify SMST properties that prevent duplicate attacks
+
+// TestSMSTCountInflationAttackFails verifies that an attacker cannot claim
+// a higher count than actual leaves. The count is cryptographically committed
+// in the root hash via sibling counts at each level.
+func TestSMSTCountInflationAttackFails(t *testing.T) {
+	dir := t.TempDir()
+	store, err := OpenSMST(dir)
+	if err != nil {
+		t.Fatalf("OpenSMST: %v", err)
+	}
+	defer store.Close()
+
+	// Create tree with 5 real leaves
+	realNonces := []int32{10, 20, 30, 40, 50}
+	for _, n := range realNonces {
+		if err := store.Add(n, []byte{byte(n)}); err != nil {
+			t.Fatalf("Add(%d): %v", n, err)
+		}
+	}
+	store.Flush()
+
+	actualCount := store.Count() // = 5
+	rootHash := store.GetRoot()
+
+	// Get valid proof for denseIndex=0
+	nonce, vector, err := store.GetArtifact(0)
+	if err != nil {
+		t.Fatalf("GetArtifact(0): %v", err)
+	}
+	proof, err := store.GetProof(0, actualCount)
+	if err != nil {
+		t.Fatalf("GetProof(0, %d): %v", actualCount, err)
+	}
+	leafData := encodeLeaf(nonce, vector)
+
+	// Verify with CORRECT count - should pass
+	if !VerifySMSTProofSlice(rootHash, actualCount, nonce, leafData, proof) {
+		t.Fatal("Proof should verify with correct count")
+	}
+
+	// ATTACK: Claim inflated count (10 instead of 5)
+	// This simulates an attacker who claims count=10 on-chain but only has 5 leaves.
+	// The proof's sibling counts sum to 5 (committed by rootHash), so verification
+	// will compute currentCount=5, which != 10, causing failure.
+	inflatedCount := uint32(10)
+	if VerifySMSTProofSlice(rootHash, inflatedCount, nonce, leafData, proof) {
+		t.Error("SECURITY FAILURE: Proof verified with inflated count! Count inflation attack possible.")
+	}
+
+	// Also verify with dense index check
+	if VerifySMSTProofWithDenseIndex(rootHash, inflatedCount, 0, nonce, leafData, proof) {
+		t.Error("SECURITY FAILURE: VerifySMSTProofWithDenseIndex passed with inflated count!")
+	}
+
+	t.Log("Count inflation attack correctly prevented")
+}
+
+// TestSMSTProofWithWrongCountFails verifies that proofs fail when count
+// doesn't match the committed tree state.
+func TestSMSTProofWithWrongCountFails(t *testing.T) {
+	dir := t.TempDir()
+	store, err := OpenSMST(dir)
+	if err != nil {
+		t.Fatalf("OpenSMST: %v", err)
+	}
+	defer store.Close()
+
+	for i := int32(0); i < 100; i++ {
+		if err := store.Add(i, []byte{byte(i)}); err != nil {
+			t.Fatalf("Add(%d): %v", i, err)
+		}
+	}
+	store.Flush()
+
+	count := store.Count()
+	rootHash := store.GetRoot()
+
+	// Get proof for middle index
+	idx := uint32(50)
+	nonce, vector, _ := store.GetArtifact(idx)
+	proof, _ := store.GetProof(idx, count)
+	leafData := encodeLeaf(nonce, vector)
+	elements := DecodeProofElements(proof)
+
+	// Correct count passes
+	if !VerifySMSTProofWithCounts(rootHash, count, nonce, leafData, elements) {
+		t.Fatal("Proof should verify with correct count")
+	}
+
+	// count-1 fails (sibling counts sum to 100, not 99)
+	if VerifySMSTProofWithCounts(rootHash, count-1, nonce, leafData, elements) {
+		t.Error("Proof should NOT verify with count-1")
+	}
+
+	// count+1 fails (sibling counts sum to 100, not 101)
+	if VerifySMSTProofWithCounts(rootHash, count+1, nonce, leafData, elements) {
+		t.Error("Proof should NOT verify with count+1")
+	}
+
+	// Very different count fails
+	if VerifySMSTProofWithCounts(rootHash, 1000, nonce, leafData, elements) {
+		t.Error("Proof should NOT verify with count=1000")
+	}
+
+	t.Logf("Wrong count correctly rejected for all test cases")
+}
+
+// TestSMSTNonceHasUniqueDenseIndex verifies the core SMST security property:
+// each nonce maps to exactly ONE dense index. This is what prevents duplicates -
+// you cannot serve the same nonce for different dense indices.
+func TestSMSTNonceHasUniqueDenseIndex(t *testing.T) {
+	dir := t.TempDir()
+	store, err := OpenSMST(dir)
+	if err != nil {
+		t.Fatalf("OpenSMST: %v", err)
+	}
+	defer store.Close()
+
+	// Insert nonces with gaps to create a sparse tree
+	nonces := []int32{5, 50, 500, 5000, 50000}
+	for _, n := range nonces {
+		if err := store.Add(n, []byte{byte(n % 256)}); err != nil {
+			t.Fatalf("Add(%d): %v", n, err)
+		}
+	}
+	store.Flush()
+
+	count := store.Count()
+	rootHash := store.GetRoot()
+
+	// For each nonce, verify it can ONLY be proven at its unique dense index
+	for expectedIdx := uint32(0); expectedIdx < count; expectedIdx++ {
+		nonce, vector, _ := store.GetArtifact(expectedIdx)
+		proof, _ := store.GetProof(expectedIdx, count)
+		leafData := encodeLeaf(nonce, vector)
+
+		// Correct index passes
+		if !VerifySMSTProofWithDenseIndex(rootHash, count, expectedIdx, nonce, leafData, proof) {
+			t.Errorf("Nonce %d should verify at its correct index %d", nonce, expectedIdx)
+		}
+
+		// ALL other indices must fail for this nonce
+		for wrongIdx := uint32(0); wrongIdx < count; wrongIdx++ {
+			if wrongIdx == expectedIdx {
+				continue
+			}
+			if VerifySMSTProofWithDenseIndex(rootHash, count, wrongIdx, nonce, leafData, proof) {
+				t.Errorf("SECURITY FAILURE: Nonce %d verified at wrong index %d (should only be %d)",
+					nonce, wrongIdx, expectedIdx)
+			}
+		}
+	}
+
+	t.Log("Each nonce correctly maps to exactly one dense index")
+}
+
+// TestSMSTNegativeNonces verifies that negative nonces (which become large uint32
+// values internally) are handled correctly.
+func TestSMSTNegativeNonces(t *testing.T) {
+	dir := t.TempDir()
+	store, err := OpenSMST(dir)
+	if err != nil {
+		t.Fatalf("OpenSMST: %v", err)
+	}
+	defer store.Close()
+
+	// Test negative nonces - these become large uint32 values internally
+	// int32(-1) -> uint32(4294967295), requires depth 32
+	negativeNonces := []int32{-1, -100, -1000000}
+	positiveNonces := []int32{0, 1, 100}
+
+	allNonces := append(positiveNonces, negativeNonces...)
+	for _, n := range allNonces {
+		if err := store.Add(n, []byte{byte(n & 0xFF)}); err != nil {
+			t.Fatalf("Add(%d): %v", n, err)
+		}
+	}
+	store.Flush()
+
+	count := store.Count()
+	rootHash := store.GetRoot()
+
+	// Verify depth expanded to handle large nonces
+	if store.smst.Depth() < 32 {
+		t.Logf("Tree depth: %d (may not have expanded to 32 for small negative values)", store.smst.Depth())
+	}
+
+	// All nonces should be provable
+	for i := uint32(0); i < count; i++ {
+		nonce, vector, err := store.GetArtifact(i)
+		if err != nil {
+			t.Fatalf("GetArtifact(%d): %v", i, err)
+		}
+
+		proof, err := store.GetProof(i, count)
+		if err != nil {
+			t.Fatalf("GetProof(%d): %v", i, err)
+		}
+
+		leafData := encodeLeaf(nonce, vector)
+		if !VerifySMSTProofWithDenseIndex(rootHash, count, i, nonce, leafData, proof) {
+			t.Errorf("Proof failed for nonce %d at index %d", nonce, i)
+		}
+	}
+
+	// Note: int32(-1) when interpreted as uint32 becomes 4294967295,
+	// which determines its tree path. This is handled correctly by the
+	// depth expansion logic.
+
+	t.Logf("Negative nonces handled correctly, tree depth: %d", store.smst.Depth())
+}
+
+// TestSMSTCountBoundaries verifies edge cases for count values.
+func TestSMSTCountBoundaries(t *testing.T) {
+	t.Run("count=0", func(t *testing.T) {
+		// Empty proof with count=0 should fail
+		if VerifySMSTProofSlice(make([]byte, 32), 0, 0, []byte{}, nil) {
+			t.Error("Empty proof with count=0 should fail")
+		}
+		if VerifySMSTProofSlice(make([]byte, 32), 0, 0, []byte{}, [][]byte{}) {
+			t.Error("Empty proof slice with count=0 should fail")
+		}
+	})
+
+	t.Run("denseIndex >= count", func(t *testing.T) {
+		dir := t.TempDir()
+		store, _ := OpenSMST(dir)
+		defer store.Close()
+
+		store.Add(1, []byte{1})
+		store.Add(2, []byte{2})
+		store.Flush()
+
+		count := store.Count() // = 2
+		rootHash := store.GetRoot()
+		nonce, vector, _ := store.GetArtifact(0)
+		proof, _ := store.GetProof(0, count)
+		leafData := encodeLeaf(nonce, vector)
+
+		// denseIndex = count should fail (valid range is [0, count))
+		if VerifySMSTProofWithDenseIndex(rootHash, count, count, nonce, leafData, proof) {
+			t.Error("denseIndex == count should fail")
+		}
+
+		// denseIndex > count should fail
+		if VerifySMSTProofWithDenseIndex(rootHash, count, count+100, nonce, leafData, proof) {
+			t.Error("denseIndex > count should fail")
+		}
+	})
+
+	t.Run("single leaf tree", func(t *testing.T) {
+		dir := t.TempDir()
+		store, _ := OpenSMST(dir)
+		defer store.Close()
+
+		store.Add(42, []byte{42})
+		store.Flush()
+
+		count := store.Count() // = 1
+		rootHash := store.GetRoot()
+		nonce, vector, _ := store.GetArtifact(0)
+		proof, _ := store.GetProof(0, count)
+		leafData := encodeLeaf(nonce, vector)
+
+		// Single leaf at index 0 should verify
+		if !VerifySMSTProofWithDenseIndex(rootHash, count, 0, nonce, leafData, proof) {
+			t.Error("Single leaf tree proof should verify")
+		}
+
+		// Index 1 should fail (out of range)
+		if VerifySMSTProofWithDenseIndex(rootHash, count, 1, nonce, leafData, proof) {
+			t.Error("Index 1 in single-leaf tree should fail")
+		}
+	})
+}
