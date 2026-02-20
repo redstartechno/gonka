@@ -444,14 +444,7 @@ func (s *SMSTArtifactStore) GetProof(denseIndex uint32, snapshotCount uint32) ([
 		return nil, fmt.Errorf("snapshot count %d exceeds current count %d", snapshotCount, s.smst.Count())
 	}
 
-	var tree *SMST
-	if snapshotCount == s.smst.Count() {
-		tree = s.smst
-	} else if s.prebuiltSnapshot != nil && s.prebuiltCount == snapshotCount {
-		tree = s.prebuiltSnapshot
-	} else {
-		tree = s.rebuildTreeAt(snapshotCount)
-	}
+	tree := s.getSnapshotTree(snapshotCount)
 
 	nonce, _, err := tree.GetLeafByDenseIndex(denseIndex)
 	if err != nil {
@@ -460,6 +453,56 @@ func (s *SMSTArtifactStore) GetProof(denseIndex uint32, snapshotCount uint32) ([
 
 	proofWithCounts := s.buildProofWithCounts(tree, nonce)
 	return encodeProofForTransport(proofWithCounts), nil
+}
+
+// GetArtifactAndProof retrieves both artifact and proof for a dense index at a specific snapshot.
+// This ensures the nonce/vector and proof are consistent with the same snapshot tree state,
+// preventing the bug where GetArtifact uses current tree but GetProof uses snapshot tree.
+func (s *SMSTArtifactStore) GetArtifactAndProof(denseIndex uint32, snapshotCount uint32) (nonce int32, vector []byte, proof [][]byte, err error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if s.closed {
+		return 0, nil, nil, ErrStoreClosed
+	}
+
+	if denseIndex >= snapshotCount {
+		return 0, nil, nil, ErrLeafIndexOutOfRange
+	}
+
+	if snapshotCount > s.smst.Count() {
+		return 0, nil, nil, fmt.Errorf("snapshot count %d exceeds current count %d", snapshotCount, s.smst.Count())
+	}
+
+	tree := s.getSnapshotTree(snapshotCount)
+
+	nonce, _, err = tree.GetLeafByDenseIndex(denseIndex)
+	if err != nil {
+		return 0, nil, nil, err
+	}
+
+	// Look up artifact data by nonce (from disk or buffer)
+	nonce, vector, err = s.getArtifactByNonce(nonce)
+	if err != nil {
+		return 0, nil, nil, err
+	}
+
+	proofWithCounts := s.buildProofWithCounts(tree, nonce)
+	proof = encodeProofForTransport(proofWithCounts)
+
+	return nonce, vector, proof, nil
+}
+
+// getSnapshotTree returns the appropriate tree for the given snapshot count.
+// Must be called with s.mu held.
+func (s *SMSTArtifactStore) getSnapshotTree(snapshotCount uint32) *SMST {
+	if snapshotCount == s.smst.Count() {
+		return s.smst
+	}
+	if s.prebuiltSnapshot != nil && s.prebuiltCount == snapshotCount {
+		return s.prebuiltSnapshot
+	}
+	return s.rebuildTreeAt(snapshotCount)
 }
 
 func (s *SMSTArtifactStore) buildProofWithCounts(tree *SMST, nonce int32) []SMSTProofElement {

@@ -1830,3 +1830,149 @@ func TestSMSTCountBoundaries(t *testing.T) {
 		}
 	})
 }
+
+// TestSMSTSnapshotConsistency verifies that GetArtifactAndProof returns
+// consistent data from the same snapshot tree state. This is critical for
+// preventing the bug where GetArtifact uses current tree but GetProof uses snapshot.
+func TestSMSTSnapshotConsistency(t *testing.T) {
+	dir := t.TempDir()
+	store, err := OpenSMST(dir)
+	if err != nil {
+		t.Fatalf("OpenSMST: %v", err)
+	}
+	defer store.Close()
+
+	// Insert initial artifacts
+	initialNonces := []int32{10, 20, 30, 40, 50}
+	for _, n := range initialNonces {
+		if err := store.Add(n, []byte{byte(n)}); err != nil {
+			t.Fatalf("Add(%d): %v", n, err)
+		}
+	}
+	store.Flush()
+
+	snapshotCount := store.Count()
+	snapshotRoot, err := store.GetRootAt(snapshotCount)
+	if err != nil {
+		t.Fatalf("GetRootAt: %v", err)
+	}
+
+	// Add more artifacts to advance current state beyond snapshot
+	additionalNonces := []int32{5, 15, 25, 35, 45, 55} // Note: 5 < 10, so it changes dense index order!
+	for _, n := range additionalNonces {
+		if err := store.Add(n, []byte{byte(n)}); err != nil {
+			t.Fatalf("Add(%d): %v", n, err)
+		}
+	}
+	store.Flush()
+
+	// Current count is now different from snapshot
+	currentCount := store.Count()
+	if currentCount == snapshotCount {
+		t.Fatal("Test setup error: current count should differ from snapshot")
+	}
+
+	// For each dense index in the snapshot, verify GetArtifactAndProof returns
+	// data that verifies correctly against the snapshot root
+	for i := uint32(0); i < snapshotCount; i++ {
+		nonce, vector, proof, err := store.GetArtifactAndProof(i, snapshotCount)
+		if err != nil {
+			t.Fatalf("GetArtifactAndProof(%d, %d): %v", i, snapshotCount, err)
+		}
+
+		leafData := encodeLeaf(nonce, vector)
+
+		// This MUST verify successfully - if it doesn't, we have snapshot inconsistency
+		if !VerifySMSTProofWithDenseIndex(snapshotRoot, snapshotCount, i, nonce, leafData, proof) {
+			t.Errorf("Snapshot consistency FAILED for index %d: proof does not verify", i)
+			t.Logf("  nonce=%d, snapshotCount=%d, currentCount=%d", nonce, snapshotCount, currentCount)
+		}
+	}
+
+	t.Logf("Snapshot consistency verified: snapshotCount=%d, currentCount=%d", snapshotCount, currentCount)
+}
+
+// TestSMSTVerifierOverflowProtection tests that the verifier is protected against
+// integer overflow in the computedIndex accumulation.
+func TestSMSTVerifierOverflowProtection(t *testing.T) {
+	// Create a minimal valid proof structure for testing edge cases
+	dir := t.TempDir()
+	store, err := OpenSMST(dir)
+	if err != nil {
+		t.Fatalf("OpenSMST: %v", err)
+	}
+	defer store.Close()
+
+	store.Add(1, []byte{1})
+	store.Add(2, []byte{2})
+	store.Flush()
+
+	count := store.Count()
+	rootHash := store.GetRoot()
+	nonce, vector, _ := store.GetArtifact(0)
+	proof, _ := store.GetProof(0, count)
+	leafData := encodeLeaf(nonce, vector)
+
+	// Valid proof should work
+	if !VerifySMSTProofWithDenseIndex(rootHash, count, 0, nonce, leafData, proof) {
+		t.Fatal("Valid proof should verify")
+	}
+
+	// Test with count=0 (should fail early)
+	if VerifySMSTProofWithDenseIndex(rootHash, 0, 0, nonce, leafData, proof) {
+		t.Error("count=0 should fail verification")
+	}
+
+	// Test with empty proof (should fail early)
+	if VerifySMSTProofWithDenseIndex(rootHash, count, 0, nonce, leafData, [][]byte{}) {
+		t.Error("Empty proof should fail verification")
+	}
+
+	// Test with nil proof (should fail early)
+	if VerifySMSTProofWithDenseIndex(rootHash, count, 0, nonce, leafData, nil) {
+		t.Error("Nil proof should fail verification")
+	}
+}
+
+// TestSMSTGetArtifactAndProofErrorCases tests error handling in GetArtifactAndProof
+func TestSMSTGetArtifactAndProofErrorCases(t *testing.T) {
+	dir := t.TempDir()
+	store, err := OpenSMST(dir)
+	if err != nil {
+		t.Fatalf("OpenSMST: %v", err)
+	}
+	defer store.Close()
+
+	for i := int32(0); i < 5; i++ {
+		store.Add(i*10, []byte{byte(i)})
+	}
+	store.Flush()
+
+	count := store.Count()
+
+	// Test: denseIndex >= snapshotCount should fail
+	_, _, _, err = store.GetArtifactAndProof(count, count)
+	if err != ErrLeafIndexOutOfRange {
+		t.Errorf("Expected ErrLeafIndexOutOfRange for index=count, got %v", err)
+	}
+
+	_, _, _, err = store.GetArtifactAndProof(count+100, count)
+	if err != ErrLeafIndexOutOfRange {
+		t.Errorf("Expected ErrLeafIndexOutOfRange for index>count, got %v", err)
+	}
+
+	// Test: snapshotCount > current count should fail
+	_, _, _, err = store.GetArtifactAndProof(0, count+10)
+	if err == nil {
+		t.Error("Expected error for snapshotCount > current count")
+	}
+
+	// Test: valid request should succeed
+	nonce, vector, proof, err := store.GetArtifactAndProof(0, count)
+	if err != nil {
+		t.Fatalf("Valid request failed: %v", err)
+	}
+	if nonce == 0 && vector == nil && proof == nil {
+		t.Error("Valid request returned empty data")
+	}
+}

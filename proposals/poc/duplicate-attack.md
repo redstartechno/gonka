@@ -156,7 +156,7 @@ Minimal changes. Keep existing messages and flows unchanged.
 
 ### Interface
 
-Extract from current `store.go`:
+The interface enforces snapshot-aware reads. Unlike MMR where leaf positions were stable (artifact at position 5 was always the 5th inserted), SMST dense indices change as leaves are added. The mapping from dense index to nonce depends on sibling counts at each tree level.
 
 ```go
 type ArtifactStore interface {
@@ -165,15 +165,15 @@ type ArtifactStore interface {
     GetRootAt(snapshotCount uint32) ([]byte, error)
     GetFlushedRoot() (count uint32, root []byte)
     Count() uint32
-    GetArtifact(denseIndex uint32) (nonce int32, vector []byte, error)
-    GetProof(denseIndex uint32, snapshotCount uint32) ([][]byte, error)
+    GetArtifactAndProof(denseIndex, snapshotCount uint32) (nonce int32, vector []byte, proof [][]byte, error)
     GetNodeDistribution() map[string]uint32
     Flush() error
     Close() error
+    PrebuildSnapshot(count uint32) error
 }
 ```
 
-Note: `leafIndex` renamed to `denseIndex`. For MMR it's sequential position, for SMST it's sum-navigated position.
+`GetArtifactAndProof` is the only read method - it returns both artifact and proof from the same snapshot tree state. Separate `GetArtifact`/`GetProof` methods are intentionally omitted to prevent the bug where artifact comes from current tree but proof comes from snapshot tree.
 
 ### Persistence
 
@@ -293,20 +293,21 @@ With disk persistence, both bottleneck on I/O.
 
 ## Design Notes
 
+### Why Index-Binding Prevents Count Inflation
+
+Suppose an attacker claims `count=N` but only stores `M < N` real artifacts.
+
+When a validator samples `denseIndex=i` (where `i < N`):
+- If `i` corresponds to one of the M real nonces, the attacker can provide a valid proof
+- If `i` falls in the "gap", the attacker is stuck - any other nonce will have `computedIndex != i`
+
+The dense index is determined by nonce ordering (sum of left sibling counts), not by insertion order. For example, with nonces {100, 200, 300}, the dense indices are always {0, 1, 2} regardless of insertion order.
+
+To answer any possible sampled index `i < N`, the attacker must have N distinct nonces. Duplicates are impossible (same nonce = same path = overwrite). The claimed count accurately reflects real work.
+
 ### Proof Verification Location
 
-Verified: proof verification is **off-chain only**, in DAPI:
-- `decentralized-api/poc/proof_client.go` - `FetchAndVerifyProofs()`
-- `decentralized-api/poc/artifacts/smst_verify.go` - `VerifySMSTProofWithDenseIndex()`
-
-No on-chain verification in `inference-chain`. This simplifies the upgrade - only DAPI code needs SMST verifier.
-
-### Cache Eviction
-
-Reuse existing `managed_store.go` cleanup (already implemented for MMR):
-- `retainCount` = 10 (keeps last 10 PoC stages)
-- `cleanupLoop` runs every 30 seconds, prunes oldest stores
-- SMST store evicted same as MMR store - no changes needed
+Proof verification is off-chain only, in DAPI. No on-chain verification needed - this simplifies the upgrade.
 
 ### Migration
 
@@ -314,10 +315,4 @@ No migration needed. At upgrade:
 - Old epochs: already validated, data pruned
 - New epochs: use SMST from start
 
-SMST is now the sole implementation - no runtime switching needed.
-
-### Stress Test Scope
-
-Test both:
-- In-memory: measures pure engine speed
-- With persistence: measures realistic throughput including disk I/O and lock contention
+Implementation details (proof format, verification algorithms, snapshot handling) are documented in phase implementation files (`smst-phase-*.md`).

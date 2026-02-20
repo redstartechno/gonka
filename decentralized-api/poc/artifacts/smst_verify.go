@@ -160,8 +160,14 @@ func VerifySMSTProofSlice(rootHash []byte, count uint32, nonce int32, leafData [
 // VerifySMSTProofWithDenseIndex verifies an SMST proof and checks that the nonce
 // is at the claimed dense index position. The sibling counts in the proof are
 // committed by the root hash, making the index binding cryptographically sound.
+//
+// Security: This function is hardened against overflow attacks. The computedIndex
+// accumulator uses uint64 to detect overflow, and we explicitly check that it
+// stays within bounds of count. Since sibling counts are committed by the root hash,
+// a malicious prover cannot forge counts without changing the root.
 func VerifySMSTProofWithDenseIndex(rootHash []byte, count uint32, denseIndex uint32, nonce int32, leafData []byte, proof [][]byte) bool {
-	if len(proof) == 0 || denseIndex >= count {
+	// Reject edge cases: empty proof, zero count, or out-of-bounds index
+	if len(proof) == 0 || count == 0 || denseIndex >= count {
 		return false
 	}
 
@@ -170,6 +176,7 @@ func VerifySMSTProofWithDenseIndex(rootHash []byte, count uint32, denseIndex uin
 		return false
 	}
 
+	// First verify the Merkle proof (this also checks that sibling counts sum to count)
 	if !VerifySMSTProofWithCounts(rootHash, count, nonce, leafData, elements) {
 		return false
 	}
@@ -177,12 +184,19 @@ func VerifySMSTProofWithDenseIndex(rootHash []byte, count uint32, denseIndex uin
 	depth := len(elements)
 	path := smstNoncePath(nonce, depth)
 
-	computedIndex := uint32(0)
+	// Use uint64 to detect overflow when summing sibling counts.
+	// Since we verified the proof, sibling counts should be valid, but we defend-in-depth.
+	var computedIndex uint64
 	for i := 0; i < depth; i++ {
 		if path[i] {
-			computedIndex += elements[i].SiblingCount
+			computedIndex += uint64(elements[i].SiblingCount)
+			// If computedIndex exceeds count, the proof is invalid (defense-in-depth)
+			if computedIndex >= uint64(count) && computedIndex != uint64(denseIndex) {
+				return false
+			}
 		}
 	}
 
-	return computedIndex == denseIndex
+	// Final check: computed index must exactly match claimed dense index
+	return computedIndex == uint64(denseIndex)
 }

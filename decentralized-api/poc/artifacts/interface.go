@@ -2,6 +2,10 @@ package artifacts
 
 // ArtifactStore defines the interface for PoC artifact storage with Merkle commitments.
 // Implementations must be safe for concurrent use.
+//
+// All read operations that return artifacts or proofs require a snapshot count parameter.
+// This is critical for SMST correctness: the dense index to nonce mapping depends on tree state.
+// Unlike MMR where leaf positions were stable, SMST dense indices change as leaves are added.
 type ArtifactStore interface {
 	// Add appends an artifact if nonce is not already in the store.
 	// Deprecated: Use AddWithNode to track per-node distribution.
@@ -25,12 +29,10 @@ type ArtifactStore interface {
 	// Count returns the total number of artifacts (including unflushed).
 	Count() uint32
 
-	// GetArtifact retrieves an artifact by its dense index.
-	// Dense index is the sequential position [0, count).
-	GetArtifact(denseIndex uint32) (nonce int32, vector []byte, err error)
-
-	// GetProof generates a merkle proof for denseIndex at snapshotCount.
-	GetProof(denseIndex uint32, snapshotCount uint32) ([][]byte, error)
+	// GetArtifactAndProof retrieves artifact and proof for a dense index at a specific snapshot.
+	// This is the ONLY way to retrieve artifacts - snapshot awareness is mandatory for SMST.
+	// Dense index is the sequential position [0, snapshotCount) computed from sibling counts.
+	GetArtifactAndProof(denseIndex uint32, snapshotCount uint32) (nonce int32, vector []byte, proof [][]byte, err error)
 
 	// GetNodeDistribution returns a copy of the flushed node distribution.
 	GetNodeDistribution() map[string]uint32

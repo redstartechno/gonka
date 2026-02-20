@@ -56,6 +56,57 @@ These tests document the security properties and provide regression protection.
 
 All 44 SMST tests pass including 5 new security hardening tests.
 
+## Implementation Details
+
+### Proof Format
+
+Each proof element is exactly 36 bytes:
+```
+[sibling_hash (32 bytes)] [sibling_subtree_count (4 bytes, Little Endian)]
+```
+
+Proof elements are ordered from root to leaf. The verifier infers tree depth from proof length.
+
+### Root Reconstruction
+
+1. Start with `currentHash = hash(0x00 || leafData)`, `currentCount = 1`
+2. For each proof level (leaf to root):
+   - Determine direction from nonce path bit
+   - Combine: `currentHash = hash(0x01 || leftHash || rightHash || combinedCount)`
+   - Accumulate: `currentCount = myCount + siblingCount`
+3. Verify: `currentCount == claimed_count` AND `currentHash == claimed_root`
+
+### Dense Index Binding
+
+After root verification, compute the dense index from sibling counts:
+```
+computedIndex = 0
+for level in 0..depth:
+    if nonce_path[level] is RIGHT:
+        computedIndex += sibling_count[level]
+return computedIndex == claimed_dense_index
+```
+
+The `computedIndex` equals the count of leaves with nonces numerically smaller than the current nonce. Sibling counts are committed by the root hash, making index binding cryptographically sound.
+
+### Snapshot Consistency
+
+The proof endpoint must serve artifacts and proofs from the same snapshot tree state. Unlike MMR where leaf positions were stable, SMST dense indices change as leaves are added.
+
+The interface enforces this with a single read method:
+```go
+GetArtifactAndProof(denseIndex, snapshotCount uint32) (nonce int32, vector []byte, proof [][]byte, error)
+```
+
+Separate `GetArtifact`/`GetProof` methods are intentionally omitted to prevent mixing tree states.
+
+### Verifier Hardening
+
+`VerifySMSTProofWithDenseIndex` uses:
+- `uint64` accumulator for overflow protection
+- Explicit `count == 0` rejection
+- Defense-in-depth bounds checking during accumulation
+
 ## Conclusion
 
 The SMST implementation provides cryptographic guarantees against:
