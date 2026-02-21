@@ -10,6 +10,123 @@ import (
 	"testing"
 )
 
+// Test helpers - these mirror removed production functions for test convenience
+
+type SMSTProofElement struct {
+	SiblingHash  []byte
+	SiblingCount uint32
+}
+
+func DecodeProofElements(proof [][]byte) []SMSTProofElement {
+	elements := make([]SMSTProofElement, len(proof))
+	for i, data := range proof {
+		if len(data) != 36 {
+			return nil
+		}
+		elements[i].SiblingHash = data[:32]
+		elements[i].SiblingCount = binary.LittleEndian.Uint32(data[32:36])
+	}
+	return elements
+}
+
+func VerifySMSTProofWithCounts(rootHash []byte, count uint32, nonce int32, leafData []byte, proof []SMSTProofElement) bool {
+	if len(proof) == 0 {
+		return false
+	}
+
+	depth := len(proof)
+	leafHash := smstHashLeaf(leafData)
+	path := smstNoncePath(nonce, depth)
+
+	currentHash := leafHash
+	currentCount := uint32(1)
+
+	for i := depth - 1; i >= 0; i-- {
+		elem := proof[i]
+		goRight := path[i]
+
+		var leftHash, rightHash []byte
+		var leftCount, rightCount uint32
+
+		if goRight {
+			leftHash = elem.SiblingHash
+			rightHash = currentHash
+			leftCount = elem.SiblingCount
+			rightCount = currentCount
+		} else {
+			leftHash = currentHash
+			rightHash = elem.SiblingHash
+			leftCount = currentCount
+			rightCount = elem.SiblingCount
+		}
+
+		currentCount = leftCount + rightCount
+		currentHash = smstHashNode(leftHash, rightHash, currentCount)
+	}
+
+	if currentCount != count {
+		return false
+	}
+
+	return bytesEqual(currentHash, rootHash)
+}
+
+func VerifySMSTProofSlice(rootHash []byte, count uint32, nonce int32, leafData []byte, proof [][]byte) bool {
+	if len(proof) == 0 {
+		return false
+	}
+	elements := DecodeProofElements(proof)
+	if elements == nil {
+		return false
+	}
+	return VerifySMSTProofWithCounts(rootHash, count, nonce, leafData, elements)
+}
+
+func EncodeSMSTProof(proof []SMSTProofElement) []byte {
+	if len(proof) == 0 {
+		return nil
+	}
+	buf := make([]byte, 1+len(proof)*36)
+	buf[0] = byte(len(proof))
+	offset := 1
+	for _, elem := range proof {
+		copy(buf[offset:offset+32], elem.SiblingHash)
+		binary.LittleEndian.PutUint32(buf[offset+32:offset+36], elem.SiblingCount)
+		offset += 36
+	}
+	return buf
+}
+
+func DecodeSMSTProof(data []byte) ([]SMSTProofElement, error) {
+	if len(data) < 1 {
+		return nil, ErrLeafIndexOutOfRange
+	}
+	depth := int(data[0])
+	if len(data) != 1+depth*36 {
+		return nil, ErrLeafIndexOutOfRange
+	}
+	proof := make([]SMSTProofElement, depth)
+	offset := 1
+	for i := 0; i < depth; i++ {
+		proof[i].SiblingHash = make([]byte, 32)
+		copy(proof[i].SiblingHash, data[offset:offset+32])
+		proof[i].SiblingCount = binary.LittleEndian.Uint32(data[offset+32 : offset+36])
+		offset += 36
+	}
+	return proof, nil
+}
+
+func encodeTestProofForTransport(proof []SMSTProofElement) [][]byte {
+	result := make([][]byte, len(proof))
+	for i, elem := range proof {
+		encoded := make([]byte, 36)
+		copy(encoded[:32], elem.SiblingHash)
+		binary.LittleEndian.PutUint32(encoded[32:], elem.SiblingCount)
+		result[i] = encoded
+	}
+	return result
+}
+
 func TestSMSTEmpty(t *testing.T) {
 	tree := NewSMST(24)
 
@@ -191,15 +308,14 @@ func TestSMSTStoreProof(t *testing.T) {
 
 	root := store.GetRoot()
 	for i := uint32(0); i < 8; i++ {
-		proof, err := store.GetProof(i, 8)
+		nonce, vector, proof, err := store.GetArtifactAndProof(i, 8)
 		if err != nil {
-			t.Fatalf("GetProof(%d) failed: %v", i, err)
+			t.Fatalf("GetArtifactAndProof(%d) failed: %v", i, err)
 		}
 		if len(proof) == 0 {
 			t.Errorf("expected non-empty proof for index %d", i)
 		}
 
-		nonce, vector, _ := store.GetArtifact(i)
 		leafData := encodeLeaf(nonce, vector)
 
 		proofElements := decodeProofFromTransport(proof)
@@ -248,10 +364,11 @@ func TestSMSTStoreGetArtifact(t *testing.T) {
 		{200, []byte{7, 8, 9}},
 	}
 
+	count := store.Count()
 	for i, expected := range expectedOrder {
-		nonce, vector, err := store.GetArtifact(uint32(i))
+		nonce, vector, _, err := store.GetArtifactAndProof(uint32(i), count)
 		if err != nil {
-			t.Fatalf("GetArtifact(%d) failed: %v", i, err)
+			t.Fatalf("GetArtifactAndProof(%d) failed: %v", i, err)
 		}
 		if nonce != expected.nonce {
 			t.Errorf("artifact %d: expected nonce %d, got %d", i, expected.nonce, nonce)
@@ -281,14 +398,9 @@ func TestSMSTVerifyProof(t *testing.T) {
 	count, rootHash := store.GetFlushedRoot()
 
 	for i := uint32(0); i < count; i++ {
-		nonce, vector, err := store.GetArtifact(i)
+		nonce, vector, proof, err := store.GetArtifactAndProof(i, count)
 		if err != nil {
-			t.Fatalf("GetArtifact(%d): %v", i, err)
-		}
-
-		proof, err := store.GetProof(i, count)
-		if err != nil {
-			t.Fatalf("GetProof(%d): %v", i, err)
+			t.Fatalf("GetArtifactAndProof(%d): %v", i, err)
 		}
 
 		leafData := encodeLeaf(nonce, vector)
@@ -382,7 +494,7 @@ func BenchmarkSMSTGetProof(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		leafIdx := uint32(i % treeSize)
-		store.GetProof(leafIdx, treeSize)
+		store.GetArtifactAndProof(leafIdx, treeSize)
 	}
 }
 
@@ -402,8 +514,7 @@ func BenchmarkSMSTVerifyProof(b *testing.B) {
 	proofs := make([][][]byte, 100)
 	nonces := make([]int32, 100)
 	for i := 0; i < 100; i++ {
-		proofs[i], _ = store.GetProof(uint32(i), treeSize)
-		nonces[i], _, _ = store.GetArtifact(uint32(i))
+		nonces[i], _, proofs[i], _ = store.GetArtifactAndProof(uint32(i), treeSize)
 	}
 
 	b.ResetTimer()
@@ -461,9 +572,9 @@ func TestSMSTProofSizes(t *testing.T) {
 
 			for i := 0; i < sampleCount; i++ {
 				leafIdx := uint32(i * size / sampleCount)
-				proof, err := store.GetProof(leafIdx, uint32(size))
+				_, _, proof, err := store.GetArtifactAndProof(leafIdx, uint32(size))
 				if err != nil {
-					t.Fatalf("GetProof failed: %v", err)
+					t.Fatalf("GetArtifactAndProof failed: %v", err)
 				}
 				for _, h := range proof {
 					totalProofBytes += len(h)
@@ -648,10 +759,11 @@ func TestSMSTStoreNegativeNonce(t *testing.T) {
 	// So: -2147483648, -100, -1
 	expectedNonces := []int32{-2147483648, -100, -1}
 
+	count := store.Count()
 	for i, expected := range expectedNonces {
-		nonce, _, err := store.GetArtifact(uint32(i))
+		nonce, _, _, err := store.GetArtifactAndProof(uint32(i), count)
 		if err != nil {
-			t.Fatalf("GetArtifact(%d) failed: %v", i, err)
+			t.Fatalf("GetArtifactAndProof(%d) failed: %v", i, err)
 		}
 		if nonce != expected {
 			t.Errorf("artifact %d: expected nonce %d, got %d", i, expected, nonce)
@@ -723,12 +835,13 @@ func TestSMSTStoreConcurrentGetArtifact(t *testing.T) {
 
 	// Build expected mapping: dense index -> (nonce, vector)
 	// SMST orders by nonce position in tree (sorted order for sequential nonces)
+	count := store.Count()
 	expectedData := make(map[uint32]struct {
 		nonce  int32
 		vector []byte
 	})
 	for i := uint32(0); i < artifactCount; i++ {
-		nonce, vector, _ := store.GetArtifact(i)
+		nonce, vector, _, _ := store.GetArtifactAndProof(i, count)
 		expectedData[i] = struct {
 			nonce  int32
 			vector []byte
@@ -744,9 +857,9 @@ func TestSMSTStoreConcurrentGetArtifact(t *testing.T) {
 			defer wg.Done()
 			for r := 0; r < readsPerGoroutine; r++ {
 				leafIdx := uint32((goroutineID*readsPerGoroutine + r) % artifactCount)
-				nonce, vector, err := store.GetArtifact(leafIdx)
+				nonce, vector, _, err := store.GetArtifactAndProof(leafIdx, count)
 				if err != nil {
-					errChan <- fmt.Errorf("goroutine %d: GetArtifact(%d) failed: %v", goroutineID, leafIdx, err)
+					errChan <- fmt.Errorf("goroutine %d: GetArtifactAndProof(%d) failed: %v", goroutineID, leafIdx, err)
 					return
 				}
 				expected := expectedData[leafIdx]
@@ -807,10 +920,9 @@ func TestSMSTStoreConcurrentReadsHeavy(t *testing.T) {
 			for r := 0; r < readsPerGoroutine; r++ {
 				leafIdx := uint32((goroutineID + r*goroutines) % int(count))
 
-				// Test GetArtifact
-				nonce, vector, err := store.GetArtifact(leafIdx)
+				nonce, vector, proof, err := store.GetArtifactAndProof(leafIdx, count)
 				if err != nil {
-					errChan <- fmt.Errorf("g%d: GetArtifact(%d) failed: %v", goroutineID, leafIdx, err)
+					errChan <- fmt.Errorf("g%d: GetArtifactAndProof(%d) failed: %v", goroutineID, leafIdx, err)
 					return
 				}
 				if len(vector) != 24 {
@@ -818,14 +930,6 @@ func TestSMSTStoreConcurrentReadsHeavy(t *testing.T) {
 					return
 				}
 
-				// Test GetProof
-				proof, err := store.GetProof(leafIdx, count)
-				if err != nil {
-					errChan <- fmt.Errorf("g%d: GetProof(%d) failed: %v", goroutineID, leafIdx, err)
-					return
-				}
-
-				// Verify proof
 				leafData := encodeLeaf(nonce, vector)
 				elements := DecodeProofElements(proof)
 				if !VerifySMSTProofWithCounts(rootHash, count, nonce, leafData, elements) {
@@ -890,13 +994,7 @@ func TestSMSTStoreConcurrentReadsWithProofs(t *testing.T) {
 			for op := 0; op < opsPerGoroutine; op++ {
 				idx := uint32((gid*opsPerGoroutine + op) % int(count))
 
-				nonce, vector, err := store.GetArtifact(idx)
-				if err != nil {
-					localFail++
-					continue
-				}
-
-				proof, err := store.GetProof(idx, count)
+				nonce, vector, proof, err := store.GetArtifactAndProof(idx, count)
 				if err != nil {
 					localFail++
 					continue
@@ -964,7 +1062,7 @@ func TestSMSTStoreConcurrentReadsWhileWriting(t *testing.T) {
 						continue
 					}
 					idx := uint32(gid) % count
-					nonce, vector, err := store.GetArtifact(idx)
+					nonce, vector, _, err := store.GetArtifactAndProof(idx, count)
 					if err != nil {
 						atomic.AddInt64(&readFail, 1)
 						continue
@@ -1088,21 +1186,12 @@ func TestSMSTProofProvesCorrectNonceAtIndex(t *testing.T) {
 	t.Logf("Store has %d artifacts, root: %x", count, rootHash[:8])
 
 	// For each dense index, verify:
-	// 1. GetArtifact returns a nonce
-	// 2. GetProof returns a valid proof
-	// 3. The proof verifies correctly for that specific nonce
 	for i := uint32(0); i < count; i++ {
-		nonce, vector, err := store.GetArtifact(i)
+		nonce, vector, proof, err := store.GetArtifactAndProof(i, count)
 		if err != nil {
-			t.Fatalf("GetArtifact(%d) failed: %v", i, err)
+			t.Fatalf("GetArtifactAndProof(%d) failed: %v", i, err)
 		}
 
-		proof, err := store.GetProof(i, count)
-		if err != nil {
-			t.Fatalf("GetProof(%d, %d) failed: %v", i, count, err)
-		}
-
-		// Build leaf data for verification
 		leafData := encodeLeaf(nonce, vector)
 
 		// Decode and verify the proof
@@ -1138,8 +1227,7 @@ func TestSMSTProofFailsForWrongNonce(t *testing.T) {
 	rootHash := store.GetRoot()
 
 	// Get proof for index 0
-	nonce0, vector0, _ := store.GetArtifact(0)
-	proof0, _ := store.GetProof(0, count)
+	nonce0, vector0, proof0, _ := store.GetArtifactAndProof(0, count)
 	elements0 := DecodeProofElements(proof0)
 
 	// Verify it works for the correct nonce
@@ -1190,8 +1278,7 @@ func TestSMSTDuplicateNoncePreventionEndToEnd(t *testing.T) {
 
 	// Verify all inserted nonces can be proven
 	for i := uint32(0); i < count; i++ {
-		nonce, vector, _ := store.GetArtifact(i)
-		proof, _ := store.GetProof(i, count)
+		nonce, vector, proof, _ := store.GetArtifactAndProof(i, count)
 		leafData := encodeLeaf(nonce, vector)
 		elements := DecodeProofElements(proof)
 
@@ -1201,13 +1288,12 @@ func TestSMSTDuplicateNoncePreventionEndToEnd(t *testing.T) {
 	}
 
 	// Verify that a non-existent nonce cannot be proven
-	// (There's no way to construct a valid proof for nonce 999 without having inserted it)
 	fakeNonce := int32(999)
 	fakeVector := []byte{0x99}
 	fakeLeafData := encodeLeaf(fakeNonce, fakeVector)
 
 	// Get proof for index 0 and try to use it for fake nonce
-	proof0, _ := store.GetProof(0, count)
+	_, _, proof0, _ := store.GetArtifactAndProof(0, count)
 	elements0 := DecodeProofElements(proof0)
 
 	if VerifySMSTProofWithCounts(rootHash, count, fakeNonce, fakeLeafData, elements0) {
@@ -1242,8 +1328,7 @@ func TestSMSTDepthExpansionHashCorrectness(t *testing.T) {
 
 	// Verify proofs work before expansion
 	for i := uint32(0); i < countBefore; i++ {
-		nonce, vector, _ := store.GetArtifact(i)
-		proof, _ := store.GetProof(i, countBefore)
+		nonce, vector, proof, _ := store.GetArtifactAndProof(i, countBefore)
 		leafData := encodeLeaf(nonce, vector)
 		if !VerifySMSTProofSlice(rootBefore, countBefore, nonce, leafData, proof) {
 			t.Errorf("proof verification failed BEFORE expansion for index %d", i)
@@ -1266,10 +1351,9 @@ func TestSMSTDepthExpansionHashCorrectness(t *testing.T) {
 
 	// Verify proofs work AFTER expansion for ALL artifacts including originals
 	for i := uint32(0); i < countAfter; i++ {
-		nonce, vector, _ := store.GetArtifact(i)
-		proof, err := store.GetProof(i, countAfter)
+		nonce, vector, proof, err := store.GetArtifactAndProof(i, countAfter)
 		if err != nil {
-			t.Errorf("GetProof(%d) after expansion: %v", i, err)
+			t.Errorf("GetArtifactAndProof(%d) after expansion: %v", i, err)
 			continue
 		}
 		leafData := encodeLeaf(nonce, vector)
@@ -1413,7 +1497,7 @@ func TestSMSTMalformedProofRejection(t *testing.T) {
 	store.Flush()
 
 	count, rootHash := store.GetFlushedRoot()
-	nonce, vector, _ := store.GetArtifact(2)
+	nonce, vector, _, _ := store.GetArtifactAndProof(2, count)
 	leafData := encodeLeaf(nonce, vector)
 
 	// Test 1: Empty proof should fail
@@ -1469,14 +1553,9 @@ func TestSMSTIndexBindingVerification(t *testing.T) {
 
 	// Test each artifact at its correct dense index
 	for expectedIndex := uint32(0); expectedIndex < count; expectedIndex++ {
-		nonce, vector, err := store.GetArtifact(expectedIndex)
+		nonce, vector, proof, err := store.GetArtifactAndProof(expectedIndex, count)
 		if err != nil {
-			t.Fatalf("GetArtifact(%d) failed: %v", expectedIndex, err)
-		}
-
-		proof, err := store.GetProof(expectedIndex, count)
-		if err != nil {
-			t.Fatalf("GetProof(%d, %d) failed: %v", expectedIndex, count, err)
+			t.Fatalf("GetArtifactAndProof(%d) failed: %v", expectedIndex, err)
 		}
 
 		leafData := encodeLeaf(nonce, vector)
@@ -1494,8 +1573,7 @@ func TestSMSTIndexBindingVerification(t *testing.T) {
 	}
 
 	// Test: taking proof from index 0 and claiming it's for index 2 should fail
-	nonce0, vector0, _ := store.GetArtifact(0)
-	proof0, _ := store.GetProof(0, count)
+	nonce0, vector0, proof0, _ := store.GetArtifactAndProof(0, count)
 	leafData0 := encodeLeaf(nonce0, vector0)
 
 	if VerifySMSTProofWithDenseIndex(rootHash, count, 2, nonce0, leafData0, proof0) {
@@ -1580,13 +1658,9 @@ func TestSMSTCountInflationAttackFails(t *testing.T) {
 	rootHash := store.GetRoot()
 
 	// Get valid proof for denseIndex=0
-	nonce, vector, err := store.GetArtifact(0)
+	nonce, vector, proof, err := store.GetArtifactAndProof(0, actualCount)
 	if err != nil {
-		t.Fatalf("GetArtifact(0): %v", err)
-	}
-	proof, err := store.GetProof(0, actualCount)
-	if err != nil {
-		t.Fatalf("GetProof(0, %d): %v", actualCount, err)
+		t.Fatalf("GetArtifactAndProof(0): %v", err)
 	}
 	leafData := encodeLeaf(nonce, vector)
 
@@ -1634,8 +1708,7 @@ func TestSMSTProofWithWrongCountFails(t *testing.T) {
 
 	// Get proof for middle index
 	idx := uint32(50)
-	nonce, vector, _ := store.GetArtifact(idx)
-	proof, _ := store.GetProof(idx, count)
+	nonce, vector, proof, _ := store.GetArtifactAndProof(idx, count)
 	leafData := encodeLeaf(nonce, vector)
 	elements := DecodeProofElements(proof)
 
@@ -1687,8 +1760,7 @@ func TestSMSTNonceHasUniqueDenseIndex(t *testing.T) {
 
 	// For each nonce, verify it can ONLY be proven at its unique dense index
 	for expectedIdx := uint32(0); expectedIdx < count; expectedIdx++ {
-		nonce, vector, _ := store.GetArtifact(expectedIdx)
-		proof, _ := store.GetProof(expectedIdx, count)
+		nonce, vector, proof, _ := store.GetArtifactAndProof(expectedIdx, count)
 		leafData := encodeLeaf(nonce, vector)
 
 		// Correct index passes
@@ -1744,14 +1816,9 @@ func TestSMSTNegativeNonces(t *testing.T) {
 
 	// All nonces should be provable
 	for i := uint32(0); i < count; i++ {
-		nonce, vector, err := store.GetArtifact(i)
+		nonce, vector, proof, err := store.GetArtifactAndProof(i, count)
 		if err != nil {
-			t.Fatalf("GetArtifact(%d): %v", i, err)
-		}
-
-		proof, err := store.GetProof(i, count)
-		if err != nil {
-			t.Fatalf("GetProof(%d): %v", i, err)
+			t.Fatalf("GetArtifactAndProof(%d): %v", i, err)
 		}
 
 		leafData := encodeLeaf(nonce, vector)
@@ -1790,8 +1857,7 @@ func TestSMSTCountBoundaries(t *testing.T) {
 
 		count := store.Count() // = 2
 		rootHash := store.GetRoot()
-		nonce, vector, _ := store.GetArtifact(0)
-		proof, _ := store.GetProof(0, count)
+		nonce, vector, proof, _ := store.GetArtifactAndProof(0, count)
 		leafData := encodeLeaf(nonce, vector)
 
 		// denseIndex = count should fail (valid range is [0, count))
@@ -1815,8 +1881,7 @@ func TestSMSTCountBoundaries(t *testing.T) {
 
 		count := store.Count() // = 1
 		rootHash := store.GetRoot()
-		nonce, vector, _ := store.GetArtifact(0)
-		proof, _ := store.GetProof(0, count)
+		nonce, vector, proof, _ := store.GetArtifactAndProof(0, count)
 		leafData := encodeLeaf(nonce, vector)
 
 		// Single leaf at index 0 should verify
@@ -1909,8 +1974,7 @@ func TestSMSTVerifierOverflowProtection(t *testing.T) {
 
 	count := store.Count()
 	rootHash := store.GetRoot()
-	nonce, vector, _ := store.GetArtifact(0)
-	proof, _ := store.GetProof(0, count)
+	nonce, vector, proof, _ := store.GetArtifactAndProof(0, count)
 	leafData := encodeLeaf(nonce, vector)
 
 	// Valid proof should work

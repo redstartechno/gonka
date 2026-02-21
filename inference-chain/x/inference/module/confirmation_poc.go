@@ -10,13 +10,19 @@ import (
 
 	mathsdk "cosmossdk.io/math"
 	sdk "github.com/cosmos/cosmos-sdk/types"
+	"github.com/productscience/inference/testenv"
 	"github.com/productscience/inference/x/inference/calculations"
 	"github.com/productscience/inference/x/inference/types"
 	"github.com/productscience/inference/x/inference/utils"
 	"github.com/shopspring/decimal"
 )
 
-const safetyWindow = 50
+func getSafetyWindow() int64 {
+	if testenv.IsTestNet() {
+		return 1
+	}
+	return 50
+}
 
 var pocDeviationCoeff = decimal.New(909, -3)
 
@@ -138,7 +144,7 @@ func (am AppModule) checkConfirmationPoCTrigger(
 		epochParams.PocValidationDelay +
 		epochParams.PocValidationDuration +
 		epochParams.SetNewValidatorsDelay +
-		safetyWindow
+		getSafetyWindow()
 	triggerWindowEnd := nextPoCStart - epochParams.InferenceValidationCutoff - confirmationWindowDuration
 
 	if blockHeight < setNewValidatorsHeight || blockHeight > triggerWindowEnd {

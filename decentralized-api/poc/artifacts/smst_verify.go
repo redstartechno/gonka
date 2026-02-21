@@ -2,11 +2,6 @@ package artifacts
 
 import "encoding/binary"
 
-// Note: Simple proof verification without counts is NOT possible for SMST.
-// SMST proofs MUST include sibling counts to verify correctly because the
-// internal node hash includes the count. Use VerifySMSTProofWithCounts or
-// VerifySMSTProofSlice instead.
-
 func smstNoncePath(nonce int32, depth int) []bool {
 	path := make([]bool, depth)
 	n := uint32(nonce)
@@ -29,15 +24,7 @@ func bytesEqual(a, b []byte) bool {
 	return true
 }
 
-// VerifySMSTProofWithCounts verifies an SMST proof with explicit sibling counts.
-// Proof elements are ordered from root (index 0) to leaf (index depth-1).
-// Verification reconstructs the root by starting at the leaf and going up.
-func VerifySMSTProofWithCounts(rootHash []byte, count uint32, nonce int32, leafData []byte, proof []SMSTProofElement) bool {
-	return VerifySMSTProofWithCountsDebug(rootHash, count, nonce, leafData, proof, false)
-}
-
-// VerifySMSTProofWithCountsDebug is like VerifySMSTProofWithCounts but with optional debug output.
-func VerifySMSTProofWithCountsDebug(rootHash []byte, count uint32, nonce int32, leafData []byte, proof []SMSTProofElement, debug bool) bool {
+func verifySMSTProofWithCounts(rootHash []byte, count uint32, nonce int32, leafData []byte, proof []smstProofElement) bool {
 	if len(proof) == 0 {
 		return false
 	}
@@ -57,15 +44,15 @@ func VerifySMSTProofWithCountsDebug(rootHash []byte, count uint32, nonce int32, 
 		var leftCount, rightCount uint32
 
 		if goRight {
-			leftHash = elem.SiblingHash
+			leftHash = elem.siblingHash
 			rightHash = currentHash
-			leftCount = elem.SiblingCount
+			leftCount = elem.siblingCount
 			rightCount = currentCount
 		} else {
 			leftHash = currentHash
-			rightHash = elem.SiblingHash
+			rightHash = elem.siblingHash
 			leftCount = currentCount
-			rightCount = elem.SiblingCount
+			rightCount = elem.siblingCount
 		}
 
 		currentCount = leftCount + rightCount
@@ -79,83 +66,24 @@ func VerifySMSTProofWithCountsDebug(rootHash []byte, count uint32, nonce int32, 
 	return bytesEqual(currentHash, rootHash)
 }
 
-// SMSTProofElement contains a sibling hash and its subtree count.
-type SMSTProofElement struct {
-	SiblingHash  []byte
-	SiblingCount uint32
+type smstProofElement struct {
+	siblingHash  []byte
+	siblingCount uint32
 }
 
-// EncodeSMSTProof encodes a proof with counts to bytes.
-// Format: [depth(1)][hash(32)][count(4)]...
-func EncodeSMSTProof(proof []SMSTProofElement) []byte {
-	if len(proof) == 0 {
-		return nil
-	}
-
-	buf := make([]byte, 1+len(proof)*36)
-	buf[0] = byte(len(proof))
-
-	offset := 1
-	for _, elem := range proof {
-		copy(buf[offset:offset+32], elem.SiblingHash)
-		binary.LittleEndian.PutUint32(buf[offset+32:offset+36], elem.SiblingCount)
-		offset += 36
-	}
-
-	return buf
-}
-
-// DecodeSMSTProof decodes a proof with counts from bytes.
-func DecodeSMSTProof(data []byte) ([]SMSTProofElement, error) {
-	if len(data) < 1 {
-		return nil, ErrLeafIndexOutOfRange
-	}
-
-	depth := int(data[0])
-	if len(data) != 1+depth*36 {
-		return nil, ErrLeafIndexOutOfRange
-	}
-
-	proof := make([]SMSTProofElement, depth)
-	offset := 1
-	for i := 0; i < depth; i++ {
-		proof[i].SiblingHash = make([]byte, 32)
-		copy(proof[i].SiblingHash, data[offset:offset+32])
-		proof[i].SiblingCount = binary.LittleEndian.Uint32(data[offset+32 : offset+36])
-		offset += 36
-	}
-
-	return proof, nil
-}
-
-// DecodeProofElements decodes proof from slice format ([][]byte where each is 36 bytes).
-// Returns nil if any element is malformed (not exactly 36 bytes).
-func DecodeProofElements(proof [][]byte) []SMSTProofElement {
-	elements := make([]SMSTProofElement, len(proof))
+// decodeProofElements decodes proof from slice format ([][]byte where each is 36 bytes).
+func decodeProofElements(proof [][]byte) []smstProofElement {
+	elements := make([]smstProofElement, len(proof))
 	for i, data := range proof {
 		if len(data) != 36 {
 			return nil
 		}
-		elements[i].SiblingHash = data[:32]
-		elements[i].SiblingCount = binary.LittleEndian.Uint32(data[32:36])
+		elements[i].siblingHash = data[:32]
+		elements[i].siblingCount = binary.LittleEndian.Uint32(data[32:36])
 	}
 	return elements
 }
 
-// VerifySMSTProofSlice verifies an SMST proof in slice format ([][]byte).
-// Each proof element is 36 bytes: 32 bytes hash + 4 bytes count (LE).
-// This matches the format returned by SMSTArtifactStore.GetProof().
-func VerifySMSTProofSlice(rootHash []byte, count uint32, nonce int32, leafData []byte, proof [][]byte) bool {
-	if len(proof) == 0 {
-		return false
-	}
-
-	elements := DecodeProofElements(proof)
-	if elements == nil {
-		return false
-	}
-	return VerifySMSTProofWithCounts(rootHash, count, nonce, leafData, elements)
-}
 
 // VerifySMSTProofWithDenseIndex verifies an SMST proof and checks that the nonce
 // is at the claimed dense index position. The sibling counts in the proof are
@@ -171,26 +99,22 @@ func VerifySMSTProofWithDenseIndex(rootHash []byte, count uint32, denseIndex uin
 		return false
 	}
 
-	elements := DecodeProofElements(proof)
+	elements := decodeProofElements(proof)
 	if elements == nil {
 		return false
 	}
 
-	// First verify the Merkle proof (this also checks that sibling counts sum to count)
-	if !VerifySMSTProofWithCounts(rootHash, count, nonce, leafData, elements) {
+	if !verifySMSTProofWithCounts(rootHash, count, nonce, leafData, elements) {
 		return false
 	}
 
 	depth := len(elements)
 	path := smstNoncePath(nonce, depth)
 
-	// Use uint64 to detect overflow when summing sibling counts.
-	// Since we verified the proof, sibling counts should be valid, but we defend-in-depth.
 	var computedIndex uint64
 	for i := 0; i < depth; i++ {
 		if path[i] {
-			computedIndex += uint64(elements[i].SiblingCount)
-			// If computedIndex exceeds count, the proof is invalid (defense-in-depth)
+			computedIndex += uint64(elements[i].siblingCount)
 			if computedIndex >= uint64(count) && computedIndex != uint64(denseIndex) {
 				return false
 			}

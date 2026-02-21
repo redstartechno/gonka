@@ -385,29 +385,6 @@ func (s *SMSTArtifactStore) GetNodeCounts() map[string]uint32 {
 	return result
 }
 
-func (s *SMSTArtifactStore) GetArtifact(denseIndex uint32) (nonce int32, vector []byte, err error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	if s.closed {
-		return 0, nil, ErrStoreClosed
-	}
-
-	if denseIndex >= s.smst.Count() {
-		return 0, nil, ErrLeafIndexOutOfRange
-	}
-
-	// Use SMST tree to find nonce at this dense index (tree traversal order)
-	nonce, _, err = s.smst.GetLeafByDenseIndex(denseIndex)
-	if err != nil {
-		return 0, nil, err
-	}
-
-	// Look up artifact data by nonce
-	return s.getArtifactByNonce(nonce)
-}
-
-// getArtifactByNonce finds artifact data using nonce-to-offset index (O(1) lookup).
 func (s *SMSTArtifactStore) getArtifactByNonce(targetNonce int32) (int32, []byte, error) {
 	// Check flushed artifacts first (via index)
 	if offset, ok := s.nonceToOffset[targetNonce]; ok {
@@ -426,33 +403,6 @@ func (s *SMSTArtifactStore) getArtifactByNonce(targetNonce int32) (int32, []byte
 	}
 
 	return 0, nil, ErrLeafIndexOutOfRange
-}
-
-func (s *SMSTArtifactStore) GetProof(denseIndex uint32, snapshotCount uint32) ([][]byte, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	if s.closed {
-		return nil, ErrStoreClosed
-	}
-
-	if denseIndex >= snapshotCount {
-		return nil, ErrLeafIndexOutOfRange
-	}
-
-	if snapshotCount > s.smst.Count() {
-		return nil, fmt.Errorf("snapshot count %d exceeds current count %d", snapshotCount, s.smst.Count())
-	}
-
-	tree := s.getSnapshotTree(snapshotCount)
-
-	nonce, _, err := tree.GetLeafByDenseIndex(denseIndex)
-	if err != nil {
-		return nil, err
-	}
-
-	proofWithCounts := s.buildProofWithCounts(tree, nonce)
-	return encodeProofForTransport(proofWithCounts), nil
 }
 
 // GetArtifactAndProof retrieves both artifact and proof for a dense index at a specific snapshot.
@@ -505,9 +455,9 @@ func (s *SMSTArtifactStore) getSnapshotTree(snapshotCount uint32) *SMST {
 	return s.rebuildTreeAt(snapshotCount)
 }
 
-func (s *SMSTArtifactStore) buildProofWithCounts(tree *SMST, nonce int32) []SMSTProofElement {
+func (s *SMSTArtifactStore) buildProofWithCounts(tree *SMST, nonce int32) []smstProofElement {
 	path := tree.noncePath(nonce)
-	elements := make([]SMSTProofElement, 0, tree.depth)
+	elements := make([]smstProofElement, 0, tree.depth)
 
 	var collectWithCounts func(node *smstNode, level int)
 	collectWithCounts = func(node *smstNode, level int) {
@@ -517,15 +467,15 @@ func (s *SMSTArtifactStore) buildProofWithCounts(tree *SMST, nonce int32) []SMST
 
 		goRight := path[level]
 		if goRight {
-			elements = append(elements, SMSTProofElement{
-				SiblingHash:  tree.nodeHash(node.left, level+1),
-				SiblingCount: tree.nodeCount(node.left),
+			elements = append(elements, smstProofElement{
+				siblingHash:  tree.nodeHash(node.left, level+1),
+				siblingCount: tree.nodeCount(node.left),
 			})
 			collectWithCounts(node.right, level+1)
 		} else {
-			elements = append(elements, SMSTProofElement{
-				SiblingHash:  tree.nodeHash(node.right, level+1),
-				SiblingCount: tree.nodeCount(node.right),
+			elements = append(elements, smstProofElement{
+				siblingHash:  tree.nodeHash(node.right, level+1),
+				siblingCount: tree.nodeCount(node.right),
 			})
 			collectWithCounts(node.left, level+1)
 		}
@@ -535,12 +485,12 @@ func (s *SMSTArtifactStore) buildProofWithCounts(tree *SMST, nonce int32) []SMST
 	return elements
 }
 
-func encodeProofForTransport(proof []SMSTProofElement) [][]byte {
+func encodeProofForTransport(proof []smstProofElement) [][]byte {
 	result := make([][]byte, len(proof))
 	for i, elem := range proof {
 		encoded := make([]byte, 36)
-		copy(encoded[:32], elem.SiblingHash)
-		binary.LittleEndian.PutUint32(encoded[32:], elem.SiblingCount)
+		copy(encoded[:32], elem.siblingHash)
+		binary.LittleEndian.PutUint32(encoded[32:], elem.siblingCount)
 		result[i] = encoded
 	}
 	return result
