@@ -42,18 +42,33 @@ Open question: do we need `MsgInvalidateInference` as a separate tx, or is it a 
 
 Top-level Go module: `subnet/` at repo root. Imported by `decentralized-api` as a library.
 
+### Both Roles in One Library
+
+The library implements both the host flow and the user flow. The state machine is the same for both -- same diffs, same signature verification, same nonce tracking, same state hash computation. The difference is who proposes which transactions and who drives sequencing.
+
+Host-specific: receive and validate incoming requests, sign state on receipt, propose MsgFinishInference/MsgValidation, gossip nonces, enforce inclusion rules.
+
+User-specific: create MsgStartInference, sequence diffs, pick next host in round-robin, collect signatures, attach accumulated diffs to outgoing requests, submit settlement.
+
+Both roles share: state machine, diff application, signature verification, nonce tracking, storage, types. This is the bulk of the code. Role-specific logic is a thin layer on top.
+
+Why this matters: a single Go test can create 30 host nodes and 1 user node from the same library, drive a full session end-to-end, and verify everything in-process. No separate client SDK to maintain, no protocol drift between implementations. When we need a JS or Python client later, the Go library is the reference implementation and the wire protocol is the contract.
+
 ```
 subnet/
   go.mod                    # standalone module, no cosmos-sdk
   proto/                    # subnet-specific proto definitions
   types/                    # generated proto types + domain types
   state/                    # state machine: apply diffs, verify nonces, track balances
+  host/                     # host role: request handling, signing, gossip, inclusion enforcement
+  user/                     # user role: sequencing, round-robin, signature collection, settlement
   signing/                  # signature creation and verification
   storage/                  # storage interface + implementations
   gossip/                   # gossip client and handlers
+  bridge/                   # MainnetBridge interface
 ```
 
-First release: `decentralized-api` imports `subnet/` and mounts a new echo router group on the existing public server port, e.g. `/subnet/v1/`.
+First release: `decentralized-api` imports `subnet/` and mounts a new echo router group on the existing public server port, e.g. `/subnet/v1/`. The user flow is available as a Go client library (`subnet/user`) for integration tests and future standalone client tooling.
 
 
 ## Interface Boundaries
@@ -65,22 +80,22 @@ Design principle: every subnet subpackage exposes a minimal interface in a dedic
 The subnet knows nothing about Cosmos SDK, gRPC, or chain internals. All mainnet interaction is behind a single interface:
 
 ```go
-// subnet/mainnet/interface.go
+// subnet/bridge/interface.go
 
 type MainnetBridge interface {
-    // Notifications: mainnet -> subnet
     OnEscrowCreated(escrow EscrowInfo) error
     OnEscrowSettled(escrowID string) error
-
-    // Queries: subnet -> mainnet
     GetEscrow(escrowID string) (*EscrowInfo, error)
-    GetSlotAssignment(escrowID string) ([]SlotAssignment, error)
+    GetValidatorInfo(validatorAddress string) (*ValidatorInfo, error)
+    VerifyWarmKey(warmAddress, validatorAddress string) (*WarmKeyInfo, error)
 }
 ```
 
-In production, `decentralized-api` provides a real implementation that subscribes to chain events and queries the node. In tests, a struct literal with preset return values is enough to drive the full subnet through any scenario.
+5 methods. Full definition with types in the Chain Data Requirements section below.
 
-This boundary is deliberately narrow. The subnet never polls mainnet, never subscribes to block events directly, never parses Cosmos SDK types. It receives notifications and asks questions through this interface. Everything else is internal.
+In production, `decentralized-api` provides an implementation that talks to the local chain node. In tests, a struct literal with preset return values drives the full subnet through any scenario.
+
+This boundary is deliberately narrow and expensive by design (see Bridge Cost Model below). The subnet never polls mainnet, never subscribes to block events directly, never parses Cosmos SDK types. It derives what it can locally (slot assignment, nonce verification) and only asks the bridge what it cannot compute.
 
 ### Per-Package Interfaces
 
@@ -88,7 +103,7 @@ Each subpackage defines its own interface file. The package never imports concre
 
 ```
 subnet/
-  mainnet/interface.go       # MainnetBridge
+  bridge/interface.go        # MainnetBridge
   state/interface.go         # StateMachine (apply diffs, verify nonces)
   storage/interface.go       # Storage (already defined above)
   signing/interface.go       # Signer, Verifier
@@ -128,7 +143,126 @@ This is the level where stress testing happens. Scenarios:
 
 The fake bridge is trivial -- a shared in-memory map protected by a mutex. It returns preset escrow data and records settlement calls. No chain, no blocks, no Cosmos SDK, but the rest of the system is production code running under production conditions.
 
-This is the key payoff of the narrow mainnet boundary: the entire subnet is real, only the 4-method bridge is fake. Stress tests hit real concurrency, real network, real disk I/O.
+This is the key payoff of the narrow mainnet boundary: the entire subnet is real, only the 5-method bridge is fake. Stress tests hit real concurrency, real network, real disk I/O.
+
+
+## Bridge Cost Model
+
+Current dapi assumes RPC communication with the chain node is cheap. It queries freely: participant lists, authz grants, escrow state, epoch info. This works because dapi runs alongside its own node on the same machine.
+
+The subnet library has the opposite assumption: bridge calls are expensive. The design minimizes them. Most calls happen once at session start. Subsequent calls happen only when something unexpected occurs (unknown warm key, failed verification, missing data).
+
+This matters for deployment. Initially the subnet runs inside dapi and the bridge is a local function call to the existing chain client. Later, the subnet can be deployed as a standalone thin binary where the bridge is an RPC connector to a separate mainnet node. The narrow bridge makes both deployments possible without code changes.
+
+Consequence: the subnet derives everything it can locally. Slot assignment is a deterministic function of (app_hash, escrow_id, validator_weights) -- the subnet computes it, never asks the bridge for it. Warm key verification is on-demand per message, not preloaded per session. The bridge provides only what cannot be derived: escrow existence, validator public keys, warm key authorization checks.
+
+
+## Chain Data Requirements
+
+The subnet needs a small set of data from mainnet. All of it flows through the `MainnetBridge` interface.
+
+### What the Subnet Needs
+
+1. Escrow info: amount, creator address, creation height, app_hash at creation.
+2. Validator list and weights for the current epoch (to derive slot assignment locally).
+3. Validator public keys and primary URLs (from `participant.inference_url` on chain).
+4. Warm key verification: given a (warm_address, validator_address) pair, confirm the grant exists and return the public key.
+
+Slot assignment is derived locally from items 1+2 using the same `GetSlotsFromSorted` algorithm as PoC. The bridge never provides slot assignment directly.
+
+### Warm Key Rule
+
+Problem: a host signs a subnet message with its warm key. The receiver needs to verify. Without knowing which warm key was used, the receiver must iterate all warm keys for all validators in the group. For a 30-host group with 2 warm keys each, that is 60 trial verifications per message.
+
+Rule: every signed subnet message includes the signer's warm key address as a plaintext field alongside the validator address it claims to act for. The receiver verifies exactly one pair:
+
+1. Message says: "signed by warm_address X on behalf of validator Y."
+2. Receiver calls `bridge.VerifyWarmKey(warmAddress, validatorAddress)` -> public key.
+3. One signature verification against that public key. Done.
+
+No preloaded map. No iteration. The bridge call is cached locally after the first successful verification for a given (warm_address, validator_address) pair. If a warm key is not in cache (new grant mid-session, or first contact), the bridge is called once. If verification fails, the message is rejected.
+
+```go
+type WarmKeyInfo struct {
+    ValidatorAddress string
+    PublicKey        []byte
+}
+```
+
+### Host Discovery: Multi-URL Identity
+
+Each validator has a primary URL recorded on mainnet as `participant.inference_url`. This is the entrypoint. All initial discovery goes through it.
+
+A validator may run multiple dapi instances behind this entrypoint, each capable of serving different subnets. The `/v1/identity` endpoint advertises which instances are available:
+
+```go
+type IdentityData struct {
+    Address        string            `json:"address"`
+    WarmKeyAddress string            `json:"warm_key_address"`
+    Block          int64             `json:"block"`
+    Timestamp      string            `json:"timestamp"`
+    DelegateTAs    []DelegateGroup   `json:"delegate_tas,omitempty"`
+}
+
+type DelegateGroup struct {
+    URL            string `json:"url"`
+    WarmKeyAddress string `json:"warm_key_address"`
+}
+```
+
+`DelegateTAs` is an indexed list of (URL, warm key) pairs. Selection for a given subnet is deterministic:
+
+```
+groupIndex = hash(escrow_id, app_hash) % len(DelegateTAs)
+```
+
+All subnet participants compute the same index for each host, so everyone agrees on which URL and warm key to use. If `DelegateTAs` is empty or has one entry, the primary URL is used (the common case at launch).
+
+- Phase 1: single dapi, `DelegateTAs` has one entry or is omitted. No behavioral change.
+- Phase N: validator runs 4 dapi instances. Each advertises itself as a delegate group. Subnets get distributed across instances deterministically.
+
+### Discovery Flow
+
+When a subnet session starts:
+
+1. The node has escrow info (from `OnEscrowCreated` notification or `GetEscrow` query).
+2. The node derives the slot assignment locally from (app_hash, escrow_id, validator weights).
+3. For each validator in the assignment, the node fetches `/v1/identity` from the validator's primary URL (from `participant.inference_url` on chain, provided by `GetValidatorInfo`).
+4. The response includes `DelegateTAs`. The node selects the entry at `hash(escrow_id, app_hash) % len(DelegateTAs)`.
+5. That entry's URL becomes the communication endpoint and its warm key becomes the expected signer for that host in this subnet.
+
+Step 3 happens once per session start, not per request. The result is cached for the session lifetime.
+
+### MainnetBridge Interface
+
+Minimal. The subnet derives everything it can locally and only asks the bridge what it cannot compute.
+
+```go
+type MainnetBridge interface {
+    // Notifications: mainnet -> subnet
+    OnEscrowCreated(escrow EscrowInfo) error
+    OnEscrowSettled(escrowID string) error
+
+    // Queries: subnet -> mainnet
+    GetEscrow(escrowID string) (*EscrowInfo, error)
+    GetValidatorInfo(validatorAddress string) (*ValidatorInfo, error)
+    VerifyWarmKey(warmAddress, validatorAddress string) (*WarmKeyInfo, error)
+}
+
+type ValidatorInfo struct {
+    Address   string
+    PublicKey []byte
+    URL       string    // participant.inference_url from chain
+    Weight    uint64
+}
+
+type WarmKeyInfo struct {
+    ValidatorAddress string
+    PublicKey        []byte
+}
+```
+
+5 methods. `GetEscrow` and `GetValidatorInfo` are called at session start. `VerifyWarmKey` is called lazily on first contact with an unknown warm key, then cached. `OnEscrowCreated` and `OnEscrowSettled` are push notifications. In tests, all five are trivial struct methods returning preset data.
 
 
 ## Storage
