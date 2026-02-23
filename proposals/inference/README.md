@@ -2,45 +2,90 @@
 
 ## Problem 
 
-Now per each inference next transactions are recorded on-chain:
+Per inference, the following transactions are recorded on-chain:
 - MsgStartInference
 - MsgFinishInference
-- MsgValidation (it can be from 0 to N_hosts transaction, current document consider 1 per inference)
+- MsgValidation (0 to N_hosts per inference; 1 on average in the normal case)
 
 3 txs per inference. Max capacity per block is ~5000
-=> 5000 / 3 = 1666 inferences per block 
+=> 5000 / 3 = 1666 inferences per block
 => 1666 / 6 = 277 inferences per sec
 
-Let's consider 4xH100 with deployed Qwen235B.
-For 5000/1000 input/output tokens, such model can process 3.5-4 RPs (TODO: confirm)
-=> 277 / 3.5 * 4 = 316 H100 GPU
+Consider 4xH100 with Qwen3-235B deployed.
+For 5000/1000 input/output tokens, such a setup can process 3.5-4 RPS (TODO: confirm)
+=> 277 / 3.5 * 4 = 316 H100 GPUs to saturate the chain
 
-Probably different requests can be backed together in single transaction.
-Even if achieve 100x optimization with such approach, handling per request on chain billing is not scalable to hunderds thousands 
+Requests could be batched into a single transaction, but the computation and state growth per request makes this not scalable to hundreds of thousands of inferences.
 
-The situation becomes better with longer requests (more compute used, less billing info per unit of compute)
-And much worse with smaller model (which are required for some domains)
+The bottleneck is better with longer requests (more compute per tx) and worse with smaller models (more RPS per GPU, more txs per GPU).
 
-
-
-> Note: in practice, the main limit is not even amount of transactions in blocks but even the computation per these 3 transaction.
-Seems like it's becoming a problem now if there are more then couple hunderds such transactions per block. 
-Based on profiling data it can be optimized significantly (2-10 times), but this limitation will still hit us first
+> Note: in practice, the main limit is not the transaction count but the computation cost per block.
+> It becomes a problem above a few hundred such transactions per block.
+> Based on profiling it can be optimized 2-10x (or even 100x), but this limitation will hit before the tx count limit.
+> The current proposal still tries to address the whole problem.
 
 
 ## Proposal
 
-This proposal describe approach which moves all per-inference communication off-chain. 
-Chain will process only initial transaction to put coins in escrow and assign subgroup of hosts which will handle execute inferences. 
-All communication around inferences and their validations will happen inside the subgroup directly during quite long period of time (e.g. epoch).
-Then, user (or some of hosts) would have to settle the escrow, submitting final state of usage for the user signed by majority of hosts in such subgroup.
-After such transaction submitted, user get's what left from escrow, participants are getting paid. 
+This proposal describes an approach that moves all per-inference communication off-chain.
+The chain processes only two transactions: one to put coins in escrow and assign a subgroup of hosts, one to settle at the end.
+All inference communication and validations happen inside the subgroup directly, over a long session (e.g. one epoch).
+To close the session, the user submits the final usage state signed by a majority of hosts (threshold: 1/2 or 2/3, TBD).
+Both sides have a clear incentive to settle: the user recovers the unused escrow balance, and the subgroup gets paid from it.
 
 Effectively, as each subgroup would have to achieve consensus for the final state, the architecture will consist of:
 - main blockchain
 - many sub-chains / shards with extremely lightweight architecture 
 
 Sub-chains will be able to process only the inference related transactions and their decision might affect only the escrows, assigned to such sub-chains
+
+> Note: "sub-chain" does not have to mean a real blockchain. Because the group carries no state outside of its assigned user, groups can be dynamic -- formed per session, with large overlaps between them. The only thing they share is the mainnet escrow as anchor.
+
+### Architecture
+
+```
++-------------------+        +------------------------------------+
+|      Mainnet      |        |   Subnet  (one per user session)   |
++-------------------+        +------------------------------------+
+         |                                    |
+         |  1. MsgCreateEscrow(100GNK)        |
+         |     => escrow_id, group=[h1..hN]   |
+         | ---------------------------------> |
+         |                                    |  2. POST /chat/completions (req 1) -> h1
+         |                                    |  3. POST /chat/completions (req 2) -> h2
+         |                                    |  4. POST /chat/completions (req N) -> hN
+         |                                    |     ...
+         |  5. MsgSettleEscrow(               |
+         |       finalState, signatures,      |
+         |       missed, invalid)             |
+         | <--------------------------------- |  (majority signed finalState)
+         |     => user refund + hosts paid    |
++-------------------+        +------------------------------------+
+```
+
+User sends exactly 2 transactions to mainnet: `MsgCreateEscrow` to open the session, `MsgSettleEscrow` to close it.
+All inference requests happen directly with the assigned subnet group -- mainnet never sees individual requests.
+
+**Example: 3 inference requests**
+
+```
+User -> Mainnet:  MsgCreateEscrow(amount=100GNK)
+                  <- escrow_id=42, group=[host1, host2, host3, ...]
+
+User -> host1:    POST /chat/completions  (req 1, diffs=[])
+                  <- streamed response + sign(state after MsgStartInference(1))
+
+User -> host2:    POST /chat/completions  (req 2, diffs=[MsgStartInference(1), MsgFinishInference(1)])
+                  <- streamed response + sign(state after MsgStartInference(2))
+
+User -> host3:    POST /chat/completions  (req 3, diffs=[MsgStartInference(2), MsgFinishInference(2)])
+                  <- streamed response + sign(state after MsgStartInference(3))
+
+...
+
+User -> Mainnet:  MsgSettleEscrow(finalState, signatures=[h1_sig, h2_sig, ...], missed, invalid)
+                  <- user refund + hosts paid
+```
 
 ### User Flow
 
@@ -120,6 +165,8 @@ Key points of the idea:
 
 
 
+
+### Example requests
 ```
 /chat/completions -d '{
   "model":"Qwen/Qwen3-235B-A22B-Instruct-2507-FP8",
