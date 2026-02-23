@@ -140,19 +140,59 @@ The chain needs these properties but does not want to process this data on mainn
 
 **Per-user state.** State is saved per user independently. Each user's history is a chain of diffs. Each diff is essentially a block. Since there is no cross-user state, a node operator can shard its database and resources per user. Each node can participate in any number of subnets simultaneously. Subnet processing scales linearly with user count. Only escrow creation and settlement on mainnet do not.
 
-**User-driven propagation.** The user is responsible for propagating transactions: both its own (MsgStartInference) and those initiated by hosts at response (MsgFinishInference). User attaches accumulated diffs to each inference request. This piggybacks propagation on normal API usage. Gossiping might still be needed since propagation requires a full round through the group. How to propagate efficiently is an open question.
+**User-driven propagation.** The user is responsible for sequencing and propagating transactions. User attaches accumulated diffs to each inference request. This piggybacks propagation on normal API usage.
 
 **Round-robin host ordering.** The user must iterate hosts in the group in a predefined order. This naturally distributes requests across hosts (not real work amount, but request count). Each diff carries a nonce, so the user cannot skip hosts.
 
 **Signing flow.** When a `/chat/completions` request is sent to host1, the user creates MsgStartInference(1). If host1 is honest, it must immediately return `(state, signature)` without waiting for execution. After execution, host1 signs MsgFinishInference(1) and the user propagates it to the network in the next round (or later, depends on performance). Locks should only be needed to generate new nonces and compose new messages, not to record incoming data. The user does not block on receiving a host's signature before sending the next request. Signatures arrive asynchronously and get included in later diffs. This keeps request submission fast at the cost of signatures lagging behind by one or more rounds.
 
+**Escrow accounting.** On each MsgStartInference, the subnet tracks spending against the user's escrow balance. Same idea as mainnet: verify user has enough funds before accepting the request. Minimum escrow balance must be at least `subnet_size * max_inference_cost` at all times, ensuring enough to cover the worst case where every host in the group is processing a concurrent request.
+
 **Host unavailability.** If a host is not available, the user continues to the next host in order. Since each request carries ALL accumulated diffs for the current round, it includes the unsigned diff for the unavailable host. The receiving host follows the protocol to decide together with the group whether the unavailable host should be punished.
+
+**Host-proposed transactions.** Hosts produce transactions (MsgFinishInference, invalidation triggers, etc.) that must be included in the state. The user is the sequencer, but cannot be trusted to include them. Propagation channels:
+- Response body: host returns its proposed transactions to the user alongside the inference result.
+- Lazy gossip: host pushes proposed transactions to other hosts only if the user hasn't included them after K rounds. Zero overhead in the happy path.
+- Public endpoint: each host exposes its unsettled transactions per session. Fallback if lazy gossip fails.
+
+**Inclusion enforcement.** Two different rules depending on who proposed the transaction:
+- User-proposed (MsgStartInference): must appear in the very next round's diffs. The user has them at creation time, no reason for delay.
+- Host-proposed (MsgFinishInference, etc.): K rounds grace period (TBD). Accounts for async lag. After K rounds without inclusion, hosts trigger lazy gossip and refuse to sign.
+
+Each host response includes its unsettled mempool so the user always knows what's pending.
 
 #### Scenarios
 
 #### Everyone is working correctly
 
-TODO
+Group = [h1, h2, h3, h4, h5], user sends 3 requests in round-robin order.
+
+```
+User -> h1: POST /chat/completions (req1)
+  diffs: [MsgStartInference(1)]
+  h1: starts executing, signs state(nonce=1), returns (sig_h1, mempool=[])
+  h1: after execution, creates MsgFinishInference(1), gossips to h2..h5
+
+User -> h2: POST /chat/completions (req2)
+  diffs: [MsgStartInference(1), MsgStartInference(2)]    // no sig_h1 yet
+  h2: signs state(nonce=2), returns (sig_h2, mempool=[])
+
+User -> h3: POST /chat/completions (req3)
+  diffs: [MsgStartInference(1) + sig_h1,
+          MsgStartInference(2) + sig_h2,
+          MsgFinishInference(1),
+          MsgStartInference(3)]
+  h3: checks local mempool -- MsgFinishInference(1) present (via gossip), included, ok
+  h3: signs state(nonce=3), returns (sig_h3, mempool=[])
+```
+
+Transaction statuses after 3 requests:
+- MsgStartInference(1): settled (3 sigs: h1, h2, h3)
+- MsgStartInference(2): proposed (2 sigs: h2, h3)
+- MsgFinishInference(1): proposed (1 sig: h3)
+- MsgStartInference(3): proposed (1 sig: h3)
+
+The user is the sequencer: it decides at which nonce each transaction is placed. All hosts seeing the same nonce see the same content. Signatures lag behind by one or more rounds.
 
 #### One (or minority) of hosts are not responding
 
