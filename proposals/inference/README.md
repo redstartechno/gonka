@@ -184,7 +184,7 @@ User -> h3: POST /chat/completions (req3)
           MsgStartInference(2) + sig_h2,
           MsgFinishInference(1),
           MsgStartInference(3)]
-  h3: checks local mempool -- MsgFinishInference(1) present (via gossip), included, ok
+  h3: checks local mempool:MsgFinishInference(1) present (via gossip), included, ok
   h3: signs state(nonce=3), returns (sig_h3, mempool=[])
 ```
 
@@ -241,11 +241,22 @@ Not possible. host_i checks the diffs and rejects requests without a correspondi
 
 ## Settlement
 
-TODO: cover the following scenarios:
-- Normal: user submits MsgSettleEscrow with final state + 2/3 signatures. Mainnet verifies, distributes escrow, records stats.
-- Stale state: user settles with an earlier nonce. Hosts can submit competing MsgSettleEscrow with a later fully-signed state. Define dispute window and priority rules.
-- User disappears: any group member can submit MsgSettleEscrow after timeout. Needs 2/3 signatures over the latest state. Define timeout trigger (wall-clock from last nonce vs escrow expiry height). Define rollback rules if 2/3 signatures don't exist for the latest state.
-- Inflated state: user claims false usage. Requires 2/3 host signatures over the false state, so reduces to BFT assumption (<1/3 malicious).
+User submits `MsgSettleEscrow(state_hash, signatures, missed, invalid)` to mainnet. Mainnet verifies 2/3+ slot-weighted signatures over the state hash. If valid, settlement enters a dispute window of X blocks (TBD).
+
+> Note: the list of individual signatures can be replaced with an aggregated BLS signature in the future to reduce tx size.
+
+During the dispute window, any host can submit a competing state with a higher nonce and 2/3+ signatures. If such a state exists, the user submitted stale state: all remaining escrow goes to hosts as penalty. If no competing state appears within X blocks, settlement finalizes: hosts are paid per token from escrow, unused balance is refunded to the user.
+
+**Unsettled transactions at settlement time.** When the user wants to close the session, there may be in-flight inferences (MsgStartInference without MsgFinishInference) and recent nonces without enough signatures. Two options:
+
+- Flush round: user sends empty requests (no inference, just diffs) in round-robin to collect remaining signatures and let hosts attach pending MsgFinishInference. Produces a fully-settled state before submitting to mainnet. Clean but requires one extra round.
+- Skip flush: user settles with whatever state is available. Any in-flight inference cost is forfeited (charged from escrow but hosts keep it even if work wasn't completed). Simpler but user overpays for unfinished work.
+
+TODO: decide which approach. Flush round is more consistent with the rest of the design. Could make it optional:if user skips it, they forfeit the unsettled portion.
+
+**User disappears.** Any group member can submit MsgSettleEscrow after a timeout. All hosts have full state within one round (propagated via diffs). If a host is missing recent state, it can request it from other hosts via the public API endpoint. Same 2/3+ signature requirement, same dispute window. TODO: define timeout trigger (wall-clock from last nonce vs escrow expiry height at creation).
+
+**Inflated state.** User claims less usage than actually happened (to get a larger refund). Requires 2/3+ host signatures over the false state. Reduces to BFT assumption: safe as long as <1/3 of slot-weighted hosts are malicious.
 
 ## Example requests
 
@@ -282,7 +293,7 @@ For comparison, the first request (to h1) carries only one diff:
 }
 ```
 
-Each diff is a block at a given nonce. Signatures for earlier nonces accumulate over time as hosts return them. By the 3rd request, sig_h1 (returned with req1 response) and sig_h2 (returned with req2 response) are attached to their respective nonces. Nonce 3 has no signatures yet -- h3 will sign it and return sig_h3 in the response.
+Each diff is a block at a given nonce. Signatures for earlier nonces accumulate over time as hosts return them. By the 3rd request, sig_h1 (returned with req1 response) and sig_h2 (returned with req2 response) are attached to their respective nonces. Nonce 3 has no signatures yet: h3 will sign it and return sig_h3 in the response.
 
 
 ## Weights in subnet
