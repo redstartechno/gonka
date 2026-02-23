@@ -41,7 +41,7 @@ Sub-chains will be able to process only the inference related transactions and t
 
 > Note: "sub-chain" does not have to mean a real blockchain. Because the group carries no state outside of its assigned user, groups can be dynamic: formed per session, with large overlaps between them. The only thing they share is the mainnet escrow as anchor.
 
-### Architecture
+## Architecture
 
 ```
 +-----------+     +-------------------+     +----------------------------+
@@ -71,7 +71,7 @@ Sub-chains will be able to process only the inference related transactions and t
 User sends exactly 2 transactions to mainnet: `MsgCreateEscrow` to open the session, `MsgSettleEscrow` to close it.
 All inference requests happen directly with the assigned subnet group; mainnet never sees individual requests.
 
-### User Flow
+## User Flow
 
 - [mainchain]: user creates `MsgCreateEscrow(100GNK)` 
 - [subchain]: user interact with hosts in subgroup in pre-defined order
@@ -92,7 +92,7 @@ Current approach: per-user, following from Q1. Each host tracks only what happen
 The further proposal follows this architecture: "chain per user".
 
 
-### Main Network Protocol
+## Main Network Protocol
 
 ```
 MsgCreateEscrow(
@@ -119,7 +119,7 @@ MsgSettleEscrow(
 Once signatures are verified it settles escrow for the user, updates stats for hosts (missed, invalid).
 
 
-### Subnet Protocol
+## Subnet Protocol
 
 The subnet is a lightweight shard with voting weight provided by mainnet. It settles back to mainnet when the session ends.
 
@@ -163,7 +163,7 @@ The chain needs these properties but does not want to process this data on mainn
 
 Each host response includes its unsettled mempool so the user always knows what's pending.
 
-#### Scenarios
+### Scenarios
 
 #### Everyone is working correctly
 
@@ -237,7 +237,17 @@ Covered by the recovery protocol above. This is the "user withheld prompt data" 
 
 Not possible. host_i checks the diffs and rejects requests without a corresponding MsgStartInference. No StartInference = no payment authorization = no reason to compute.
 
-### Example requests
+> Note: inference validation in the subnet uses the same mechanism as on mainnet. Prompt and response hashes are recorded in subnet state and validated probabilistically at settlement.
+
+## Settlement
+
+TODO: cover the following scenarios:
+- Normal: user submits MsgSettleEscrow with final state + 2/3 signatures. Mainnet verifies, distributes escrow, records stats.
+- Stale state: user settles with an earlier nonce. Hosts can submit competing MsgSettleEscrow with a later fully-signed state. Define dispute window and priority rules.
+- User disappears: any group member can submit MsgSettleEscrow after timeout. Needs 2/3 signatures over the latest state. Define timeout trigger (wall-clock from last nonce vs escrow expiry height). Define rollback rules if 2/3 signatures don't exist for the latest state.
+- Inflated state: user claims false usage. Requires 2/3 host signatures over the false state, so reduces to BFT assumption (<1/3 malicious).
+
+## Example requests
 ```
 /chat/completions -d '{
   "model":"Qwen/Qwen3-235B-A22B-Instruct-2507-FP8",
@@ -270,7 +280,7 @@ Q1: how exactly to propagate signatures? each diff essentially a new block and h
 Q2: currently consider that ever
 
 
-### Weights in subnet
+## Weights in subnet
 
 Subnet group formation reuses the slot sampling mechanism from PoC validation (see [proposals/poc/optimize.md](../poc/optimize.md)).
 
