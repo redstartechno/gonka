@@ -44,23 +44,28 @@ Sub-chains will be able to process only the inference related transactions and t
 ### Architecture
 
 ```
-+-------------------+        +------------------------------------+
-|      Mainnet      |        |   Subnet  (one per user session)   |
-+-------------------+        +------------------------------------+
-         |                                    |
-         |  1. MsgCreateEscrow(100GNK)        |
-         |     => escrow_id, group=[h1..hN]   |
-         | ---------------------------------> |
-         |                                    |  2. POST /chat/completions (req 1) -> h1
-         |                                    |  3. POST /chat/completions (req 2) -> h2
-         |                                    |  4. POST /chat/completions (req N) -> hN
-         |                                    |     ...
-         |  5. MsgSettleEscrow(               |
-         |       finalState, signatures,      |
-         |       missed, invalid)             |
-         | <--------------------------------- |  (majority signed finalState)
-         |     => user refund + hosts paid    |
-+-------------------+        +------------------------------------+
++-----------+     +-------------------+     +----------------------------+
+|   User    |     |      Mainnet      |     |  Subnet (one per session)  |
++-----------+     +-------------------+     +----------------------------+
+      |                    |                             |
+      | 1. MsgCreateEscrow |                             |
+      |    (100GNK)        |                             |
+      | -----------------> |                             |
+      | <- escrow_id,      |                             |
+      |    group=[h1..hN]  |                             |
+      |                    |                             |
+      | 2. POST /chat (req1) --------------------------> |
+      | 3. POST /chat (req2) --------------------------> |
+      | 4. POST /chat (reqN) --------------------------> |
+      |    ...             |                             |
+      |                    |                             |
+      | 5. MsgSettleEscrow |                             |
+      |   (finalState,     |                             |
+      |    signatures, ..) |                             |
+      | -----------------> |                             |
+      | <- user refund +   |                             |
+      |    hosts paid      |                             |
++-----------+     +-------------------+     +----------------------------+
 ```
 
 User sends exactly 2 transactions to mainnet: `MsgCreateEscrow` to open the session, `MsgSettleEscrow` to close it.
@@ -75,10 +80,16 @@ User -> Mainnet:  MsgCreateEscrow(amount=100GNK)
 User -> host1:    POST /chat/completions  (req 1, diffs=[])
                   <- streamed response + sign(state after MsgStartInference(1))
 
-User -> host2:    POST /chat/completions  (req 2, diffs=[MsgStartInference(1), MsgFinishInference(1)])
+User -> host2:    POST /chat/completions  (req 2, diffs=[
+                    {txs:[MsgStartInference(1)], sigs:[h1_sig]},
+                    {txs:[MsgFinishInference(1)]}
+                  ])
                   <- streamed response + sign(state after MsgStartInference(2))
 
-User -> host3:    POST /chat/completions  (req 3, diffs=[MsgStartInference(2), MsgFinishInference(2)])
+User -> host3:    POST /chat/completions  (req 3, diffs=[
+                    {txs:[MsgStartInference(2)], sigs:[h2_sig]},
+                    {txs:[MsgFinishInference(2)]}
+                  ])
                   <- streamed response + sign(state after MsgStartInference(3))
 
 ...
@@ -131,8 +142,8 @@ MsgSettleEscrow(
 )
 ```
 
-5. On the escrow settlement, mainnet verifyes signatures from subnet. Must be signed by majoriry / supermajority
-Once signatures are verified it settle escrow for the user, updated stats for hosts (missed, invalid)
+5. On the escrow settlement, mainnet verifies signatures from subnet. Must be signed by majority / supermajority.
+Once signatures are verified it settles escrow for the user, updates stats for hosts (missed, invalid).
 
 
 ### Sub-Chain Protocol
