@@ -61,7 +61,9 @@ A single Go test can create 30 host nodes and 1 user node, drive a full session,
 
 ```
 subnet/
-  go.mod                    # standalone module, no cosmos-sdk
+  go.mod                    # standalone module, deps: go-ethereum/crypto, protobuf. no cosmos-sdk
+  engine.go                 # InferenceEngine, ValidationEngine interfaces (contract with dapi)
+  types.go                  # ExecuteRequest, ExecuteResult, ValidateRequest, ValidateResult
   proto/                    # subnet-specific proto definitions
   types/                    # generated proto types + domain types
   state/                    # state machine: apply diffs, verify nonces, track balances
@@ -71,6 +73,22 @@ subnet/
   storage/                  # storage interface + implementations
   gossip/                   # gossip client and handlers
   bridge/                   # MainnetBridge interface
+
+decentralized-api/
+  internal/
+    subnet/
+      engine_adapter.go     # implements subnet.InferenceEngine using broker + completionapi
+      validation_adapter.go # implements subnet.ValidationEngine using broker + compareLogits
+      router.go             # mounts /subnet/v1/ routes, wires adapters to subnet host
+```
+
+The engine interfaces at the subnet root are the contract between subnet and dapi. They define what the subnet needs from the ML node infrastructure without importing any dapi or cosmos-sdk types. dapi adapters implement them by wrapping existing broker, completionapi, and validation logic.
+
+Module boundary enforces no cosmos-sdk at compile time. During development, dapi uses a replace directive:
+
+```
+// decentralized-api/go.mod
+replace subnet => ../subnet
 ```
 
 First release: `decentralized-api` imports `subnet/` and mounts a new echo router group on the existing public server port, e.g. `/subnet/v1/`. The user flow is available as a Go client library (`subnet/user`) for integration tests and future standalone client tooling.
@@ -542,16 +560,26 @@ Chain-coupled parts that the subnet does NOT need: MsgStartInference/MsgFinishIn
 
 ### Subnet Interfaces
 
+Defined at the subnet module root (`subnet/engine.go`, `subnet/types.go`). These are the contract between subnet and dapi.
+
 ```go
-// subnet/engine/interface.go
+// subnet/engine.go
 
 // InferenceEngine executes inference on an ML node.
 // Implemented by dapi using existing broker + completionapi.
 type InferenceEngine interface {
-    // Execute sends request to ML node, streams response to writer,
-    // returns result with response hash and token counts.
     Execute(ctx context.Context, req ExecuteRequest) (*ExecuteResult, error)
 }
+
+// ValidationEngine re-executes inference and compares logits.
+// Implemented by dapi using existing broker + completionapi.
+type ValidationEngine interface {
+    Validate(ctx context.Context, req ValidateRequest) (*ValidateResult, error)
+}
+```
+
+```go
+// subnet/types.go
 
 type ExecuteRequest struct {
     Model       string
@@ -567,12 +595,6 @@ type ExecuteResult struct {
     ResponseHash     string
     PromptTokens     uint64
     CompletionTokens uint64
-}
-
-// ValidationEngine re-executes inference and compares logits.
-// Implemented by dapi using existing broker + completionapi.
-type ValidationEngine interface {
-    Validate(ctx context.Context, req ValidateRequest) (*ValidateResult, error)
 }
 
 type ValidateRequest struct {
