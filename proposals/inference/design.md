@@ -111,8 +111,8 @@ HostStats:
   missed               uint32
   invalid              uint32
   cost                 uint64              # total cost of inferences executed by this host
-  input_tokens         uint64              # total input tokens processed
-  output_tokens        uint64              # total output tokens produced
+  required_validations uint32              # inferences ShouldValidate selected for this host
+  completed_validations uint32             # MsgValidation txs actually submitted
 ```
 
 Signatures are not part of SessionState. They are stored alongside diffs in storage.

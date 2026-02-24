@@ -108,15 +108,22 @@ MsgCreateEscrow(
 ```
 MsgSettleEscrow(
   escrow_id,                          # session identifier
-  state_root,                         # Merkle root of full SessionState
+  state_root,                         # hash of full SessionState after finalizing round
   nonce,                              # latest nonce
   signatures,                         # map[slot_id -> sig] over (state_root, escrow_id, nonce)
-  inferences_root,                    # Merkle sibling for proof
-  host_stats,                         # map[slot_id -> HostStats(missed, invalid, cost, input_tokens, output_tokens)]
+  host_stats,                         # map[slot_id -> HostStats]
+)
+
+HostStats(
+  missed,                             # execution misses (started but never finished)
+  invalid,                            # inferences invalidated by challenge voting
+  cost,                               # total cost of inferences executed
+  required_validations,               # inferences ShouldValidate selected for this host
+  completed_validations,              # MsgValidation txs actually submitted
 )
 ```
 
-The state is structured as a Merkle tree: `state_root = hash(settlement_hash || inferences_root)`. Mainnet receives host_stats in plaintext plus the Merkle sibling (inferences_root). It recomputes settlement_hash from host_stats, verifies the Merkle proof against state_root, and checks 2/3+ slot-weighted signatures. This allows settlement without mainnet ever seeing individual inference records.
+Mainnet receives host_stats in plaintext. It verifies 2/3+ slot-weighted signatures over (state_root, escrow_id, nonce). Settlement does not require individual inference records. The mandatory finalizing round ensures all inferences are resolved and validation compliance is computed before settlement.
 
 5. On the escrow settlement, mainnet verifies the Merkle proof and 2/3+ slot-weighted signatures.
 Once verified it settles escrow for the user: each host is paid from escrow according to host_stats[slot].cost, remaining balance is refunded to user, host_stats are recorded.
@@ -250,22 +257,29 @@ Covered by the recovery protocol above. This is the "user withheld prompt data" 
 
 Not possible. host_i checks the diffs and rejects requests without a corresponding MsgStartInference. No StartInference = no payment authorization = no reason to compute.
 
-> Note: inference validation in the subnet uses the same mechanism as on mainnet. Prompt and response hashes are recorded in subnet state and validated probabilistically at settlement.
+### Inference Validation
+
+Validation is probabilistic, same as on mainnet. Each host independently decides which inferences to validate using a deterministic seed and the same `ShouldValidate` logic.
+
+On mainnet, hosts commit a seed at epoch start and reveal it at epoch end. The subnet has no epochs. Instead, the seed is derived deterministically from the host's private key and the escrow_id: `seed_i = first_8_bytes(sign(escrow_id_bytes))`. One seed per host per session. The host has no freedom to choose a different seed since signing is deterministic and the public key is known.
+
+The signing key is pinned by the host's first state signature in the session. Each host records which key other hosts used. At reveal time, the seed signature must match the pinned key. A validator with multiple warm keys cannot try different keys at reveal time to influence which inferences it must validate.
+
+During the session, each host uses its seed to decide which finished inferences to validate. If selected, host_i re-executes the inference, compares logits, and submits MsgValidation into subnet state.
+
+Seed reveal happens during the mandatory finalizing round (see Settlement). Each host submits MsgRevealSeed(signature). Other hosts derive the seed from the signature, verify it against the known public key, re-run ShouldValidate for all finished inferences, and count misses. Compliance results go into host_stats before settlement.
+
+> We considered deriving the seed from the host's state signature at each nonce (no commit-reveal, no finalizing round). This avoids the extra round but requires signatures to be part of state for compliance verification. Signatures are deliberately not in state because they arrive asynchronously and would break deterministic state hashing. The finalizing round with reveal is simpler overall and also removes the need for a Merkle tree in settlement.
 
 ## Settlement
 
-User submits `MsgSettleEscrow` (see Main Network Protocol above) to mainnet. Mainnet verifies the Merkle proof and 2/3+ slot-weighted signatures over `(state_root || escrow_id || nonce)`. If valid, settlement enters a dispute window of X blocks (TBD).
+Before submitting settlement to mainnet, the user must complete a finalizing round. The user sends empty requests (no new MsgStartInference) in round-robin to the full group. Each host attaches pending MsgFinishInference, MsgRevealSeed, and any remaining MsgValidation. After the full round, all inferences are resolved, all seeds are revealed, validation compliance is checked, and host_stats are final.
+
+User then submits `MsgSettleEscrow` (see Main Network Protocol above) to mainnet. Mainnet verifies 2/3+ slot-weighted signatures over `(state_root || escrow_id || nonce)` and settles the escrow: each host is paid from escrow according to host_stats[slot].cost, remaining balance is refunded to user.
 
 > Note: the list of individual signatures can be replaced with an aggregated BLS signature in the future to reduce tx size.
 
-During the dispute window, any host can submit a competing state with a higher nonce and 2/3+ signatures. If such a state exists, the user submitted stale state: all remaining escrow goes to hosts as penalty. If no competing state appears within X blocks, settlement finalizes: hosts are paid per token from escrow, unused balance is refunded to the user.
-
-**Unsettled transactions at settlement time.** When the user wants to close the session, there may be in-flight inferences (MsgStartInference without MsgFinishInference) and recent nonces without enough signatures. Two options:
-
-- Flush round: user sends empty requests (no inference, just diffs) in round-robin to collect remaining signatures and let hosts attach pending MsgFinishInference. Produces a fully-settled state before submitting to mainnet. Clean but requires one extra round.
-- Skip flush: user settles with whatever state is available. Any in-flight inference cost is forfeited (charged from escrow but hosts keep it even if work wasn't completed). Simpler but user overpays for unfinished work.
-
-TODO: decide which approach. Flush round is more consistent with the rest of the design. Could make it optional:if user skips it, they forfeit the unsettled portion.
+Settlement enters a dispute window of X blocks (TBD). During the window, any host can submit a competing state with a higher nonce and 2/3+ signatures. If such a state exists, the user submitted stale state: all remaining escrow goes to hosts as penalty. If no competing state appears within X blocks, settlement finalizes.
 
 **User disappears.** Any group member can submit MsgSettleEscrow after a timeout. All hosts have full state within one round (propagated via diffs). If a host is missing recent state, it can request it from other hosts via the public API endpoint. Same 2/3+ signature requirement, same dispute window. TODO: define timeout trigger (wall-clock from last nonce vs escrow expiry height at creation).
 
