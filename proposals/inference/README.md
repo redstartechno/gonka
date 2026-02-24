@@ -30,7 +30,7 @@ The bottleneck is better with longer requests (more compute per tx) and worse wi
 This proposal describes an approach that moves all per-inference communication off-chain.
 The chain processes only two transactions: one to put coins in escrow and assign a subgroup of hosts, one to settle at the end.
 All inference communication and validations happen inside the subgroup directly, over a long session (e.g. one epoch).
-To close the session, the user submits the final usage state signed by a majority of hosts (threshold: 1/2 or 2/3, TBD).
+To close the session, the user submits the final usage state signed by a supermajority of hosts (threshold: 2/3 slot-weighted).
 Both sides have a clear incentive to settle: the user recovers the unused escrow balance, and the subgroup gets paid from it.
 
 Effectively, as each subgroup would have to achieve consensus for the final state, the architecture will consist of:
@@ -75,7 +75,7 @@ All inference requests happen directly with the assigned subnet group; mainnet n
 
 - [mainchain]: user creates `MsgCreateEscrow(100GNK)` 
 - [subchain]: user interact with hosts in subgroup in pre-defined order
-- [mainnet]: at the end of session, user creates `MsgSettleEscrow(finalState, signatures, missed, invalid)`
+- [mainnet]: at the end of session, user creates `MsgSettleEscrow(state_root, nonce, signatures, usage, host_stats, ...)`
 
 Q1: Who decides host punishments, the subchain or mainnet?
 
@@ -107,16 +107,20 @@ MsgCreateEscrow(
 
 ```
 MsgSettleEscrow(
-  creatorAddr, # can be both user or someone from group
-  finalState, # hash
-  signatures, # signed by majority form group
-  missed, # [groupMember -> uint32]
-  invalid # [groupMember -> uint32]
+  escrow_id,                          # session identifier
+  state_root,                         # Merkle root of full SessionState
+  nonce,                              # latest nonce
+  signatures,                         # map[slot_id -> sig] over (state_root, escrow_id, nonce)
+  inferences_root,                    # Merkle sibling for proof
+  usage,                              # UsageStats (total_cost, total_input_tokens, total_output_tokens)
+  host_stats,                         # map[slot_id -> HostStats(missed, invalid)]
 )
 ```
 
-5. On the escrow settlement, mainnet verifies signatures from subnet. Must be signed by majority / supermajority.
-Once signatures are verified it settles escrow for the user, updates stats for hosts (missed, invalid).
+The state is structured as a Merkle tree: `state_root = hash(settlement_hash || inferences_root)`. Mainnet receives usage and host_stats in plaintext plus the Merkle sibling (inferences_root). It recomputes settlement_hash, verifies the Merkle proof against state_root, and checks 2/3+ slot-weighted signatures. This allows settlement without mainnet ever seeing individual inference records.
+
+5. On the escrow settlement, mainnet verifies the Merkle proof and 2/3+ slot-weighted signatures.
+Once verified it settles escrow for the user: hosts are paid from escrow proportionally to usage.total_cost, unused balance is refunded to user, host_stats are recorded.
 
 
 ## Subnet Protocol
@@ -136,13 +140,21 @@ Same properties we tried to achieve on mainnet:
 
 The chain needs these properties but does not want to process this data on mainnet.
 
+Subnet transaction types (all off-chain, inside the subnet only):
+- MsgStartInference (user) -- authorize inference, reserve cost
+- MsgFinishInference (host) -- record completion, response hash, token counts
+- MsgValidation (host) -- validation result; valid=false opens challenge voting
+- MsgValidationVote (host) -- vote during challenge window
+- MsgTimeoutInference (host) -- declare inference timed out
+- MsgRequestPrompt (host) -- recovery: request prompt data the user withheld
+
 ----
 
 **Per-user state.** State is saved per user independently. Each user's history is a chain of diffs. Each diff is essentially a block. Since there is no cross-user state, a node operator can shard its database and resources per user. Each node can participate in any number of subnets simultaneously. Subnet processing scales linearly with user count. Only escrow creation and settlement on mainnet do not.
 
 **User-driven propagation.** The user is responsible for sequencing and propagating transactions. User attaches accumulated diffs to each inference request. This piggybacks propagation on normal API usage.
 
-**Round-robin host ordering.** The user must iterate hosts in the group in a predefined order. This naturally distributes requests across hosts (not real work amount, but request count). Each diff carries a nonce, so the user cannot skip hosts.
+**Round-robin host ordering.** The user must iterate hosts in the group in a predefined order. This naturally distributes requests across hosts (not real work amount, but request count). Each diff carries a nonce that determines the expected recipient: `slot_at_position(nonce % group_size)`. The receiving host verifies it is the expected recipient for the nonce before processing. If it is not, the request is rejected. This enforces round-robin and prevents skipping.
 
 **Signing flow.** When a `/chat/completions` request is sent to host1, the user creates MsgStartInference(1). If host1 is honest, it must immediately return `(state, signature)` without waiting for execution. After execution, host1 signs MsgFinishInference(1) and the user propagates it to the network in the next round (or later, depends on performance). Locks should only be needed to generate new nonces and compose new messages, not to record incoming data. The user does not block on receiving a host's signature before sending the next request. Signatures arrive asynchronously and get included in later diffs. This keeps request submission fast at the cost of signatures lagging behind by one or more rounds.
 
@@ -162,6 +174,8 @@ The chain needs these properties but does not want to process this data on mainn
 - Host-proposed (MsgFinishInference, etc.): K rounds grace period (TBD). Accounts for async lag. After K rounds without inclusion, hosts trigger lazy gossip and refuse to sign.
 
 Each host response includes its unsettled mempool so the user always knows what's pending.
+
+**Retry on refusal.** If a host refuses to sign because the user hasn't included pending transactions, the user retries the same nonce with the missing transactions appended. The diff at a given nonce is append-only: a retry must be a strict superset of the original attempt. The host stores the first attempt's tx list and rejects any retry that removes or replaces transactions from it. This prevents equivocation -- the user cannot create two conflicting versions of the same nonce. K rounds is generous (tens of requests across the full group), so a well-behaved user client includes all known pending transactions automatically and never hits refusal.
 
 ### Scenarios
 
@@ -214,7 +228,7 @@ Attribution is hard. The user could attack a host by recording MsgStartInference
 1. host_i detects via nonce propagation that a nonce assigned to it has passed without receiving data.
 2. host_i gossips MsgRequestPrompt(N) to the group.
 3. Each host that sees MsgRequestPrompt(N) independently includes it in its next response to the user: "provide prompt for nonce N."
-4. A small relay group is sampled from the subnet using the mainnet block hash at 1 block after MsgRequestPrompt(N). This way host_i has already committed to the claim before learning who the relay group will be, and the user cannot preselect colluding intermediaries.
+4. A small relay group is sampled using a mainnet block hash as randomness. MsgRequestPrompt includes a `target_height` field set to the current known mainnet height + small delta (e.g., +2 blocks). The relay group is `hash(escrow_id, inference_id, block_hash_at_target_height) % group_size`. Nobody knows the block hash at target_height when MsgRequestPrompt is created, so the user cannot grind for a favorable relay group. Resolving the relay group requires one bridge call to fetch the block hash once target_height is reached. This only happens on the recovery path (rare). host_i has already committed to the claim (via gossip) before the block is produced.
 5. User provides prompt data to the relay group. Each member signs a receipt and relays to host_i independently.
 6. host_i computes, produces MsgFinishInference(N). User can reconnect to host_i directly for the response, or receive it through a relay member.
 7. If host_i still hasn't received the data, host_i can re-request with another MsgRequestPrompt.
@@ -241,7 +255,7 @@ Not possible. host_i checks the diffs and rejects requests without a correspondi
 
 ## Settlement
 
-User submits `MsgSettleEscrow(state_hash, signatures, missed, invalid)` to mainnet. Mainnet verifies 2/3+ slot-weighted signatures over the state hash. If valid, settlement enters a dispute window of X blocks (TBD).
+User submits `MsgSettleEscrow` (see Main Network Protocol above) to mainnet. Mainnet verifies the Merkle proof and 2/3+ slot-weighted signatures over `(state_root || escrow_id || nonce)`. If valid, settlement enters a dispute window of X blocks (TBD).
 
 > Note: the list of individual signatures can be replaced with an aggregated BLS signature in the future to reduce tx size.
 

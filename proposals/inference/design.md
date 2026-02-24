@@ -8,7 +8,9 @@ The subnet package has zero dependency on Cosmos SDK. Rationale: Cosmos SDK is s
 
 Mainnet keeps Cosmos SDK for `MsgCreateEscrow` and `MsgSettleEscrow`, both in `inference-chain/x/inference/`. The subnet package imports nothing from `inference-chain`.
 
-Crypto primitives (signing, hashing) come from Go stdlib or standalone libs (e.g., `crypto/ed25519`, `crypto/sha256`). Proto definitions are self-contained within the subnet package.
+Crypto primitives come from Go stdlib and `go-ethereum/crypto` (secp256k1 signing, ecrecover). Hashing uses `crypto/sha256`. Proto definitions are self-contained within the subnet package.
+
+Keys are secp256k1, the same format as mainnet account keys. The subnet re-uses the existing key infrastructure: a host signs with its warm key (authorized via authz grant) or directly with its cold key (validator's own account key). No new key types.
 
 
 ## Transaction List
@@ -35,7 +37,7 @@ Defined in the subnet package's own proto files. No shared types with mainnet pr
 | MsgTimeoutInference | host | Declare inference timed out. Carries timestamp. First per inference_id wins, duplicates ignored |
 | MsgRequestPrompt | host | Recovery: request prompt data the user withheld |
 
-8 total (2 mainnet + 6 subnet), down from 43 on mainnet today.
+8 total (2 mainnet + 6 subnet). The subnet is lightweight: 6 inference-specific tx types with no governance, staking, or other chain overhead.
 
 No separate `MsgInvalidateInference`. Invalidation is the result of a challenge voting round: `MsgValidation(valid=false)` opens the vote, `MsgValidationVote` collects votes, majority decides. This replaces the current mainnet pattern where `Validation` and `InvalidateInference` are separate RPCs.
 
@@ -124,12 +126,13 @@ Signatures are NOT part of SessionState. They are stored alongside diffs in stor
 
 ```
 started -> finished                                     (happy path, most common)
-started -> finished -> challenged -> validated           (challenge dismissed by majority)
-started -> finished -> challenged -> invalidated         (challenge confirmed by majority)
+started -> finished -> validated                         (validator confirmed correct, no challenge)
+started -> finished -> challenged -> validated           (challenge dismissed by majority vote)
+started -> finished -> challenged -> invalidated         (challenge confirmed by majority vote)
 started -> timed_out                                     (host never finished)
 ```
 
-Validation is probabilistic. Most inferences are never validated -- `started -> finished` is the normal terminal path.
+Validation is probabilistic. Most inferences are never validated -- `started -> finished` is the normal terminal path. When validation does occur, `MsgValidation(valid=true)` moves directly to validated without voting. Only `MsgValidation(valid=false)` opens a challenge round.
 
 Transitions and state updates:
 
@@ -138,13 +141,7 @@ Transitions and state updates:
 - MsgValidation(valid=true): status=validated. No change to usage or host_stats.
 - MsgValidation(valid=false): status=challenged, opens voting window.
 - MsgValidationVote: increments votes_valid or votes_invalid. When votes_invalid > group_size/2: status=invalidated, host_stats[executor].invalid += 1, usage.total_cost -= cost, balance += cost (user refund -- shouldn't pay for bad output). When votes_valid > group_size/2 or voting window expires: status=validated.
-- MsgTimeoutInference: status=timed_out, host_stats[executor].missed += 1. Only valid if current time > deadline. Cost stays charged (host reserved the slot even if it failed). Usage already reflects the reserved cost from MsgStartInference.
-
-### State Pruning
-
-Once an inference reaches a terminal state (finished, validated, invalidated, timed_out), its cost and token counts are folded into usage and host_stats. The record can be removed from the inferences map. Only in-flight and recently-finished-but-within-challenge-window inferences stay. This keeps the map bounded by concurrent inferences + challenge window size, not total session length.
-
-Pruning rule: prune when status is terminal AND challenge window has expired (so late MsgValidation for that inference is no longer valid). A pruned inference_id is tracked in a tombstone set to reject late-arriving txs that reference it.
+- MsgTimeoutInference: status=timed_out, host_stats[executor].missed += 1. Only valid if current time > deadline. usage.total_cost -= cost, balance += cost (user refund -- shouldn't pay for work that was never delivered). Same logic as invalidation.
 
 ### State Hash and Merkle Structure
 
@@ -176,8 +173,7 @@ When a host receives a request with diffs:
    a. Validate: nonce is sequential, txs are well-formed, proposer is authorized
    b. Apply each tx to SessionState (update balance, inferences, host_stats, usage)
    c. Check active inferences for timeout (compare deadline against host's clock)
-   d. Prune terminal inferences past their challenge window
-   e. Compute state_root (Merkle tree)
+   d. Compute state_root (Merkle tree)
    f. Store diff + state_root
 2. Verify included signatures against stored state_roots at their respective nonces
 3. Append new diff (current nonce) with the user's new txs
@@ -199,8 +195,8 @@ The subnet knows nothing about Cosmos SDK, gRPC, or chain internals. All mainnet
 
 type MainnetBridge interface {
     OnEscrowCreated(escrow EscrowInfo) error
-    OnEscrowSettled(escrowID string) error
     OnSettlementProposed(escrowID string, stateRoot []byte, nonce uint64) error
+    OnSettlementFinalized(escrowID string) error
     GetEscrow(escrowID string) (*EscrowInfo, error)
     GetValidatorInfo(validatorAddress string) (*ValidatorInfo, error)
     VerifyWarmKey(warmAddress, validatorAddress string) (*WarmKeyInfo, error)
@@ -209,6 +205,8 @@ type MainnetBridge interface {
 ```
 
 7 methods. Full definition with types in the Chain Data Requirements section below.
+
+`OnSettlementProposed` fires when MsgSettleEscrow is submitted and the dispute window starts. Hosts compare proposed nonce against local state and may dispute. `OnSettlementFinalized` fires when the dispute window ends and settlement is final. Host cleans up local session state.
 
 In production, `decentralized-api` provides an implementation that talks to the local chain node. In tests, a struct literal with preset return values drives the full subnet through any scenario.
 
@@ -229,14 +227,14 @@ subnet/
 
 This means any component can be replaced with a test double. A test can run the full state machine with in-memory storage, a no-op gossip client, and a fake mainnet bridge. No network, no disk, no containers.
 
-### Testing Without Infrastructure
+### In-Process Unit Tests
 
-The target: a Go test file that creates a subnet session, sends inference requests, collects signatures, and settles -- all in-process, all deterministic. The test constructs the dependency graph manually:
+The target: a Go test file that creates a subnet session, sends inference requests, collects signatures, and settles -- all in-process, all deterministic. All nodes run in the same process, no network I/O. The test constructs the dependency graph manually:
 
 ```go
 bridge := &FakeBridge{escrows: map[string]EscrowInfo{...}}
 store  := storage.NewMemory()
-signer := signing.NewEd25519(privateKey)
+signer := signing.NewSecp256k1(privateKey)
 gossip := &NoOpGossip{}
 
 node := subnet.New(bridge, store, signer, gossip)
@@ -249,7 +247,7 @@ No docker-compose, no chain binary, no dapi binary. Every scenario from README.m
 
 Unit tests cover one node in-process. Integration tests cover a real subnet cluster: multiple nodes running as separate processes, communicating over real HTTP, with real gossip, real storage, real signing. The only mock is `MainnetBridge`.
 
-Each node is a standalone binary (or a Go test spawning goroutines with real listeners). A test harness spins up N nodes, injects escrow info through the fake bridge, then drives user traffic against the cluster. Nodes gossip to each other over localhost. Storage is real SQLite (or PostgreSQL). Signatures are real ed25519.
+Each node is a standalone binary (or a Go test spawning goroutines with real listeners). A test harness spins up N nodes, injects escrow info through the fake bridge, then drives user traffic against the cluster. Nodes gossip to each other over localhost. Storage is real SQLite (or PostgreSQL). Signatures are real secp256k1.
 
 This is the level where stress testing happens. Scenarios:
 
@@ -260,7 +258,7 @@ This is the level where stress testing happens. Scenarios:
 
 The fake bridge is trivial -- a shared in-memory map protected by a mutex. It returns preset escrow data and records settlement calls. No chain, no blocks, no Cosmos SDK, but the rest of the system is production code running under production conditions.
 
-This is the key payoff of the narrow mainnet boundary: the entire subnet is real, only the 5-method bridge is fake. Stress tests hit real concurrency, real network, real disk I/O.
+This is the key payoff of the narrow mainnet boundary: the entire subnet is real, only the 7-method bridge is fake. Stress tests hit real concurrency, real network, real disk I/O.
 
 
 ## Bridge Cost Model
@@ -271,7 +269,7 @@ The subnet library has the opposite assumption: bridge calls are expensive. The 
 
 This matters for deployment. Initially the subnet runs inside dapi and the bridge is a local function call to the existing chain client. Later, the subnet can be deployed as a standalone thin binary where the bridge is an RPC connector to a separate mainnet node. The narrow bridge makes both deployments possible without code changes.
 
-Consequence: the subnet derives everything it can locally. Slot assignment is a deterministic function of (app_hash, escrow_id, validator_weights) -- the subnet computes it, never asks the bridge for it. Warm key verification is on-demand per message, not preloaded per session. The bridge provides only what cannot be derived: escrow existence, validator public keys, warm key authorization checks.
+Consequence: the subnet derives everything it can locally. Slot assignment is a deterministic function of (app_hash, escrow_id, validator_weights) -- the subnet computes it, never asks the bridge for it. Validator account addresses and public keys are loaded once at session start via `GetValidatorInfo` and cached. Warm key grants are cached on first contact and verified via bridge only on cache miss. The bridge provides only what cannot be derived: escrow existence, validator info, warm key authorization.
 
 
 ## Chain Data Requirements
@@ -282,27 +280,30 @@ The subnet needs a small set of data from mainnet. All of it flows through the `
 
 1. Escrow info: amount, creator address, creation height, app_hash at creation.
 2. Validator list and weights for the current epoch (to derive slot assignment locally).
-3. Validator public keys and primary URLs (from `participant.inference_url` on chain).
-4. Warm key verification: given a (warm_address, validator_address) pair, confirm the grant exists and return the public key.
+3. Validator account addresses, public keys, and primary URLs (from `participant.inference_url` on chain). These are loaded at session start via `GetValidatorInfo` and serve as the cold key reference for signature verification -- no bridge call needed to verify a validator signing with its own key.
+4. Warm key verification: given a (warm_address, validator_address) pair, confirm the authz grant exists. Called only on cache miss.
 
 Slot assignment is derived locally from items 1+2 using the same `GetSlotsFromSorted` algorithm as PoC. The bridge never provides slot assignment directly.
 
-### Warm Key Rule
+### Signing and Verification
 
-Problem: a host signs a subnet message with its warm key. The receiver needs to verify. Without knowing which warm key was used, the receiver must iterate all warm keys for all validators in the group. For a 30-host group with 2 warm keys each, that is 60 trial verifications per message.
+Mainnet uses Cosmos SDK's secp256k1 module for signature verification. That module is heavyweight and depends on the full SDK. The subnet cannot import it (no Cosmos SDK dependency).
 
-Rule: every signed subnet message includes the signer's warm key address as a plaintext field alongside the validator address it claims to act for. The receiver verifies exactly one pair:
+The subnet uses `go-ethereum/crypto` for secp256k1 operations. This is the same library Ethereum has used since its initial version -- well-tested, standalone, no chain dependencies. The key operation is `ecrecover`: given a message hash and signature, recover the signer's public key and derive their address. No public key lookup needed.
 
-1. Message says: "signed by warm_address X on behalf of validator Y."
-2. Receiver calls `bridge.VerifyWarmKey(warmAddress, validatorAddress)` -> public key.
-3. One signature verification against that public key. Done.
+Verification flow:
 
-No preloaded map. No iteration. The bridge call is cached locally after the first successful verification for a given (warm_address, validator_address) pair. If a warm key is not in cache (new grant mid-session, or first contact), the bridge is called once. If verification fails, the message is rejected.
+1. Message includes `validator_address` (the validator the signer claims to act for).
+2. Receiver runs `ecrecover(message_hash, signature)` -> recovers signer address.
+3. Receiver checks: is the recovered address the validator itself (cold key) or an authorized warm key?
+4. For cold key: the recovered address matches `ValidatorInfo.Address` loaded at session start. No bridge call, no cache lookup.
+5. For warm key: check the local warm key cache first. If found, done. If not found (first contact or new grant mid-session), call `bridge.VerifyWarmKey(recoveredAddress, validatorAddress)` to confirm the authz grant exists, then cache the result for the session. Bridge is only called on cache miss.
+
+A host can sign with either its cold key (validator's own account key) or its warm key (operational key authorized via authz grant on mainnet). Both are secp256k1. Cold key signing requires no grant -- the validator is acting directly.
 
 ```go
 type WarmKeyInfo struct {
     ValidatorAddress string
-    PublicKey        []byte
 }
 ```
 
@@ -358,8 +359,8 @@ Minimal. The subnet derives everything it can locally and only asks the bridge w
 type MainnetBridge interface {
     // Notifications: mainnet -> subnet
     OnEscrowCreated(escrow EscrowInfo) error
-    OnEscrowSettled(escrowID string) error
     OnSettlementProposed(escrowID string, stateRoot []byte, nonce uint64) error
+    OnSettlementFinalized(escrowID string) error
 
     // Queries: subnet -> mainnet
     GetEscrow(escrowID string) (*EscrowInfo, error)
@@ -379,11 +380,10 @@ type ValidatorInfo struct {
 
 type WarmKeyInfo struct {
     ValidatorAddress string
-    PublicKey        []byte
 }
 ```
 
-7 methods. `GetEscrow` and `GetValidatorInfo` are called at session start. `VerifyWarmKey` is called lazily on first contact with an unknown warm key, then cached. `OnEscrowCreated`, `OnEscrowSettled`, and `OnSettlementProposed` are push notifications from mainnet events. `SubmitDisputeState` is called by a host that detects stale settlement during the dispute window. In tests, all seven are trivial struct methods returning preset data.
+7 methods. `GetEscrow` and `GetValidatorInfo` are called at session start. `VerifyWarmKey` is called lazily on first contact with an unknown warm key, then cached. `OnEscrowCreated`, `OnSettlementProposed`, and `OnSettlementFinalized` are push notifications from mainnet events. `OnSettlementProposed` triggers dispute checks; `OnSettlementFinalized` triggers local state cleanup. `SubmitDisputeState` is called by a host that detects stale settlement during the dispute window. In tests, all seven are trivial struct methods returning preset data.
 
 
 ## Storage
@@ -496,14 +496,15 @@ MsgSettleEscrow:
   state_root         []byte                       # Merkle root of full SessionState
   nonce              uint64                       # latest nonce
   signatures         map[uint32][]byte            # slot_id -> sig over (state_root, escrow_id, nonce)
-  settlement_hash    []byte                       # hash(usage || host_stats)
   inferences_root    []byte                       # sibling hash (Merkle proof)
   usage              UsageStats                   # plaintext
   host_stats         map[uint32]HostStats         # plaintext
 ```
 
+No `settlement_hash` in the payload. Mainnet computes it from the plaintext fields.
+
 Mainnet verification:
-1. Recompute settlement_hash from plaintext: hash(serialize(usage) || serialize(host_stats))
+1. Compute settlement_hash from plaintext: hash(serialize(usage) || serialize(host_stats))
 2. Verify Merkle proof: hash(settlement_hash || inferences_root) == state_root
 3. Verify 2/3+ slot-weighted signatures over (state_root || escrow_id || nonce)
 4. Settle: pay hosts from escrow proportionally to usage.total_cost, refund (escrow_amount - usage.total_cost) to user, record host_stats
@@ -537,6 +538,5 @@ If the user disappears, any group member can submit MsgSettleEscrow after a time
 
 ## Open Questions
 
-1. Signature scheme: ed25519 (simple, per-host sigs) or BLS (aggregatable, smaller settlement tx)?
-4. Re-propagation timeout: 120s is a starting point. Should it scale with model latency or be fixed?
+1. Re-propagation timeout: 120s is a starting point. Should it scale with model latency or be fixed?
 5. Session lifecycle: how does a host learn about new escrows assigned to its group? Mainnet event subscription or lazy discovery on first user request?
