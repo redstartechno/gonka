@@ -108,9 +108,10 @@ MsgCreateEscrow(
 ```
 MsgSettleEscrow(
   escrow_id,                          # session identifier
-  state_root,                         # hash of full SessionState after finalizing round
+  state_root,                         # Merkle root: hash(host_stats_hash || rest_hash)
   nonce,                              # latest nonce
   signatures,                         # map[slot_id -> sig] over (state_root, escrow_id, nonce)
+  rest_hash,                          # Merkle sibling: hash(balance || inferences_hash)
   host_stats,                         # map[slot_id -> HostStats]
 )
 
@@ -123,7 +124,7 @@ HostStats(
 )
 ```
 
-Mainnet receives host_stats in plaintext. It verifies 2/3+ slot-weighted signatures over (state_root, escrow_id, nonce). Settlement does not require individual inference records. The mandatory finalizing round ensures all inferences are resolved and validation compliance is computed before settlement.
+Mainnet recomputes host_stats_hash from the submitted host_stats, verifies hash(host_stats_hash || rest_hash) == state_root, then checks 2/3+ slot-weighted signatures over (state_root, escrow_id, nonce). Settlement does not require individual inference records. The mandatory finalizing round ensures all inferences are resolved and validation compliance is computed before settlement.
 
 5. On the escrow settlement, mainnet verifies the Merkle proof and 2/3+ slot-weighted signatures.
 Once verified it settles escrow for the user: each host is paid from escrow according to host_stats[slot].cost, remaining balance is refunded to user, host_stats are recorded.
@@ -270,6 +271,8 @@ During the session, each host uses its seed to decide which finished inferences 
 Seed reveal happens during the mandatory finalizing round (see Settlement). Each host submits MsgRevealSeed(signature). Other hosts derive the seed from the signature, verify it against the known public key, re-run ShouldValidate for all finished inferences, and count misses. Compliance results go into host_stats before settlement.
 
 > We considered deriving the seed from the host's state signature at each nonce (no commit-reveal, no finalizing round). This avoids the extra round but requires signatures to be part of state for compliance verification. Signatures are deliberately not in state because they arrive asynchronously and would break deterministic state hashing. The finalizing round with reveal is simpler overall and also removes the need for a Merkle tree in settlement.
+
+> Note: the finalizing round could potentially be eliminated if the validation process is redesigned to not require a commit-reveal scheme (e.g. seeds derived from data already in state). This would allow settlement at any point without waiting for a full group round, improving liveness. Requires further refinement of the validation protocol.
 
 ## Settlement
 

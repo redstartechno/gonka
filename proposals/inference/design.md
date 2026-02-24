@@ -24,7 +24,7 @@ Defined in `inference-chain/proto/` alongside existing 43 tx types.
 | MsgCreateEscrow | user | Lock funds, triggers group sampling |
 | MsgSettleEscrow | user or host | Finalize session, distribute escrow |
 
-### Subnet (6 txs)
+### Subnet (7 txs)
 
 Defined in the subnet package's own proto files. No shared types with mainnet protos.
 
@@ -36,8 +36,9 @@ Defined in the subnet package's own proto files. No shared types with mainnet pr
 | MsgValidationVote | host | Vote during challenge window (after MsgValidation valid=false) |
 | MsgTimeoutInference | host | Declare inference timed out. Carries timestamp. First per inference_id wins, duplicates ignored |
 | MsgRequestPrompt | host | Recovery: request prompt data the user withheld |
+| MsgRevealSeed | host | Reveal validation seed during finalizing round |
 
-8 total (2 mainnet + 6 subnet). No governance, staking, or other chain overhead in the subnet.
+9 total (2 mainnet + 7 subnet). No governance, staking, or other chain overhead in the subnet.
 
 No separate `MsgInvalidateInference`. Invalidation is the result of a challenge voting round: `MsgValidation(valid=false)` opens the vote, `MsgValidationVote` collects votes, majority decides. This replaces the current mainnet pattern where `Validation` and `InvalidateInference` are separate RPCs.
 
@@ -132,25 +133,27 @@ Validation is probabilistic. Most inferences are never validated -- `started -> 
 Transitions and state updates:
 
 - MsgStartInference: creates record with status=started, reserves estimated cost from balance.
-- MsgFinishInference: status=finished, records response_hash and actual token counts, finalizes cost (adjusts balance and usage if actual differs from estimate). Updates host_stats[executor_slot]: cost += finalized cost, input_tokens += actual input, output_tokens += actual output.
+- MsgFinishInference: status=finished, records response_hash and actual token counts, finalizes cost (adjusts balance if actual differs from estimate). Updates host_stats[executor_slot].cost += finalized cost.
 - MsgValidation(valid=true): status=validated. No change to host_stats.
 - MsgValidation(valid=false): status=challenged, opens voting window.
 - MsgValidationVote: increments votes_valid or votes_invalid. When votes_invalid > group_size/2: status=invalidated, host_stats[executor].invalid += 1, host_stats[executor].cost -= cost, balance += cost (user refund -- shouldn't pay for bad output). When votes_valid > group_size/2 or voting window expires: status=validated.
 - MsgTimeoutInference: status=timed_out, host_stats[executor].missed += 1. Only valid if current time > deadline. host_stats[executor].cost -= cost, balance += cost (user refund -- shouldn't pay for work that was never delivered). Same logic as invalidation.
 
-### State Hash and Merkle Structure
+### State Hash
 
-The state is structured as a Merkle tree:
+The state is structured as a two-level hash:
 
 ```
            state_root
           /          \
- settlement_hash    inferences_root
+ host_stats_hash    rest_hash
 ```
 
-settlement_hash = hash(serialize(host_stats)). inferences_root = hash of the inferences map. state_root = hash(settlement_hash || inferences_root). Serialization is deterministic (protobuf with sorted map keys, fixed field order).
+host_stats_hash = hash(serialize(host_stats)). rest_hash = hash(balance_bytes || inferences_hash), where inferences_hash = hash(serialize(inferences)). state_root = hash(host_stats_hash || rest_hash). Serialization is deterministic (protobuf with sorted map keys, fixed field order).
 
-This enables settlement without a flush round: mainnet receives host_stats and inferences_root (Merkle sibling), recomputes settlement_hash, verifies against state_root, and checks signatures. See Settlement section.
+This covers the full SessionState: host_stats on the left, balance and inferences on the right. escrow_id and latest_nonce are already bound by the signature (sign(state_root || escrow_id || nonce)) and don't need separate inclusion.
+
+At settlement, mainnet receives host_stats and rest_hash (the sibling). It recomputes host_stats_hash, combines with rest_hash, and checks against the signed state_root. Mainnet doesn't need to interpret rest_hash.
 
 Every host applying the same diffs to the same nonce produces the same state_root. This is what gets signed.
 
@@ -168,7 +171,7 @@ When a host receives a request with diffs:
    a. Validate: nonce is sequential, txs are well-formed, proposer is authorized
    b. Apply each tx to SessionState (update balance, inferences, host_stats, usage)
    c. Check active inferences for timeout (compare deadline against host's clock)
-   d. Compute state_root (Merkle tree)
+   d. Compute state_root
    f. Store diff + state_root
 2. Verify included signatures against stored state_roots at their respective nonces
 3. Append new diff (current nonce) with the user's new txs
@@ -481,39 +484,31 @@ K=3 random peers over REST is the simplest correct approach. Gossip can be optim
 
 ### What Mainnet Needs to Verify
 
-Mainnet receives MsgSettleEscrow and must verify that the claimed usage and host_stats are correct. The challenge: mainnet doesn't have the full subnet state, only what the settlement tx includes.
-
-The Merkle state structure solves this. The settlement-relevant data is host_stats, hashed into a single settlement_hash. The settlement payload:
+Mainnet receives MsgSettleEscrow and must verify that the claimed usage and host_stats are correct. The mandatory finalizing round (see README.md Settlement) ensures all inferences are resolved and host_stats are final before settlement.
 
 ```
 MsgSettleEscrow:
   escrow_id          string
-  state_root         []byte                       # Merkle root of full SessionState
+  state_root         []byte                       # Merkle root after finalizing round
   nonce              uint64                       # latest nonce
   signatures         map[uint32][]byte            # slot_id -> sig over (state_root, escrow_id, nonce)
-  inferences_root    []byte                       # sibling hash (Merkle proof)
+  rest_hash          []byte                       # Merkle sibling: hash(balance_bytes || inferences_hash)
   host_stats         map[uint32]HostStats
 ```
 
-No `settlement_hash` in the payload. Mainnet recomputes it.
-
 Mainnet verification:
-1. Compute settlement_hash: hash(serialize(host_stats))
-2. Verify Merkle proof: hash(settlement_hash || inferences_root) == state_root
+1. Compute host_stats_hash from the submitted host_stats
+2. Verify Merkle proof: hash(host_stats_hash || rest_hash) == state_root
 3. Verify 2/3+ slot-weighted signatures over (state_root || escrow_id || nonce)
 4. Settle: pay each host from escrow according to host_stats[slot].cost, refund remaining balance (escrow_amount - sum of all host costs) to user, record host_stats
 
+The Merkle proof is constant size: one sibling hash (rest_hash). Mainnet never sees individual inference records or balance.
+
 No balance field in the payload. Mainnet knows the escrow amount and computes the refund from the sum of host_stats[*].cost.
 
-The Merkle proof is constant size: one sibling hash (inferences_root). Mainnet never sees individual inference records. The user can settle at any point regardless of active inferences.
+### Finalizing Round
 
-> Note: this works but a more elegant approach may exist. The Merkle tree adds complexity to the state hash computation. An alternative worth exploring: a separate settlement_hash signed by hosts at flush time, covering only settlement-relevant fields. Or a commitment scheme where hosts periodically sign usage checkpoints. The current Merkle approach is correct and avoids requiring a flush round, which is the priority.
-
-### Flush Round
-
-Optional optimization. Before settling, the user sends one round of empty requests (same endpoint, same format, no new MsgStartInference) to collect remaining signatures and let hosts attach pending MsgFinishInference. Not a special request type.
-
-With the Merkle settlement approach, the flush round is not required for correctness. But it produces a cleaner final state (empty inferences map, all work accounted for). Without flush, the user may forfeit cost of unfinished inferences (their cost is reserved from balance but no MsgFinishInference adjusts the final amount).
+Before settling, the user sends one round of empty requests (same endpoint, same format, no new MsgStartInference) in round-robin to the full group. Each host attaches pending MsgFinishInference, MsgRevealSeed, and any remaining MsgValidation. After the full round, all inferences are resolved, all seeds are revealed, validation compliance is checked, and host_stats are final. Not a special request type -- same diff format, just no new inferences.
 
 ### Dispute Window
 
