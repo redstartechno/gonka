@@ -22,20 +22,24 @@ Defined in `inference-chain/proto/` alongside existing 43 tx types.
 | MsgCreateEscrow | user | Lock funds, triggers group sampling |
 | MsgSettleEscrow | user or host | Finalize session, distribute escrow |
 
-### Subnet (4 txs)
+### Subnet (6 txs)
 
 Defined in the subnet package's own proto files. No shared types with mainnet protos.
 
 | Tx | Proposer | Purpose |
 |----|----------|---------|
-| MsgStartInference | user | Authorize inference, deduct from escrow balance |
+| MsgStartInference | user | Authorize inference, reserve cost from escrow balance |
 | MsgFinishInference | host | Record completion, response hash, token counts |
-| MsgValidation | host | Submit validation result for a past inference |
+| MsgValidation | host | Validation result. valid=true -> validated. valid=false -> opens challenge voting |
+| MsgValidationVote | host | Vote during challenge window (after MsgValidation valid=false) |
+| MsgTimeoutInference | host | Declare inference timed out. Carries timestamp. First per inference_id wins, duplicates ignored |
 | MsgRequestPrompt | host | Recovery: request prompt data the user withheld |
 
-This is the full list. 6 total, down from 43 on mainnet today.
+8 total (2 mainnet + 6 subnet), down from 43 on mainnet today.
 
-Open question: do we need `MsgInvalidateInference` as a separate tx, or is it a subtype/field inside `MsgValidation`? Current mainnet has both `Validation` and `InvalidateInference` as separate RPCs. Subnet could fold invalidation into the validation result (e.g., `valid: false` field).
+No separate `MsgInvalidateInference`. Invalidation is the result of a challenge voting round: `MsgValidation(valid=false)` opens the vote, `MsgValidationVote` collects votes, majority decides. This replaces the current mainnet pattern where `Validation` and `InvalidateInference` are separate RPCs.
+
+MsgTimeoutInference dedup: content-addressed by inference_id. The state machine applies the first one and ignores subsequent ones for the same inference. Each applying host validates the timestamp against its own clock -- if the inference deadline hasn't passed by the host's clock, it rejects the diff. Clock skew tolerance of a few seconds is acceptable because T is tens of seconds minimum.
 
 
 ## Package Structure
@@ -71,6 +75,117 @@ subnet/
 First release: `decentralized-api` imports `subnet/` and mounts a new echo router group on the existing public server port, e.g. `/subnet/v1/`. The user flow is available as a Go client library (`subnet/user`) for integration tests and future standalone client tooling.
 
 
+## State Machine
+
+### Session State
+
+The state is a small struct, not a history. History lives in diffs (storage). The state is the current snapshot after applying all diffs up to latest_nonce.
+
+```
+SessionState:
+  escrow_id            string
+  balance              uint64                          # remaining escrow
+  inferences           map[uint64]InferenceRecord      # keyed by inference_id
+  host_stats           map[uint32]HostStats            # keyed by slot_id
+  usage                UsageStats
+  latest_nonce         uint64
+```
+
+```
+InferenceRecord:
+  status               enum {started, finished, challenged, validated, invalidated, timed_out}
+  executor_slot        uint32
+  prompt_hash          []byte
+  response_hash        []byte              # set on MsgFinishInference
+  input_tokens         uint64              # set on MsgFinishInference
+  output_tokens        uint64              # set on MsgFinishInference
+  cost                 uint64              # reserved on start, finalized on finish
+  started_at           int64               # unix timestamp from MsgStartInference
+  deadline             int64               # started_at + T seconds
+  votes_valid          uint32              # count during challenge
+  votes_invalid        uint32              # count during challenge
+  voted_slots          map[uint32]bool     # prevent double vote
+```
+
+```
+HostStats:
+  missed               uint32
+  invalid              uint32
+
+UsageStats:
+  total_cost           uint64
+  total_input_tokens   uint64
+  total_output_tokens  uint64
+```
+
+Signatures are NOT part of SessionState. They are stored alongside diffs in storage. Signatures attest to a state_hash at a given nonce but are not inside the state itself.
+
+### Inference Lifecycle
+
+```
+started -> finished                                     (happy path, most common)
+started -> finished -> challenged -> validated           (challenge dismissed by majority)
+started -> finished -> challenged -> invalidated         (challenge confirmed by majority)
+started -> timed_out                                     (host never finished)
+```
+
+Validation is probabilistic. Most inferences are never validated -- `started -> finished` is the normal terminal path.
+
+Transitions and state updates:
+
+- MsgStartInference: creates record with status=started, reserves estimated cost from balance, updates usage (cost only -- tokens unknown yet).
+- MsgFinishInference: status=finished, records response_hash and actual token counts, finalizes cost (adjusts balance and usage if actual differs from estimate).
+- MsgValidation(valid=true): status=validated. No change to usage or host_stats.
+- MsgValidation(valid=false): status=challenged, opens voting window.
+- MsgValidationVote: increments votes_valid or votes_invalid. When votes_invalid > group_size/2: status=invalidated, host_stats[executor].invalid += 1, usage.total_cost -= cost, balance += cost (user refund -- shouldn't pay for bad output). When votes_valid > group_size/2 or voting window expires: status=validated.
+- MsgTimeoutInference: status=timed_out, host_stats[executor].missed += 1. Only valid if current time > deadline. Cost stays charged (host reserved the slot even if it failed). Usage already reflects the reserved cost from MsgStartInference.
+
+### State Pruning
+
+Once an inference reaches a terminal state (finished, validated, invalidated, timed_out), its cost and token counts are folded into usage and host_stats. The record can be removed from the inferences map. Only in-flight and recently-finished-but-within-challenge-window inferences stay. This keeps the map bounded by concurrent inferences + challenge window size, not total session length.
+
+Pruning rule: prune when status is terminal AND challenge window has expired (so late MsgValidation for that inference is no longer valid). A pruned inference_id is tracked in a tombstone set to reject late-arriving txs that reference it.
+
+### State Hash and Merkle Structure
+
+The state is structured as a Merkle tree:
+
+```
+           state_root
+          /          \
+ settlement_hash    inferences_root
+```
+
+settlement_hash = hash(serialize(usage) || serialize(host_stats)). inferences_root = hash of the inferences map. state_root = hash(settlement_hash || inferences_root). Serialization is deterministic (protobuf with sorted map keys, fixed field order).
+
+This structure enables settlement without a flush round: mainnet only needs usage + host_stats in plaintext, plus inferences_root as the Merkle sibling. Mainnet recomputes settlement_hash, verifies it against state_root, and checks signatures. The inferences subtree is opaque to mainnet. See Settlement section.
+
+Every host applying the same diffs to the same nonce produces the same state_root. This is the value that gets signed.
+
+### What Gets Signed
+
+A host signs: `sign(state_root || escrow_id || nonce)`. The escrow_id prevents cross-session replay. The nonce prevents cross-nonce replay. The state_root binds the signature to a specific state. Two hosts signing the same (escrow_id, nonce) must have seen identical transactions.
+
+Signing happens before the host begins streaming the inference response. The host validates the incoming diffs, applies them, computes the new state_root, and signs. This is the "acknowledge receipt" signature. After execution completes, the host produces MsgFinishInference (a separate tx, included in a later diff by the user).
+
+### Diff Application
+
+When a host receives a request with diffs:
+
+1. For each diff from local_latest_nonce+1 to received_latest_nonce:
+   a. Validate: nonce is sequential, txs are well-formed, proposer is authorized
+   b. Apply each tx to SessionState (update balance, inferences, host_stats, usage)
+   c. Check active inferences for timeout (compare deadline against host's clock)
+   d. Prune terminal inferences past their challenge window
+   e. Compute state_root (Merkle tree)
+   f. Store diff + state_root
+2. Verify included signatures against stored state_roots at their respective nonces
+3. Append new diff (current nonce) with the user's new txs
+4. Sign new state_root, return signature
+
+If any diff fails validation, reject the entire request. The host never applies partial diffs.
+
+
 ## Interface Boundaries
 
 Design principle: every subnet subpackage exposes a minimal interface in a dedicated `interface.go` file. The full subnet must be testable without mainnet, without dapi, without containers. Feed data into interfaces, get results out.
@@ -85,13 +200,15 @@ The subnet knows nothing about Cosmos SDK, gRPC, or chain internals. All mainnet
 type MainnetBridge interface {
     OnEscrowCreated(escrow EscrowInfo) error
     OnEscrowSettled(escrowID string) error
+    OnSettlementProposed(escrowID string, stateRoot []byte, nonce uint64) error
     GetEscrow(escrowID string) (*EscrowInfo, error)
     GetValidatorInfo(validatorAddress string) (*ValidatorInfo, error)
     VerifyWarmKey(warmAddress, validatorAddress string) (*WarmKeyInfo, error)
+    SubmitDisputeState(escrowID string, stateRoot []byte, nonce uint64, sigs map[uint32][]byte) error
 }
 ```
 
-5 methods. Full definition with types in the Chain Data Requirements section below.
+7 methods. Full definition with types in the Chain Data Requirements section below.
 
 In production, `decentralized-api` provides an implementation that talks to the local chain node. In tests, a struct literal with preset return values drives the full subnet through any scenario.
 
@@ -242,11 +359,15 @@ type MainnetBridge interface {
     // Notifications: mainnet -> subnet
     OnEscrowCreated(escrow EscrowInfo) error
     OnEscrowSettled(escrowID string) error
+    OnSettlementProposed(escrowID string, stateRoot []byte, nonce uint64) error
 
     // Queries: subnet -> mainnet
     GetEscrow(escrowID string) (*EscrowInfo, error)
     GetValidatorInfo(validatorAddress string) (*ValidatorInfo, error)
     VerifyWarmKey(warmAddress, validatorAddress string) (*WarmKeyInfo, error)
+
+    // Actions: subnet -> mainnet
+    SubmitDisputeState(escrowID string, stateRoot []byte, nonce uint64, sigs map[uint32][]byte) error
 }
 
 type ValidatorInfo struct {
@@ -262,7 +383,7 @@ type WarmKeyInfo struct {
 }
 ```
 
-5 methods. `GetEscrow` and `GetValidatorInfo` are called at session start. `VerifyWarmKey` is called lazily on first contact with an unknown warm key, then cached. `OnEscrowCreated` and `OnEscrowSettled` are push notifications. In tests, all five are trivial struct methods returning preset data.
+7 methods. `GetEscrow` and `GetValidatorInfo` are called at session start. `VerifyWarmKey` is called lazily on first contact with an unknown warm key, then cached. `OnEscrowCreated`, `OnEscrowSettled`, and `OnSettlementProposed` are push notifications from mainnet events. `SubmitDisputeState` is called by a host that detects stale settlement during the dispute window. In tests, all seven are trivial struct methods returning preset data.
 
 
 ## Storage
@@ -359,6 +480,59 @@ No new ports. No peer discovery (group is deterministic from mainnet). Connectio
 ### Future Optimization
 
 K=3 random peers over REST is the simplest correct approach. Gossip can be optimized independently of the rest of the system since the interface is just "notify peers about nonce N." Possible future directions: libp2p gossipsub, QUIC transport, adaptive K based on group size, or persistent WebSocket connections within a session. None of these affect the subnet state machine or storage layer.
+
+
+## Settlement
+
+### What Mainnet Needs to Verify
+
+Mainnet receives MsgSettleEscrow and must verify that the claimed usage and host_stats are correct. The challenge: mainnet doesn't have the full subnet state, only what the settlement tx includes.
+
+The Merkle state structure solves this. The settlement-relevant data is usage + host_stats, hashed together into a single settlement_hash. The settlement payload:
+
+```
+MsgSettleEscrow:
+  escrow_id          string
+  state_root         []byte                       # Merkle root of full SessionState
+  nonce              uint64                       # latest nonce
+  signatures         map[uint32][]byte            # slot_id -> sig over (state_root, escrow_id, nonce)
+  settlement_hash    []byte                       # hash(usage || host_stats)
+  inferences_root    []byte                       # sibling hash (Merkle proof)
+  usage              UsageStats                   # plaintext
+  host_stats         map[uint32]HostStats         # plaintext
+```
+
+Mainnet verification:
+1. Recompute settlement_hash from plaintext: hash(serialize(usage) || serialize(host_stats))
+2. Verify Merkle proof: hash(settlement_hash || inferences_root) == state_root
+3. Verify 2/3+ slot-weighted signatures over (state_root || escrow_id || nonce)
+4. Settle: pay hosts from escrow proportionally to usage.total_cost, refund (escrow_amount - usage.total_cost) to user, record host_stats
+
+No balance field in the payload. Mainnet knows the escrow amount and computes the refund from usage.total_cost.
+
+The Merkle proof is constant size: one sibling hash (inferences_root). Mainnet never sees individual inference records. The user can settle at any point regardless of active inferences.
+
+> Note: this works but a more elegant approach may exist. The Merkle tree adds complexity to the state hash computation. An alternative worth exploring: a separate settlement_hash signed by hosts at flush time, covering only settlement-relevant fields. Or a commitment scheme where hosts periodically sign usage checkpoints. The current Merkle approach is correct and avoids requiring a flush round, which is the priority.
+
+### Flush Round
+
+Optional optimization. Before settling, the user sends one round of empty requests (same endpoint, same format, no new MsgStartInference) to collect remaining signatures and let hosts attach pending MsgFinishInference. Not a special request type.
+
+With the Merkle settlement approach, the flush round is not required for correctness. But it produces a cleaner final state (empty inferences map, all work accounted for). Without flush, the user may forfeit cost of unfinished inferences (their cost is reserved in usage but no MsgFinishInference adjusts the final amount).
+
+### Dispute Window
+
+When mainnet receives MsgSettleEscrow, settlement enters a dispute window of X blocks (TBD). Bridge notifies each host via `OnSettlementProposed(escrowID, stateRoot, nonce)`.
+
+Host compares proposed nonce against its local latest_nonce:
+- If proposed nonce < local latest_nonce AND the host has 2/3+ signatures for a higher nonce: host calls `SubmitDisputeState` with the newer state. User submitted stale state and is penalized (forfeits remaining escrow to hosts).
+- If proposed nonce >= local latest_nonce: no dispute. Settlement finalizes after X blocks.
+
+The host is passive -- it reacts to the bridge notification, doesn't poll. One new notification method plus one action method on the bridge.
+
+### Host-Initiated Settlement
+
+If the user disappears, any group member can submit MsgSettleEscrow after a timeout (TBD: wall-clock from last nonce or escrow expiry height set at creation). All hosts have full state within one round (propagated via diffs). If a host is missing recent state, it requests from other hosts via the public API endpoint. Same 2/3+ signature requirement, same dispute window.
 
 
 ## Open Questions
