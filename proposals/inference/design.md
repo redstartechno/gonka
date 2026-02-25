@@ -42,7 +42,7 @@ Defined in the subnet package's own proto files. No shared types with mainnet pr
 
 No separate `MsgInvalidateInference`. Invalidation is the result of a challenge voting round: `MsgValidation(valid=false)` opens the vote, `MsgValidationVote` collects votes, majority decides. This replaces the current mainnet pattern where `Validation` and `InvalidateInference` are separate RPCs.
 
-MsgTimeoutInference dedup: content-addressed by inference_id. The state machine applies the first one and ignores subsequent ones for the same inference. Each applying host validates the timestamp against its own clock -- if the inference deadline hasn't passed by the host's clock, it rejects the diff. Clock skew tolerance of a few seconds is acceptable because T is tens of seconds minimum.
+MsgTimeoutInference dedup: content-addressed by inference_id. The state machine applies the first one and ignores subsequent ones for the same inference. Whether the deadline has actually passed is a local acceptance decision by each participant (see Timestamp Validation).
 
 
 ## Package Structure
@@ -196,6 +196,22 @@ When a host receives a request with diffs:
 4. Sign new state_root, return signature
 
 If any diff fails validation, reject the entire request.
+
+### Timestamp Validation
+
+Nonce is the subnet's block height -- the authoritative ordering. The state machine is deterministic: same diffs at same nonces produce the same state on every host.
+
+Wall-clock time is a local observable, not consensus truth. Different hosts have different clocks. Time is what a host uses to form a local opinion, not a protocol-level rule.
+
+Two layers:
+
+State machine (deterministic): applies diffs and computes state. When it checks `timeout.timestamp > inference.deadline`, that is a pure comparison of data already in transactions and state. No local clocks involved. Every host applying the same diffs gets the same result.
+
+Acceptance (local): each participant independently decides whether to accept a transaction before it enters state. A host receiving MsgStartInference with `started_at` from 10 minutes ago can reject it based on its own clock. A host receiving MsgTimeoutInference with a suspicious timestamp can reject it the same way. This is a local judgment, not a protocol constant.
+
+**Monotonicity.** All timestamps must be non-decreasing across nonces. This is a deterministic check on the diff chain -- every host verifies it independently. Diffs that violate monotonicity are rejected.
+
+**Gossip on rejection.** A silent rejection is not enough. The proposer can skip the rejecting party and claim it was unavailable. When a participant rejects a transaction due to a suspicious timestamp, it gossips signed evidence (the transaction, its own clock reading) to the group. Each group member forms its own opinion based on its own clock. No single host's clock is authoritative. The group's collective behavior -- enough hosts refusing to sign or enough accepting -- determines the outcome.
 
 
 ## Interface Boundaries
