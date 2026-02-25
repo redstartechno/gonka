@@ -5,7 +5,7 @@
 Per inference, the following transactions are recorded on-chain:
 - MsgStartInference
 - MsgFinishInference
-- MsgValidation (0 to N_hosts per inference; 1 on average in the normal case)
+- MsgValidation (0 to N_hosts per inference; let's consider case when it's 1 tx for simplicity)
 
 3 txs per inference. Max capacity per block is ~5000
 => 5000 / 3 = 1666 inferences per block
