@@ -155,7 +155,7 @@ Transitions and state updates:
 - MsgValidation(valid=true): status=validated. No change to host_stats.
 - MsgValidation(valid=false): status=challenged, opens voting window.
 - MsgValidationVote: increments votes_valid or votes_invalid. When votes_invalid > group_size/2: status=invalidated, host_stats[executor].invalid += 1, host_stats[executor].cost -= cost, balance += cost (user refund -- shouldn't pay for bad output). When votes_valid > group_size/2 or voting window expires: status=validated.
-- MsgTimeoutInference: status=timed_out, host_stats[executor].missed += 1. Only valid if current time > deadline. host_stats[executor].cost -= cost, balance += cost (user refund -- shouldn't pay for work that was never delivered). Same logic as invalidation.
+- MsgTimeoutInference: status=timed_out, host_stats[executor].missed += 1. Whether the inference deadline has actually passed is a local acceptance decision by each participant (see Timestamp Validation). host_stats[executor].cost -= cost, balance += cost (user refund -- shouldn't pay for work that was never delivered). Same logic as invalidation.
 
 ### State Hash
 
@@ -188,9 +188,8 @@ When a host receives a request with diffs:
 1. For each diff from local_latest_nonce+1 to received_latest_nonce:
    a. Validate: nonce is sequential, txs are well-formed, proposer is authorized
    b. Apply each tx to SessionState (update balance, inferences, host_stats, usage)
-   c. Check active inferences for timeout (compare deadline against host's clock)
-   d. Compute state_root
-   f. Store diff + state_root
+   c. Compute state_root
+   d. Store diff + state_root
 2. Verify included signatures against stored state_roots at their respective nonces
 3. Append new diff (current nonce) with the user's new txs
 4. Sign new state_root, return signature
@@ -205,9 +204,9 @@ Wall-clock time is a local observable, not consensus truth. Different hosts have
 
 Two layers:
 
-State machine (deterministic): applies diffs and computes state. When it checks `timeout.timestamp > inference.deadline`, that is a pure comparison of data already in transactions and state. No local clocks involved. Every host applying the same diffs gets the same result.
+State machine (deterministic): applies diffs and computes state. Given the same diffs at the same nonces, every host produces the same result. No local clocks involved.
 
-Acceptance (local): each participant independently decides whether to accept a transaction before it enters state. A host receiving MsgStartInference with `started_at` from 10 minutes ago can reject it based on its own clock. A host receiving MsgTimeoutInference with a suspicious timestamp can reject it the same way. This is a local judgment, not a protocol constant.
+Acceptance (local): each participant independently decides whether to accept a transaction before it enters state. This covers both transaction freshness (is this tx recent?) and inference deadline expiry (has the executor's time window passed?). A host checks its own clock, forms an opinion, and either accepts or rejects. This is a local judgment, not a protocol constant.
 
 **Monotonicity.** All timestamps must be non-decreasing across nonces. This is a deterministic check on the diff chain -- every host verifies it independently. Diffs that violate monotonicity are rejected.
 
