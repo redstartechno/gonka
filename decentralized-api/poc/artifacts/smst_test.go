@@ -2444,3 +2444,26 @@ func TestDistributionHistory_CrashRecovery(t *testing.T) {
 		t.Errorf("simulated distribution should sum to 5, got %d", total)
 	}
 }
+
+// TestDistributionLostAfterRestart_ScannerLimit reproduces the bufio.Scanner
+// 64 KB default line limit. 1100 nodes × ~65 bytes/entry ≈ 71 KB per line,
+// which exceeds the limit. On reopen the distribution silently becomes empty.
+func TestDistributionLostAfterRestart_ScannerLimit(t *testing.T) {
+	dir := t.TempDir()
+
+	s, _ := OpenSMST(dir)
+	for i := 0; i < 1100; i++ {
+		s.AddWithNode(int32(i+1), []byte{1}, fmt.Sprintf("node-%055d", i))
+	}
+	s.Flush()
+	want := len(s.GetNodeDistribution())
+	s.Close()
+
+	s2, _ := OpenSMST(dir)
+	defer s2.Close()
+	got := len(s2.GetNodeDistribution())
+
+	if got != want {
+		t.Fatalf("distribution lost after restart: recovered %d nodes, want %d", got, want)
+	}
+}

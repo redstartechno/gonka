@@ -2,6 +2,7 @@ package artifacts
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -173,35 +174,34 @@ func (s *SMSTArtifactStore) recoverDistributionHistory() error {
 	var latestCount uint32
 	var latestDist map[string]uint32
 
-	scanner := bufio.NewScanner(s.distFile)
+	reader := bufio.NewReader(s.distFile)
 	lineNum := 0
-	for scanner.Scan() {
-		lineNum++
-		line := scanner.Bytes()
-		if len(line) == 0 {
-			continue
+	for {
+		line, err := reader.ReadBytes('\n')
+		if err != nil && err != io.EOF {
+			return fmt.Errorf("read distributions file: %w", err)
 		}
-
-		var entry distributionEntry
-		if err := json.Unmarshal(line, &entry); err != nil {
-			log.Printf("warning: skipping corrupted distribution entry at line %d: %v", lineNum, err)
-			continue
+		line = bytes.TrimRight(line, "\r\n")
+		if len(line) > 0 {
+			lineNum++
+			var entry distributionEntry
+			if jsonErr := json.Unmarshal(line, &entry); jsonErr != nil {
+				log.Printf("warning: skipping corrupted distribution entry at line %d: %v", lineNum, jsonErr)
+			} else {
+				distCopy := make(map[string]uint32, len(entry.Dist))
+				for k, v := range entry.Dist {
+					distCopy[k] = v
+				}
+				s.distributionHistory[entry.Count] = distCopy
+				if entry.Count >= latestCount {
+					latestCount = entry.Count
+					latestDist = distCopy
+				}
+			}
 		}
-
-		distCopy := make(map[string]uint32, len(entry.Dist))
-		for k, v := range entry.Dist {
-			distCopy[k] = v
+		if err == io.EOF {
+			break
 		}
-		s.distributionHistory[entry.Count] = distCopy
-
-		if entry.Count >= latestCount {
-			latestCount = entry.Count
-			latestDist = distCopy
-		}
-	}
-
-	if err := scanner.Err(); err != nil {
-		return fmt.Errorf("scan distributions file: %w", err)
 	}
 
 	if latestDist != nil {
