@@ -152,7 +152,7 @@ Subnet transaction types (all off-chain, inside the subnet only):
 - MsgFinishInference (host) -- record completion, response hash, token counts
 - MsgValidation (host) -- validation result; valid=false opens challenge voting
 - MsgValidationVote (host) -- vote during challenge window
-- MsgTimeoutInference (host) -- declare inference timed out
+- MsgTimeoutInference (user) -- declare inference timed out (deadline = started_at + T, T >= 20 min)
 - MsgRequestPrompt (host) -- recovery: request prompt data the user withheld
 
 ----

@@ -21,8 +21,8 @@ Defined in `inference-chain/proto/` alongside existing 43 tx types.
 
 | Tx | Proposer | Purpose |
 |----|----------|---------|
-| MsgCreateEscrow | user | Lock funds, triggers group sampling |
-| MsgSettleEscrow | user or host | Finalize session, distribute escrow |
+| MsgCreateEscrow | user | Lock funds, source of data for group sampling |
+| MsgSettleEscrow | user or host | Finalize session, initiate escrow distribution |
 
 ### Subnet (7 txs)
 
@@ -34,7 +34,7 @@ Defined in the subnet package's own proto files. No shared types with mainnet pr
 | MsgFinishInference | host | Record completion, response hash, token counts |
 | MsgValidation | host | Validation result. valid=true -> validated. valid=false -> opens challenge voting |
 | MsgValidationVote | host | Vote during challenge window (after MsgValidation valid=false) |
-| MsgTimeoutInference | host | Declare inference timed out. Carries timestamp. First per inference_id wins, duplicates ignored |
+| MsgTimeoutInference | user | Declare inference timed out. First per inference_id wins, duplicates ignored |
 | MsgRequestPrompt | host | Recovery: request prompt data the user withheld |
 | MsgRevealSeed | host | Reveal validation seed during finalizing round |
 
@@ -42,7 +42,7 @@ Defined in the subnet package's own proto files. No shared types with mainnet pr
 
 No separate `MsgInvalidateInference`. Invalidation is the result of a challenge voting round: `MsgValidation(valid=false)` opens the vote, `MsgValidationVote` collects votes, majority decides. This replaces the current mainnet pattern where `Validation` and `InvalidateInference` are separate RPCs.
 
-MsgTimeoutInference dedup: content-addressed by inference_id. The state machine applies the first one and ignores subsequent ones for the same inference. Whether the deadline has actually passed is a local acceptance decision by each participant (see Timestamp Validation).
+MsgTimeoutInference is user-proposed. The user is the one waiting for the result and has direct incentive to declare timeout on non-responsive hosts. Defense against premature timeouts: hosts check their own clocks and refuse to sign if the deadline (started_at + T) hasn't passed. Dedup: content-addressed by inference_id, first one wins.
 
 
 ## Package Structure
@@ -132,6 +132,7 @@ HostStats:
   cost                 uint64              # total cost of inferences executed by this host
   required_validations uint32              # inferences ShouldValidate selected for this host
   completed_validations uint32             # MsgValidation txs actually submitted
+  session_passed        bool
 ```
 
 Signatures are not part of SessionState. They are stored alongside diffs in storage.
@@ -143,7 +144,8 @@ started -> finished                                     (happy path, most common
 started -> finished -> validated                         (validator confirmed correct, no challenge)
 started -> finished -> challenged -> validated           (challenge dismissed by majority vote)
 started -> finished -> challenged -> invalidated         (challenge confirmed by majority vote)
-started -> timed_out                                     (host never finished)
+started -> timed_out                                     (host never finished within deadline)
+started -> timed_out -> finished                         (timeout overridden: host finished after timeout was recorded)
 ```
 
 Validation is probabilistic. Most inferences are never validated -- `started -> finished` is the normal terminal path. When validation does occur, `MsgValidation(valid=true)` moves directly to validated without voting. Only `MsgValidation(valid=false)` opens a challenge round.
@@ -155,7 +157,8 @@ Transitions and state updates:
 - MsgValidation(valid=true): status=validated. No change to host_stats.
 - MsgValidation(valid=false): status=challenged, opens voting window.
 - MsgValidationVote: increments votes_valid or votes_invalid. When votes_invalid > group_size/2: status=invalidated, host_stats[executor].invalid += 1, host_stats[executor].cost -= cost, balance += cost (user refund -- shouldn't pay for bad output). When votes_valid > group_size/2 or voting window expires: status=validated.
-- MsgTimeoutInference: status=timed_out, host_stats[executor].missed += 1. Whether the inference deadline has actually passed is a local acceptance decision by each participant (see Timestamp Validation). host_stats[executor].cost -= cost, balance += cost (user refund -- shouldn't pay for work that was never delivered). Same logic as invalidation.
+- MsgTimeoutInference: status=timed_out, host_stats[executor].missed += 1, host_stats[executor].cost -= cost, balance += cost (user refund). User-proposed. Whether the deadline (started_at + T, where T >= 20 minutes) has actually passed is a local acceptance decision by each participant (see Timestamp Validation). State machine applies it unconditionally; hosts that disagree refuse to sign.
+- MsgFinishInference after timeout: if status is timed_out, MsgFinishInference overrides it. status=finished, host_stats[executor].missed -= 1, host_stats[executor].cost += cost, balance -= cost. Reverses the timeout effects. Inclusion enforcement ensures the user includes MsgFinishInference if the host produced one.
 
 ### State Hash
 
@@ -177,24 +180,24 @@ Every host applying the same diffs to the same nonce produces the same state_roo
 
 ### What Gets Signed
 
-A host signs: `sign(state_root || escrow_id || nonce)`. escrow_id prevents cross-session replay, nonce prevents cross-nonce replay, state_root binds to a specific state.
+User signs each diff: `sign(hash(serialize(Diff)))`. Diff is protobuf (canonical serialization). The signature authenticates the diff as coming from the user and binds the tx content to the nonce. Required for non-repudiation and equivocation detection (see Sequencing Model).
 
-Signing happens before execution. The host validates incoming diffs, applies them, computes state_root, and signs. After execution, the host produces MsgFinishInference (included in a later diff by the user).
+Host signs the state: `sign(state_root || escrow_id || nonce)`. escrow_id prevents cross-session replay, nonce prevents cross-nonce replay, state_root binds to a specific state. Signing happens before execution.
 
 ### Diff Application
 
 When a host receives a request with diffs:
 
 1. For each diff from local_latest_nonce+1 to received_latest_nonce:
-   a. Validate: nonce is sequential, txs are well-formed, proposer is authorized
-   b. Apply each tx to SessionState (update balance, inferences, host_stats, usage)
-   c. Compute state_root
-   d. Store diff + state_root
-2. Verify included signatures against stored state_roots at their respective nonces
+   a. Verify user signature on the diff
+   b. Validate: nonce is sequential, txs are well-formed, proposer is authorized
+   c. Apply each tx to SessionState (update balance, inferences, host_stats, usage)
+   d. Compute state_root, store diff + state_root
+2. Verify included host signatures against stored state_roots at their respective nonces
 3. Append new diff (current nonce) with the user's new txs
-4. Sign new state_root, return signature
+4. Acceptance check: if pending host txs are satisfied, sign state_root and return signature. Otherwise return rejection with missing txs. Both include host mempool.
 
-If any diff fails validation, reject the entire request.
+If any diff fails validation (bad signature, bad nonce, malformed tx), reject the entire request.
 
 ### Timestamp Validation
 
@@ -206,11 +209,74 @@ Two layers:
 
 State machine (deterministic): applies diffs and computes state. Given the same diffs at the same nonces, every host produces the same result. No local clocks involved.
 
-Acceptance (local): each participant independently decides whether to accept a transaction before it enters state. This covers both transaction freshness (is this tx recent?) and inference deadline expiry (has the executor's time window passed?). A host checks its own clock, forms an opinion, and either accepts or rejects. This is a local judgment, not a protocol constant.
+Acceptance (local): each participant independently decides whether to sign at a given nonce. This covers transaction freshness (is this tx recent?) and inference deadline expiry (has the executor's time window passed?). A host checks its own clock, forms an opinion, and either signs or refuses. This is a local judgment, not a protocol constant.
+
+Refusal does not prevent diff application -- the state machine always applies diffs to keep state in sync across all hosts.
+
+A disagreement resolves in one of two ways:
+- State self-corrects: e.g., a disputed timeout is overridden by MsgFinishInference in a later diff. The host evaluates the current state, sees it's acceptable, signs normally.
+- Supermajority resolution: the state is not corrected, but 2/3+ slot-weighted signatures exist for some nonce >= the disputed one. The group accepted the state. The host treats the dispute as resolved by group consensus and signs future nonces normally. Same threshold as settlement. Analogous to blockchain finality -- once enough attestations exist, individual disagreements don't persist.
 
 **Monotonicity.** All timestamps must be non-decreasing across nonces. This is a deterministic check on the diff chain -- every host verifies it independently. Diffs that violate monotonicity are rejected.
 
 **Gossip on rejection.** A silent rejection is not enough. The proposer can skip the rejecting party and claim it was unavailable. When a participant rejects a transaction due to a suspicious timestamp, it gossips signed evidence (the transaction, its own clock reading) to the group. Each group member forms its own opinion based on its own clock. No single host's clock is authoritative. The group's collective behavior -- enough hosts refusing to sign or enough accepting -- determines the outcome.
+
+
+## Sequencing Model
+
+### Primitives
+
+Log: ordered sequence of diffs, indexed by nonce. Single writer (user). Append-only.
+
+Diff: list of txs at a nonce, signed by the user. Immutable once in the log.
+
+State: deterministic function of log[1..N]. Hosts compute state from diffs.
+
+> Q: Can we avoid maintaining a state machine on the user side? The user signs diffs, not state -- so it doesn't strictly need to compute state. But without local state the user can't independently verify which state_hash is correct (until it gets the one confirmed by supermajority). Running the state machine in the user client means every state machine update requires updating the user library.
+
+Round: one pass through all hosts in the group in slot order.
+
+### Tx Sources
+
+User-proposed: MsgStartInference, MsgTimeoutInference.
+
+Host-proposed: MsgFinishInference, MsgValidation, MsgValidationVote, MsgRequestPrompt, MsgRevealSeed. Returned in host response mempool. User includes in future diffs.
+
+The user is the sequencer for both.
+
+### Flow
+
+The user composes diffs and sends requests in round-robin order. Each request carries all accumulated diffs since the receiving host's last sync point. The user signs each diff (see What Gets Signed). Within a round, the user sends to the next host without waiting for the previous host's response.
+
+Each host on receiving a request:
+1. Verify user signature on each new diff
+2. Apply all diffs through the state machine (deterministic, always runs)
+3. For its assigned nonce: acceptance layer decides whether to sign
+4. Gossip (nonce, state_hash) to K peers
+5. Return: host signature + mempool (accept) or missing txs + mempool (reject)
+
+### Rejection
+
+A host refuses to sign for two reasons:
+- Inclusion: pending txs from its mempool are not included.
+- Acceptance: a tx violates the host's local judgment (e.g., premature timeout).
+
+The user cannot retry a past nonce -- subsequent hosts already built on it. The user includes missing txs in the next diff and continues. If signatures are missing after a round, one additional round resolves them. No special retry protocol.
+
+### Equivocation
+
+Hosts gossip (nonce, state_hash) after processing each request. If a host sees a different state_hash for the same nonce from another host, it requests the diff at that nonce. Two different user-signed diffs at the same nonce = equivocation proof. The detecting host gossips the evidence and stops signing. The session terminates; hosts settle at the last clean state via host-initiated settlement.
+
+### Session Structure
+
+```
+session:   rounds with new inferences (pipelined)
+           round to include pending txs (if signatures missing)
+finalize:  round with MsgRevealSeed, no new inferences
+settle:    MsgSettleEscrow to mainnet
+```
+
+Each step uses the same primitive: diffs in round-robin order.
 
 
 ## Interface Boundaries
