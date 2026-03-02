@@ -30,19 +30,19 @@ Defined in the subnet package's own proto files. No shared types with mainnet pr
 
 | Tx | Proposer | Purpose |
 |----|----------|---------|
-| MsgStartInference | user | Authorize inference, reserve cost from escrow balance |
+| MsgStartInference | user | Authorize inference, reserve max cost. Optional executor_sig for fast path |
+| MsgConfirmStart | user | Deliver executor receipt (executor_sig). pending -> started |
 | MsgFinishInference | host | Record completion, response hash, token counts |
-| MsgValidation | host | Validation result. valid=true -> validated. valid=false -> opens challenge voting |
-| MsgValidationVote | host | Vote during challenge window (after MsgValidation valid=false) |
-| MsgTimeoutInference | user | Declare inference timed out. First per inference_id wins, duplicates ignored |
-| MsgRequestPrompt | host | Recovery: request prompt data the user withheld |
+| MsgTimeoutInference | user | Declare timeout with votes as evidence |
+| MsgValidation | host | Validation result. valid=false opens challenge voting |
+| MsgValidationVote | host | Vote during challenge |
 | MsgRevealSeed | host | Reveal validation seed during finalizing round |
 
 9 total (2 mainnet + 7 subnet). No governance, staking, or other chain overhead in the subnet.
 
-No separate `MsgInvalidateInference`. Invalidation is the result of a challenge voting round: `MsgValidation(valid=false)` opens the vote, `MsgValidationVote` collects votes, majority decides. This replaces the current mainnet pattern where `Validation` and `InvalidateInference` are separate RPCs.
+No separate `MsgInvalidateInference`. Invalidation is the result of a challenge voting round: `MsgValidation(valid=false)` opens the vote, `MsgValidationVote` collects votes, majority decides.
 
-MsgTimeoutInference is user-proposed. The user is the one waiting for the result and has direct incentive to declare timeout on non-responsive hosts. Defense against premature timeouts: hosts check their own clocks and refuse to sign if the deadline (started_at + T) hasn't passed. Dedup: content-addressed by inference_id, first one wins.
+MsgTimeoutInference is user-proposed with votes from other hosts as evidence. The user collects votes out-of-band (hosts contact the executor to verify), then includes them in MsgTimeoutInference. The state machine verifies votes deterministically. Dedup: content-addressed by inference_id, first one wins.
 
 
 ## Package Structure
@@ -111,14 +111,14 @@ SessionState:
 
 ```
 InferenceRecord:
-  status               enum {started, finished, challenged, validated, invalidated, timed_out}
+  status               enum {pending, started, finished, challenged, validated, invalidated, timed_out}
   executor_slot        uint32
   prompt_hash          []byte
   response_hash        []byte              # set on MsgFinishInference
   input_tokens         uint64              # set on MsgFinishInference
   output_tokens        uint64              # set on MsgFinishInference
   cost                 uint64              # reserved on start, finalized on finish
-  started_at           int64               # unix timestamp from MsgStartInference
+  started_at           int64               # user's timestamp from MsgStartInference, used for both timeout reasons
   deadline             int64               # started_at + T seconds
   votes_valid          uint32              # count during challenge
   votes_invalid        uint32              # count during challenge
@@ -132,7 +132,6 @@ HostStats:
   cost                 uint64              # total cost of inferences executed by this host
   required_validations uint32              # inferences ShouldValidate selected for this host
   completed_validations uint32             # MsgValidation txs actually submitted
-  session_passed        bool
 ```
 
 Signatures are not part of SessionState. They are stored alongside diffs in storage.
@@ -140,25 +139,29 @@ Signatures are not part of SessionState. They are stored alongside diffs in stor
 ### Inference Lifecycle
 
 ```
-started -> finished                                     (happy path, most common)
-started -> finished -> validated                         (validator confirmed correct, no challenge)
-started -> finished -> challenged -> validated           (challenge dismissed by majority vote)
-started -> finished -> challenged -> invalidated         (challenge confirmed by majority vote)
-started -> timed_out                                     (host never finished within deadline)
-started -> timed_out -> finished                         (timeout overridden: host finished after timeout was recorded)
+pending -> started        (MsgConfirmStart: executor receipt verified)
+pending -> timed_out      (MsgTimeoutInference reason=refused, with votes)
+started -> finished       (MsgFinishInference)
+started -> timed_out      (MsgTimeoutInference reason=execution, with votes)
+finished -> validated     (MsgValidation valid=true)
+finished -> challenged    (MsgValidation valid=false)
+challenged -> validated   (MsgValidationVote: majority valid)
+challenged -> invalidated (MsgValidationVote: majority invalid)
 ```
 
-Validation is probabilistic. Most inferences are never validated -- `started -> finished` is the normal terminal path. When validation does occur, `MsgValidation(valid=true)` moves directly to validated without voting. Only `MsgValidation(valid=false)` opens a challenge round.
+No reverse transitions. Once timed_out, MsgFinishInference and MsgConfirmStart are rejected. Once finished, MsgTimeoutInference is rejected. The sequencing order in diffs determines which lands first.
+
+Validation is probabilistic. Most inferences follow `pending -> started -> finished`.
 
 Transitions and state updates:
 
-- MsgStartInference: creates record with status=started, reserves estimated cost from balance.
-- MsgFinishInference: status=finished, records response_hash and actual token counts, finalizes cost (adjusts balance if actual differs from estimate). Updates host_stats[executor_slot].cost += finalized cost.
+- MsgStartInference: creates record with status=pending, reserves max_cost from available balance. max_cost = (prompt_tokens + max_tokens) * per_token_price -- computable at request time (user estimates prompt length, e.g. chars/4; no tokenizer required). prompt_hash is verified by executor, validators, and hosts resolving timeouts.
+- MsgConfirmStart: verifies executor receipt, status=pending->started.
+- MsgFinishInference: status=started->finished, records response_hash and actual token counts, finalizes cost (releases max_cost - actual_cost). Updates host_stats[executor_slot].cost += actual cost.
 - MsgValidation(valid=true): status=validated. No change to host_stats.
 - MsgValidation(valid=false): status=challenged, opens voting window.
-- MsgValidationVote: increments votes_valid or votes_invalid. When votes_invalid > group_size/2: status=invalidated, host_stats[executor].invalid += 1, host_stats[executor].cost -= cost, balance += cost (user refund -- shouldn't pay for bad output). When votes_valid > group_size/2 or voting window expires: status=validated.
-- MsgTimeoutInference: status=timed_out, host_stats[executor].missed += 1, host_stats[executor].cost -= cost, balance += cost (user refund). User-proposed. Whether the deadline (started_at + T, where T >= 20 minutes) has actually passed is a local acceptance decision by each participant (see Timestamp Validation). State machine applies it unconditionally; hosts that disagree refuse to sign.
-- MsgFinishInference after timeout: if status is timed_out, MsgFinishInference overrides it. status=finished, host_stats[executor].missed -= 1, host_stats[executor].cost += cost, balance -= cost. Reverses the timeout effects. Inclusion enforcement ensures the user includes MsgFinishInference if the host produced one.
+- MsgValidationVote: increments votes_valid or votes_invalid. When votes_invalid > group_size/2: status=invalidated, host_stats[executor].invalid += 1, host_stats[executor].cost -= cost, reserved amount released to escrow (user refund). When votes_valid > group_size/2 or voting window expires: status=validated.
+- MsgTimeoutInference: requires slot-weighted votes as evidence (threshold: group_size/2). State machine verifies signatures and counts. status=timed_out, host_stats[executor].missed += 1, reserved cost released back to escrow. If votes reject the timeout (executor reachable, user sent invalid data), the inference stays in its current state -- no host penalty, user wastes reserved capacity.
 
 ### State Hash
 
@@ -184,6 +187,10 @@ User signs each diff: `sign(hash(serialize(Diff)))`. Diff is protobuf (canonical
 
 Host signs the state: `sign(state_root || escrow_id || nonce)`. escrow_id prevents cross-session replay, nonce prevents cross-nonce replay, state_root binds to a specific state. Signing happens before execution.
 
+Executor signs the receipt: `sign(inference_id || prompt_hash || model || cost_estimate || started_at)`. Attests to request content and timestamp. Delivered to other hosts via MsgConfirmStart.
+
+Host signs proposed txs: each host-proposed transaction (MsgFinishInference, MsgValidation, MsgValidationVote, MsgRevealSeed) carries the proposer's signature over the serialized tx content. The signature is not part of state -- it is verified before applying the tx and then discarded. Every participant (hosts and user) verifies it using the known public key for that slot from the group assignment. This prevents the user from forging host-proposed txs when including them in diffs.
+
 ### Diff Application
 
 When a host receives a request with diffs:
@@ -195,31 +202,32 @@ When a host receives a request with diffs:
    d. Compute state_root, store diff + state_root
 2. Verify included host signatures against stored state_roots at their respective nonces
 3. Append new diff (current nonce) with the user's new txs
-4. Acceptance check: if pending host txs are satisfied, sign state_root and return signature. Otherwise return rejection with missing txs. Both include host mempool.
+4. Acceptance check: sign state_root if all blocking conditions are satisfied. Otherwise process the diff but withhold signature. Both cases include host mempool in response.
 
 If any diff fails validation (bad signature, bad nonce, malformed tx), reject the entire request.
 
-### Timestamp Validation
+### Timestamp and Request Validation
 
 Nonce is the subnet's block height -- the authoritative ordering. The state machine is deterministic: same diffs at same nonces produce the same state on every host.
 
-Wall-clock time is a local observable, not consensus truth. Different hosts have different clocks. Time is what a host uses to form a local opinion, not a protocol-level rule.
+Wall-clock time is a local observable, not consensus truth. Different hosts have different clocks.
 
 Two layers:
 
-State machine (deterministic): applies diffs and computes state. Given the same diffs at the same nonces, every host produces the same result. No local clocks involved.
+State machine (deterministic): applies diffs, computes state. Same diffs at same nonces produce the same result on every host. No local clocks.
 
-Acceptance (local): each participant independently decides whether to sign at a given nonce. This covers transaction freshness (is this tx recent?) and inference deadline expiry (has the executor's time window passed?). A host checks its own clock, forms an opinion, and either signs or refuses. This is a local judgment, not a protocol constant.
+Acceptance (local): each host decides independently whether to sign state and whether to accept the inference request. Based on local clock, request validity, and estimation checks.
 
-Refusal does not prevent diff application -- the state machine always applies diffs to keep state in sync across all hosts.
+Diff application is unconditional -- the state machine always applies diffs to keep state in sync. Signing and receipt issuance are separate decisions.
 
-A disagreement resolves in one of two ways:
-- State self-corrects: e.g., a disputed timeout is overridden by MsgFinishInference in a later diff. The host evaluates the current state, sees it's acceptable, signs normally.
-- Supermajority resolution: the state is not corrected, but 2/3+ slot-weighted signatures exist for some nonce >= the disputed one. The group accepted the state. The host treats the dispute as resolved by group consensus and signs future nonces normally. Same threshold as settlement. Analogous to blockchain finality -- once enough attestations exist, individual disagreements don't persist.
+**State signing vs receipt signing.** When the executor receives a request it considers invalid (suspicious timestamp, insufficient max_cost for the given prompt and model), it separates two actions:
 
-**Monotonicity.** All timestamps must be non-decreasing across nonces. This is a deterministic check on the diff chain -- every host verifies it independently. Diffs that violate monotonicity are rejected.
+1. Process the diff and sign the state root. MsgStartInference is protocol-valid (well-formed, sequential nonce, sufficient balance). State moves forward.
+2. Refuse the executor receipt. No receipt means the inference stays pending -- the executor won't compute.
 
-**Gossip on rejection.** A silent rejection is not enough. The proposer can skip the rejecting party and claim it was unavailable. When a participant rejects a transaction due to a suspicious timestamp, it gossips signed evidence (the transaction, its own clock reading) to the group. Each group member forms its own opinion based on its own clock. No single host's clock is authoritative. The group's collective behavior -- enough hosts refusing to sign or enough accepting -- determines the outcome.
+Resolution follows Timeout(refused): the user collects votes from other hosts. During verification, hosts forward prompt data to the executor and independently assess request validity (timestamp, max_cost sufficiency). If the request is malformed, hosts reject the timeout. If hosts determine the user deliberately submitted an invalid request (e.g., wrong cost estimation), they withhold future signatures -- the session effectively terminates for the user.
+
+**Gossip on rejection.** When the executor withholds a receipt, it gossips the rejection reason and signed evidence to the group. Each group member forms its own opinion based on its own clock and local assessment. No single host's clock is authoritative.
 
 
 ## Sequencing Model
@@ -232,15 +240,16 @@ Diff: list of txs at a nonce, signed by the user. Immutable once in the log.
 
 State: deterministic function of log[1..N]. Hosts compute state from diffs.
 
-> Q: Can we avoid maintaining a state machine on the user side? The user signs diffs, not state -- so it doesn't strictly need to compute state. But without local state the user can't independently verify which state_hash is correct (until it gets the one confirmed by supermajority). Running the state machine in the user client means every state machine update requires updating the user library.
+Q: Can we avoid maintaining a state machine on the user side?
+A: Possibly, but it would require comparing state_hashes from multiple hosts to detect a malicious one returning a fake hash. Adds complexity and latency. Keep local state machine on the user side for this iteration.
 
 Round: one pass through all hosts in the group in slot order.
 
 ### Tx Sources
 
-User-proposed: MsgStartInference, MsgTimeoutInference.
+User-proposed: MsgStartInference, MsgConfirmStart, MsgTimeoutInference.
 
-Host-proposed: MsgFinishInference, MsgValidation, MsgValidationVote, MsgRequestPrompt, MsgRevealSeed. Returned in host response mempool. User includes in future diffs.
+Host-proposed: MsgFinishInference, MsgValidation, MsgValidationVote, MsgRevealSeed. Returned in host response mempool. User includes in future diffs.
 
 The user is the sequencer for both.
 
@@ -252,28 +261,28 @@ Each host on receiving a request:
 1. Verify user signature on each new diff
 2. Apply all diffs through the state machine (deterministic, always runs)
 3. For its assigned nonce: acceptance layer decides whether to sign
-4. Gossip (nonce, state_hash) to K peers
-5. Return: host signature + mempool (accept) or missing txs + mempool (reject)
+4. Gossip (nonce, state_hash, state_signature) to K peers
+5. Return: host signature + mempool (signed) or mempool only (signature withheld)
 
-### Rejection
+### Signature Withholding
 
-A host refuses to sign for two reasons:
-- Inclusion: pending txs from its mempool are not included.
-- Acceptance: a tx violates the host's local judgment (e.g., premature timeout).
+A host withholds its signature for two reasons:
+- Inclusion: host-proposed txs in mempool not included after K rounds.
+- Acceptance: a tx violates the host's local judgment (e.g., suspicious timestamp).
 
-The user cannot retry a past nonce -- subsequent hosts already built on it. The user includes missing txs in the next diff and continues. If signatures are missing after a round, one additional round resolves them. No special retry protocol.
+The host still processes diffs and updates local state. The user continues to future nonces and includes missing txs to unblock signing. For settlement, only 2/3+ signatures on the final state are needed.
 
 ### Equivocation
 
-Hosts gossip (nonce, state_hash) after processing each request. If a host sees a different state_hash for the same nonce from another host, it requests the diff at that nonce. Two different user-signed diffs at the same nonce = equivocation proof. The detecting host gossips the evidence and stops signing. The session terminates; hosts settle at the last clean state via host-initiated settlement.
+Hosts gossip (nonce, state_hash) after processing each request. If a host sees a different state_hash for the same nonce from another host, it requests the diff at that nonce. Two different user-signed diffs at the same nonce = equivocation proof. The detecting host gossips the evidence and stops signing. Any host submits equivocation proof to mainnet. User loses full escrow.
 
 ### Session Structure
 
 ```
-session:   rounds with new inferences (pipelined)
-           round to include pending txs (if signatures missing)
-finalize:  round with MsgRevealSeed, no new inferences
-settle:    MsgSettleEscrow to mainnet
+session:     rounds with new inferences (pipelined)
+finalize 1:  round to collect MsgRevealSeed and remaining txs
+finalize 2:  round to propagate complete state, hosts sign final state
+settle:      MsgSettleEscrow to mainnet
 ```
 
 Each step uses the same primitive: diffs in round-robin order.
@@ -285,29 +294,11 @@ Every subnet subpackage exposes a minimal interface in a dedicated `interface.go
 
 ### Mainnet Boundary
 
-All mainnet interaction is behind one interface:
+`MainnetBridge` (7 methods, full definition with types in Chain Data Requirements below). Both host and user use it, but all calls are expensive by design. The subnet derives everything it can locally (slot assignment from deterministic function of app_hash/escrow_id/validator_weights, signature verification from cached public keys) and only queries the bridge for what it cannot compute (escrow existence, validator info, warm key authorization).
 
-```go
-// subnet/bridge/interface.go
-
-type MainnetBridge interface {
-    OnEscrowCreated(escrow EscrowInfo) error
-    OnSettlementProposed(escrowID string, stateRoot []byte, nonce uint64) error
-    OnSettlementFinalized(escrowID string) error
-    GetEscrow(escrowID string) (*EscrowInfo, error)
-    GetValidatorInfo(validatorAddress string) (*ValidatorInfo, error)
-    VerifyWarmKey(warmAddress, validatorAddress string) (*WarmKeyInfo, error)
-    SubmitDisputeState(escrowID string, stateRoot []byte, nonce uint64, sigs map[uint32][]byte) error
-}
-```
-
-7 methods. Full definition with types in the Chain Data Requirements section below.
-
-`OnSettlementProposed` fires when MsgSettleEscrow is submitted and the dispute window starts. Hosts compare proposed nonce against local state and may dispute. `OnSettlementFinalized` fires when the dispute window ends and settlement is final. Host cleans up local session state.
+Bridge calls are batched at session start. During the session, the only bridge call is warm key verification on cache miss (host rotates warm key mid-session). This is rare but possible. The bridge adapter can target any mainnet data source: local chain client (dapi), public REST endpoint, or dedicated RPC. REST is preferred for the bridge adapter -- the data is small and infrequent, and it avoids proto coupling between subnet and chain. The chain already exposes REST via grpc-gateway (standard Cosmos SDK). A JS/Python user SDK implements the bridge adapter with plain HTTP + JSON.
 
 In production, `decentralized-api` provides an implementation that talks to the local chain node. In tests, a struct literal with preset return values drives the full subnet through any scenario.
-
-This boundary is deliberately narrow and expensive by design (see Bridge Cost Model below). The subnet never polls mainnet, never subscribes to block events directly, never parses Cosmos SDK types. It derives what it can locally (slot assignment, nonce verification) and only asks the bridge what it cannot compute.
 
 ### Per-Package Interfaces
 
@@ -338,7 +329,7 @@ node := subnet.New(bridge, store, signer, gossip)
 // now drive the full protocol with real data
 ```
 
-No docker-compose, no chain binary, no dapi binary. Every scenario from README.md (happy path, host down, user withholds data, recovery protocol) is testable this way. Simulation speed is limited only by CPU, not by block times or network latency.
+No docker-compose, no chain binary, no dapi binary. Every scenario from README.md (happy path, host down, user withholds data, timeout verification) is testable this way. Simulation speed is limited only by CPU, not by block times or network latency.
 
 ### Multi-Node Integration Tests
 
@@ -349,24 +340,13 @@ Each node is a standalone binary (or a Go test spawning goroutines with real lis
 This is the level where stress testing happens. Scenarios:
 
 - 1000 concurrent sessions across 30 nodes, measure throughput and latency
-- Kill nodes mid-session, verify recovery protocol works end-to-end
+- Kill nodes mid-session, verify timeout verification works end-to-end
 - Inject malicious user behavior (withhold diffs, skip hosts, submit stale state)
 - Race conditions: concurrent writes, signature arrival ordering, nonce conflicts
 
 The fake bridge is trivial -- a shared in-memory map protected by a mutex. It returns preset escrow data and records settlement calls. No chain, no blocks, no Cosmos SDK, but the rest of the system is production code running under production conditions.
 
 This is the key payoff of the narrow mainnet boundary: the entire subnet is real, only the 7-method bridge is fake. Stress tests hit real concurrency, real network, real disk I/O.
-
-
-## Bridge Cost Model
-
-Current dapi assumes RPC communication with the chain node is cheap. It queries freely: participant lists, authz grants, escrow state, epoch info. This works because dapi runs alongside its own node on the same machine.
-
-The subnet library has the opposite assumption: bridge calls are expensive. The design minimizes them. Most calls happen once at session start. Subsequent calls happen only when something unexpected occurs (unknown warm key, failed verification, missing data).
-
-This matters for deployment. Initially the subnet runs inside dapi and the bridge is a local function call to the existing chain client. Later, the subnet can be deployed as a standalone thin binary where the bridge is an RPC connector to a separate mainnet node. The narrow bridge makes both deployments possible without code changes.
-
-Consequence: the subnet derives everything it can locally. Slot assignment is a deterministic function of (app_hash, escrow_id, validator_weights) -- the subnet computes it, never asks the bridge for it. Validator account addresses and public keys are loaded once at session start via `GetValidatorInfo` and cached. Warm key grants are cached on first contact and verified via bridge only on cache miss. The bridge provides only what cannot be derived: escrow existence, validator info, warm key authorization.
 
 
 ## Chain Data Requirements
@@ -475,6 +455,14 @@ type ValidatorInfo struct {
     Weight    uint64
 }
 
+type EscrowInfo struct {
+    EscrowID       string
+    Amount         uint64
+    CreatorAddress string
+    CreationHeight int64
+    AppHash        []byte
+}
+
 type WarmKeyInfo struct {
     ValidatorAddress string
 }
@@ -493,7 +481,7 @@ Per-escrow state is a chain of diffs. Each diff is one nonce increment.
 escrow_state:
   escrow_id       string (PK)
   group           []slot_assignment   # from mainnet at creation
-  balance         uint64              # remaining escrow, decremented on each StartInference
+  balance         uint64              # available escrow: escrow_amount - sum(active reservations)
   latest_nonce    uint64
   settled         bool
 
@@ -507,6 +495,8 @@ diff:
 ```
 
 Append-only. Signatures for a diff may arrive later (lag by 1+ rounds), so the signatures field gets updated in place.
+
+Both diffs and latest state are persisted. The state machine owns the in-memory state; storage is persistence. Diffs can be lost (recoverable from other hosts via public endpoint) but latest state cannot -- it is the checkpoint for restart and settlement.
 
 ### Storage Interface
 
@@ -552,9 +542,7 @@ Detection probability for a skipped host_i (N=30, K=3). Each request causes one 
 
 As long as majority of hosts are honest and gossiping, propagation is reliable. A few malicious hosts refusing to gossip only slightly reduces the rate.
 
-**Re-propagation.** If a host receives a gossiped nonce but never receives the actual user request within 120 seconds, it re-propagates to K random peers. This serves two purposes:
-- Amplifies coverage if the first wave missed some hosts
-- Signals to the group that a gap was detected, preparing for recovery (MsgRequestPrompt)
+**Re-propagation.** If a host receives a gossiped nonce but never receives the actual user request within 120 seconds, it re-propagates to K=3 random peers (same as initial gossip, random selection, no tracking of who already received it). This amplifies coverage and signals to the group that a gap was detected.
 
 Total cost per inference request: K=3 outbound HTTP calls with ~100 byte body. No persistent connections, no new ports. Group members are known from mainnet slot assignment, each already has a public URL.
 
@@ -583,7 +571,7 @@ K=3 random peers over REST is the simplest correct approach. Gossip can be optim
 
 ### What Mainnet Needs to Verify
 
-Mainnet receives MsgSettleEscrow and must verify that the claimed usage and host_stats are correct. The mandatory finalizing round (see README.md Settlement) ensures all inferences are resolved and host_stats are final before settlement.
+Mainnet receives MsgSettleEscrow and must verify that the claimed usage and host_stats are correct. The mandatory finalizing rounds (see README.md Settlement) ensures all inferences are resolved and host_stats are final before settlement.
 
 ```
 MsgSettleEscrow:
@@ -605,9 +593,16 @@ The Merkle proof is constant size: one sibling hash (rest_hash). Mainnet never s
 
 No balance field in the payload. Mainnet knows the escrow amount and computes the refund from the sum of host_stats[*].cost.
 
-### Finalizing Round
+### Finalizing Rounds
 
-Before settling, the user sends one round of empty requests (same endpoint, same format, no new MsgStartInference) in round-robin to the full group. Each host attaches pending MsgFinishInference, MsgRevealSeed, and any remaining MsgValidation. After the full round, all inferences are resolved, all seeds are revealed, validation compliance is checked, and host_stats are final. Not a special request type -- same diff format, just no new inferences.
+Before settling, the user completes two rounds in round-robin order without MsgStartInference:
+
+- Round 1: collect MsgRevealSeed, pending MsgFinishInference, and any remaining MsgValidation from each host. After this round, all seeds and txs are in state, but hosts visited early haven't seen seeds from hosts visited later.
+- Round 2: propagate the complete state to everyone. Each host applies all seeds -- the state machine computes required_validations and completed_validations per host deterministically from the revealed seeds and existing MsgValidation txs. Hosts sign the final state.
+
+Both rounds use the same diff format -- no special request type, just no new inferences.
+
+> Round 1 could be replaced by a dedicated off-chain seed collection endpoint where each host signs and returns its seed directly. Simpler but requires a new endpoint outside the diff protocol. Optimization for later.
 
 ### Dispute Window
 

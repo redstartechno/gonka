@@ -192,11 +192,14 @@ Two reasons, each with different preconditions and verification:
 **reason=refused** (pending -> timed_out): executor never signed the receipt.
 
 1. User contacts other hosts via timeout verification endpoint, provides prompt data
-2. Each host contacts executor and forwards prompt data
+2. Each host contacts executor, forwards prompt data, and independently assesses request validity (max_cost sufficiency, timestamp)
 3. If executor responds and signs receipt -> vote: reject timeout (executor got the data, should compute)
-4. If executor unreachable -> vote: accept timeout
-5. User collects enough accept votes, includes MsgTimeoutInference(votes) in diff
-6. State machine verifies votes, applies timeout. host_stats[executor].missed += 1, reserved max_cost released back to escrow
+4. If request is invalid (e.g., max_cost too low for prompt + model) -> vote: reject timeout (executor was right to refuse)
+5. If executor unreachable and request is valid -> vote: accept timeout
+6. User collects enough accept votes, includes MsgTimeoutInference(votes) in diff
+7. State machine verifies votes, applies timeout. host_stats[executor].missed += 1, reserved max_cost released back to escrow
+
+If hosts repeatedly reject timeouts due to invalid requests from the user, they withhold future state signatures. The session effectively terminates -- the user cannot reach 2/3+ signatures for settlement.
 
 During verification, the prompt data is forwarded to the executor via other hosts. This serves as the recovery mechanism: even if the user's initial request didn't reach the executor, the verification phase propagates the data. If the executor receives it and responds with a receipt, the user should use MsgConfirmStart instead of timeout.
 
@@ -382,6 +385,29 @@ Attack fails: the verification phase propagated the data to h1.
 
 
 Sending a request without recording MsgStartInference is not possible -- the executor rejects requests without a corresponding MsgStartInference (no payment authorization = no reason to compute).
+
+#### User submits insufficient max_cost
+
+User creates MsgStartInference with max_cost too low for the actual prompt (wrong token estimation).
+
+```
+User -> h1: POST /chat/completions (nonce 1)
+  diff: [MsgStartInference(1, max_cost=10)]
+  h1: receives prompt, determines max_cost is insufficient for this prompt + model
+  h1: signs state (MsgStartInference is protocol-valid), refuses executor receipt
+  inference 1: pending (no receipt, executor won't compute)
+
+User wants to timeout h1 unfairly.
+User initiates timeout verification:
+  POST /subnet/v1/sessions/{id}/verify-timeout to h2..h5
+  User provides prompt data
+  Hosts forward data to h1, independently assess max_cost sufficiency
+  Hosts determine max_cost is too low for the prompt -> votes reject timeout
+
+User cannot timeout the executor. Escrow remains locked for this inference.
+If hosts determine the user deliberately submitted invalid estimations,
+they withhold future signatures -- session effectively terminates.
+```
 
 #### Equivocation
 
