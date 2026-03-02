@@ -546,25 +546,141 @@ As long as majority of hosts are honest and gossiping, propagation is reliable. 
 
 Total cost per inference request: K=3 outbound HTTP calls with ~100 byte body. No persistent connections, no new ports. Group members are known from mainnet slot assignment, each already has a public URL.
 
-### API Surface
+### Endpoints
 
-New routes on the existing dapi public server:
-
-```
-POST /subnet/v1/sessions/{escrow_id}/gossip/nonce
-  Body: { nonce: uint64, sender_slot: uint32 }
-  Purpose: "nonce N has been processed"
-
-POST /subnet/v1/sessions/{escrow_id}/gossip/txs
-  Body: { txs: []SubnetTx, sender_slot: uint32 }
-  Purpose: "user hasn't included these after K rounds, please track them"
-```
+See [API Surface](#api-surface) for all subnet endpoints including gossip routes.
 
 No new ports. No peer discovery (group is deterministic from mainnet). Connection pooling with short idle timeout handles the 3 calls per request without accumulation.
 
 ### Future Optimization
 
 K=3 random peers over REST is the simplest correct approach. Gossip can be optimized independently of the rest of the system since the interface is just "notify peers about nonce N." Possible future directions: libp2p gossipsub, QUIC transport, adaptive K based on group size, or persistent WebSocket connections within a session. None of these affect the subnet state machine or storage layer.
+
+
+## API Surface
+
+All routes mounted on the existing dapi public server under `/subnet/v1/`. No new ports. Group members are known from mainnet slot assignment, each has a public URL.
+
+### Request Authentication
+
+All POST endpoints include sender authentication in HTTP headers:
+
+```
+X-Subnet-Signature: <hex>
+X-Subnet-Timestamp: <unix>
+```
+
+Signature covers `sha256(escrow_id || request_body || timestamp_bytes)`. Receiver recovers the sender's address via ecrecover, verifies it belongs to a group member (host-to-host endpoints) or the escrow creator (user-to-host endpoints), and checks the timestamp is within bounds (+-30s). Requests failing authentication are rejected before any body processing.
+
+For `/chat/completions`, diff signatures already authenticate the user. The header signature provides fast rejection before parsing potentially large request bodies.
+
+### Inference Request
+
+```
+POST /subnet/v1/sessions/{escrow_id}/chat/completions
+```
+
+Main endpoint. User sends OpenAI-compatible request body with subnet extensions:
+
+```json
+{
+  "model": "...",
+  "stream": true,
+  "messages": [...],
+  "diffs": [
+    {"nonce": 1, "txs": [...], "sigs": {...}}
+  ],
+  "state_hash": "<SHA256>"
+}
+```
+
+Host applies diffs, validates nonce ordering and round-robin assignment, executes inference via InferenceEngine. Response is a streaming SSE stream identical to OpenAI format. After the stream completes, host returns state signature and mempool in a final SSE event:
+
+```json
+{"type": "subnet_meta", "signature": "<hex>", "mempool": [...]}
+```
+
+During finalizing rounds: same endpoint, same format, but no `messages` field and no MsgStartInference in diffs. Host processes diffs (MsgRevealSeed, remaining txs), returns signature + mempool.
+
+### Timeout Verification
+
+```
+POST /subnet/v1/sessions/{escrow_id}/verify-timeout
+```
+
+User requests timeout verification from non-executor hosts. Authenticated via `X-Subnet-Signature` (see Request Authentication). Host verifies the sender is the escrow creator before contacting executor.
+
+Host contacts executor, assesses validity, returns signed vote.
+
+```json
+{
+  "inference_id": 123,
+  "reason": "refused",
+  "prompt_data": "<base64>"
+}
+```
+
+```json
+{
+  "vote": "accept",
+  "inference_id": 123,
+  "reason": "refused",
+  "timestamp": 1234567890,
+  "signature": "<hex>"
+}
+```
+
+Vote signature covers: `(escrow_id, inference_id, reason, vote, host_timestamp)`. See README.md Timeout Verification for the full flow per reason type.
+
+During verification, the verifying host contacts the executor to forward prompt data (reason=refused) or check for MsgFinishInference (reason=execution). This uses existing subnet endpoints -- the host sends diffs to the executor via `/chat/completions` or fetches state via `/diffs`.
+
+### Gossip
+
+```
+POST /subnet/v1/sessions/{escrow_id}/gossip/nonce
+```
+
+Nonce propagation. Sent to K=3 random group members after processing a user request.
+
+```json
+{
+  "nonce": 42,
+  "state_hash": "<hex>",
+  "state_signature": "<hex>",
+  "sender_slot": 3
+}
+```
+
+`state_hash` and `state_signature` enable equivocation detection. If a host sees different state hashes for the same nonce, it requests diffs from both sources.
+
+```
+POST /subnet/v1/sessions/{escrow_id}/gossip/txs
+```
+
+Lazy tx propagation. Sent only when host-proposed txs are not included by the user after K rounds.
+
+```json
+{
+  "txs": [...],
+  "sender_slot": 3
+}
+```
+
+Each tx in `txs` carries `proposer_sig` -- the proposer's signature over the serialized tx content (see design.md What Gets Signed). Receiving hosts verify the signature before adding to their mempool.
+
+### State Recovery
+
+```
+GET /subnet/v1/sessions/{escrow_id}/diffs?from_nonce=N&to_nonce=M
+```
+
+Fetch diffs for state recovery. Used by hosts that detected a gap via nonce gossip, by hosts preparing for host-initiated settlement, and by users reconnecting after disconnect.
+
+```
+GET /subnet/v1/sessions/{escrow_id}/mempool
+```
+
+Fetch host's unsettled proposed transactions for this session. Fallback when lazy gossip fails. Returns all transactions in the host's mempool: both the host's own proposed txs and txs received from other hosts via gossip. Each tx carries `proposer_sig` from its original proposer.
 
 
 ## Settlement
