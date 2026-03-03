@@ -104,6 +104,8 @@ Current state after applying all diffs up to latest_nonce. History lives in diff
 ```
 EscrowState:
   escrow_id            string
+  config               SessionConfig
+  group                []SlotAssignment                # from mainnet at creation, immutable
   balance              uint64                          # remaining escrow
   finalizing           bool                            # set by MsgFinalizeRound, irreversible
   inferences           map[uint64]InferenceRecord      # keyed by inference_id
@@ -140,6 +142,14 @@ HostStats:
   cost                 uint64              # total cost of inferences executed by this host
   required_validations uint32              # inferences ShouldValidate selected for this host
   completed_validations uint32             # MsgValidation txs actually submitted
+```
+
+```
+SessionConfig:
+  refusal_timeout      int64               # seconds before reason=refused timeout
+  execution_timeout    int64               # seconds before reason=execution timeout
+  token_price          uint64              # price per unit (flat per session; per-model pricing TBD)
+  vote_threshold       uint32              # minimum slot-weighted accept votes for timeout (total_slots / 2)
 ```
 
 Signatures are not part of EscrowState. They are stored alongside diffs in storage.

@@ -94,26 +94,9 @@ MsgCreateEscrow(
 3. interact in sub-chain during session
 4. settle on-chain via `MsgSettleEscrow`
 
-```
-MsgSettleEscrow(
-  escrow_id,                          # session identifier
-  state_root,                         # Merkle root: hash(host_stats_hash || rest_hash)
-  nonce,                              # latest nonce
-  signatures,                         # map[slot_id -> sig] over (state_root, escrow_id, nonce)
-  rest_hash,                          # Merkle sibling: hash(balance || inferences_hash)
-  host_stats,                         # map[slot_id -> HostStats]
-)
+`MsgSettleEscrow` carries the final Merkle state root, host-level usage stats, and 2/3+ slot-weighted signatures. Field definitions and verification steps are in [design.md Settlement](./design.md#settlement).
 
-HostStats(
-  missed,                             # timeout count (refused + execution)
-  invalid,                            # inferences invalidated by challenge voting
-  cost,                               # total cost of inferences executed
-  required_validations,               # inferences ShouldValidate selected for this host
-  completed_validations,              # MsgValidation txs actually submitted
-)
-```
-
-Mainnet recomputes host_stats_hash from the submitted host_stats, verifies hash(host_stats_hash || rest_hash) == state_root, then checks 2/3+ slot-weighted signatures over (state_root, escrow_id, nonce). Settlement does not require individual inference records. The mandatory finalizing round ensures all seeds are revealed and validation compliance is computed before settlement. Once verified, each host is paid from escrow according to host_stats[slot].cost, remaining balance (escrow_amount - sum of all host costs) is refunded to user, host_stats are recorded.
+Settlement does not require individual inference records. The mandatory finalizing round ensures all seeds are revealed and validation compliance is computed before settlement. Once verified, each host is paid from escrow proportionally to compute delivered; the remaining balance is refunded to the user.
 
 
 ## Subnet Protocol
@@ -135,18 +118,7 @@ The chain needs these properties but does not want to process this data on mainn
 
 ### Transaction Types
 
-Subnet transactions (8 txs, all off-chain):
-
-| Tx | Proposer | Purpose |
-|----|----------|---------|
-| MsgStartInference | user | Authorize inference, reserve max cost. Optional executor_sig for fast path |
-| MsgConfirmStart | user | Deliver executor receipt (executor_sig). pending -> started |
-| MsgFinishInference | host | Record completion, response hash, token counts |
-| MsgTimeoutInference | user | Declare timeout with votes as evidence |
-| MsgValidation | host | Validation result. valid=false opens challenge voting |
-| MsgValidationVote | host | Vote during challenge |
-| MsgRevealSeed | host | Reveal validation seed during finalizing round |
-| MsgFinalizeRound | user | Enter finalization. Irreversible, blocks further MsgStartInference |
+The subnet uses 8 off-chain transaction types (see [design.md Transaction List](./design.md#transaction-list)).
 
 Only transactions change state. Host state signatures (over state_root at each nonce) remain outside state -- they are metadata accumulated alongside diffs, not processed by the state machine.
 
@@ -154,18 +126,7 @@ Only transactions change state. Host state signatures (over state_root at each n
 
 ### Inference Lifecycle
 
-```
-pending -> started        (MsgConfirmStart: executor receipt verified)
-pending -> timed_out      (MsgTimeoutInference reason=refused, with votes)
-started -> finished       (MsgFinishInference)
-started -> timed_out      (MsgTimeoutInference reason=execution, with votes)
-finished -> validated     (MsgValidation valid=true)
-finished -> challenged    (MsgValidation valid=false)
-challenged -> validated   (MsgValidationVote: majority valid)
-challenged -> invalidated (MsgValidationVote: majority invalid)
-```
-
-No reverse transitions. Once timed_out, MsgFinishInference and MsgConfirmStart are rejected. Once finished, MsgTimeoutInference is rejected. The sequencing order in diffs determines which lands first.
+Inference lifecycle transitions are defined in [design.md Inference Lifecycle](./design.md#inference-lifecycle). No reverse transitions.
 
 ### User-Driven Resolution
 
@@ -178,7 +139,7 @@ Settlement does not require all inferences to be in terminal state. Unresolved i
 
 ### Receipts and Signing
 
-When the user sends a request, the executor signs the MsgStartInference content explicitly: `sign(inference_id || prompt_hash || model || input_length || max_tokens || started_at)`. This is the executor's receipt -- it attests to the request content and timestamp. Other hosts verify the signature against the executor's known public key when processing MsgConfirmStart.
+The executor signs a receipt attesting to request content and timestamp. Other hosts verify the receipt when processing MsgConfirmStart. Signing formats for receipts and timeout votes are defined in [design.md What Gets Signed](./design.md#what-gets-signed).
 
 MsgStartInference has an optional `executor_sig` field. If the user already has the receipt, it can include it directly -- the inference skips pending and enters started immediately. Otherwise, the inference enters pending and the receipt is delivered later via MsgConfirmStart.
 
@@ -215,7 +176,7 @@ During verification, the prompt data is forwarded to the executor via other host
 5. User collects enough accept votes, includes MsgTimeoutInference(votes) in diff
 6. State machine verifies votes, applies timeout. host_stats[executor].missed += 1, reserved cost released back to escrow
 
-Timeout votes are signed statements: `sign(escrow_id || inference_id || reason || accept)`. State machine verifies signatures and counts. Threshold: total_slots/2 (slot-weighted).
+Timeout votes are signed statements (format in [design.md What Gets Signed](./design.md#what-gets-signed)). State machine verifies signatures and counts. Threshold: total_slots/2 (slot-weighted).
 
 ----
 
@@ -229,7 +190,7 @@ Timeout votes are signed statements: `sign(escrow_id || inference_id || reason |
 
 The only non-inference round is the finalizing round before settlement (see Settlement). During finalization, the user visits every host in order without MsgStartInference to reveal seeds and flush remaining txs.
 
-**Escrow accounting.** Each MsgStartInference reserves max_cost from the user's available escrow balance: `available_balance = escrow_amount - sum(active reservations)`. MsgStartInference is rejected if `available_balance < max_cost`. Formula: `max_cost = (input_length + max_tokens) * per_token_price`, where input_length is the prompt length in characters (overestimates for Latin scripts, may underestimate for CJK; acceptable for now). MsgFinishInference finalizes cost based on actual token counts: `actual_cost = (input_tokens + output_tokens) * per_token_price`, releases max_cost - actual_cost back to escrow. MsgTimeoutInference releases the full reserved amount. Users cannot overspend -- each inference is individually checked against available balance at creation time.
+**Escrow accounting.** Each MsgStartInference reserves cost from escrow; MsgFinishInference releases the difference between reserved and actual cost. MsgTimeoutInference releases the full reserved amount. Users cannot overspend -- each inference is individually checked against available balance at creation time. Formula in [design.md State Machine](./design.md#state-machine).
 
 **Finalized state.** A host considers state at nonce N finalized when it has collected 2/3+ slot-weighted signatures for that nonce. This is an operational concept tracked locally per host, not part of the state machine. Hosts use the latest finalized nonce as the safe settlement point (e.g., after equivocation or if the user disappears). Signatures arrive via nonce gossip and user-propagated diffs.
 
@@ -457,11 +418,11 @@ Before submitting settlement to mainnet, the user must complete two finalizing r
 
 > Round 1 could potentially be replaced with a dedicated requestSeed endpoint (requires developer signature, blocks new MsgStartInference). This would avoid a full diff round for seed collection. Optimization for later.
 
-User then submits `MsgSettleEscrow` (see Main Network Protocol above) to mainnet. Mainnet verifies 2/3+ slot-weighted signatures over `(state_root || escrow_id || nonce)` and settles the escrow: each host is paid from escrow according to host_stats[slot].cost, remaining balance (escrow_amount - sum of all host costs) is refunded to user.
+User then submits `MsgSettleEscrow` to mainnet. Verification steps and escrow distribution are defined in [design.md Settlement](./design.md#settlement).
 
 > Note: the list of individual signatures can be replaced with an aggregated BLS signature in the future to reduce tx size.
 
-Settlement enters a dispute window of X blocks (TBD). During the window, any host can submit a competing state with a higher nonce and 2/3+ signatures. If such a state exists, the user submitted stale state: all remaining escrow goes to hosts as penalty. If no competing state appears within X blocks, settlement finalizes.
+Settlement includes a dispute window allowing hosts to submit competing state with higher nonces. Details in [design.md Dispute Window](./design.md#dispute-window).
 
 **User disappears.** Any group member can submit MsgSettleEscrow after a timeout. All hosts have full state within one round (propagated via diffs). If a host is missing recent state, it can request it from other hosts via the public API endpoint. Same 2/3+ signature requirement, same dispute window. TODO: define timeout trigger (wall-clock from last nonce vs escrow expiry height at creation).
 

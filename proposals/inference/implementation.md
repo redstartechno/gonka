@@ -40,36 +40,7 @@ Deliverables:
 
 Create `subnet/` at repo root with its own `go.mod`. Dependencies: `go-ethereum/crypto` (secp256k1), `google.golang.org/protobuf` (proto). No cosmos-sdk.
 
-```
-subnet/
-  go.mod
-  engine.go                 # InferenceEngine, ValidationEngine interfaces (stubs for phase 1)
-  types.go                  # ExecuteRequest, ExecuteResult, ValidateRequest, ValidateResult (stubs)
-  proto/
-    subnet/v1/
-      tx.proto              # 7 subnet tx message definitions + TimeoutVote
-      state.proto           # EscrowState, InferenceRecord, HostStats for deterministic serialization
-  types/
-    generated.go            # generated proto types
-    domain.go               # Diff, SlotAssignment, non-proto domain types
-  state/
-    interface.go            # StateMachine interface
-    machine.go              # implementation: ApplyDiff, ComputeStateRoot
-    hash.go                 # two-level Merkle hash computation
-    machine_test.go         # tests
-  signing/
-    interface.go            # Signer, Verifier interfaces
-    secp256k1.go            # go-ethereum/crypto implementation
-    secp256k1_test.go       # tests
-  storage/
-    interface.go            # Storage interface (5 methods from design.md)
-    memory.go               # in-memory implementation
-    memory_test.go          # tests
-  bridge/
-    interface.go            # MainnetBridge interface (7 methods, no implementation in phase 1)
-  gossip/
-    interface.go            # GossipClient interface (empty, no implementation in phase 1)
-```
+Package layout: see [design.md Package Structure](./design.md#package-structure). Phase 1 additions: `engine.go` and `types.go` are stubs. `bridge/interface.go` and `gossip/interface.go` define interfaces with no implementation. `storage/` uses in-memory implementation only.
 
 ### 1.2 Proto Definitions
 
@@ -193,6 +164,8 @@ Generate Go code from protos using `protoc` (not ignite -- subnet is standalone)
 
 ### 1.3 Domain Types
 
+Field semantics: see [design.md State Machine](./design.md#state-machine) and [Session State](./design.md#session-state).
+
 `types/domain.go`:
 
 ```go
@@ -208,21 +181,18 @@ const (
   StatusTimedOut
 )
 
-// Field count can be smaller: raw token counts are recoverable from stored diffs.
-// reserved_cost and actual_cost are the only fields the state machine uses for accounting.
-// Keeping all fields for now for debuggability.
 type InferenceRecord struct {
   Status        InferenceStatus
   ExecutorSlot  uint32
   Model         string
   PromptHash    []byte
   ResponseHash  []byte
-  InputLength   uint64          // prompt length in chars (from MsgStartInference)
-  MaxTokens     uint64          // max output tokens (from MsgStartInference)
-  InputTokens   uint64          // actual input tokens (set on MsgFinishInference)
-  OutputTokens  uint64          // actual output tokens (set on MsgFinishInference)
-  ReservedCost  uint64          // computed at start: f(input_length, max_tokens, config)
-  ActualCost    uint64          // computed at finish: f(input_tokens, output_tokens, config)
+  InputLength   uint64
+  MaxTokens     uint64
+  InputTokens   uint64
+  OutputTokens  uint64
+  ReservedCost  uint64
+  ActualCost    uint64
   StartedAt     int64
   VotesValid    uint32
   VotesInvalid  uint32
@@ -325,31 +295,11 @@ Diff application:
 5. Compute state_root (two-level Merkle)
 6. Return state_root
 
-State transitions:
-- MsgStartInference: validates inference_id == diff.nonce. Derives executor_slot from `group[inference_id % len(group)].SlotID`. Creates record status=pending (or started if executor_sig present and verified). Computes `reserved_cost = (input_length + max_tokens) * config.TokenPrice` (caveat: input_length in chars overestimates for Latin scripts but may underestimate for CJK; acceptable for now). Reserves from balance. Rejects if balance < reserved_cost.
-- MsgConfirmStart: verifies executor receipt signature against executor's public key (from group). pending->started.
-- MsgFinishInference: verifies executor_slot matches the inference's assigned executor. started->finished. Computes `actual_cost = (input_tokens + output_tokens) * config.TokenPrice`. Rejects if actual_cost > reserved_cost. Releases reserved_cost - actual_cost to balance. Updates host_stats[executor].cost += actual_cost.
-- MsgValidation: verifies validator_slot != executor_slot. finished->validated (valid=true) or finished->challenged (valid=false). Q: how to verify no unauthorized validation? Deferred to Phase 4 (ShouldValidate). For Phase 1, any non-executor slot can validate.
-- MsgValidationVote: increments vote counts (slot-weighted: one slot = one vote). Resolves when votes exceed total_slots/2. On invalidation: host_stats[executor].invalid += 1, host_stats[executor].cost -= actual_cost, actual_cost returned to balance. No time-based expiry.
-- MsgTimeoutInference: verifies vote signatures and slot-weighted threshold (total_slots/2). reason=refused requires status=pending. reason=execution requires status=started. host_stats[executor].missed += 1, reserved_cost released to balance.
-- MsgFinalizeRound: sets state.Finalizing = true. Rejected if already finalizing. After this, MsgStartInference is rejected in all subsequent diffs.
+Transitions follow [design.md Inference Lifecycle](./design.md#inference-lifecycle) and [State Machine](./design.md#state-machine). Phase 1 deviation: any non-executor slot can validate (ShouldValidate deferred to Phase 4).
 
 ### 1.5 State Hashing
 
-Two-level Merkle from design.md:
-
-```
-         state_root
-        /          \
-host_stats_hash    rest_hash
-```
-
-- host_stats_hash = sha256(proto_serialize(HostStatsMapProto{sorted by slot_id}))
-- inferences_hash = sha256(proto_serialize(InferencesMapProto{sorted by inference_id}))
-- rest_hash = sha256(balance_bytes || inferences_hash)
-- state_root = sha256(host_stats_hash || rest_hash)
-
-Proto serialization ensures determinism (sorted keys, fixed field order).
+Hash computation follows [design.md State Hash](./design.md#state-hash). Proto serialization ensures determinism.
 
 ### 1.6 Signing
 
@@ -370,21 +320,11 @@ type Verifier interface {
 }
 ```
 
-State sign message format from design.md: `sha256(state_root || escrow_id_bytes || nonce_bytes)`.
+Message formats: see [design.md What Gets Signed](./design.md#what-gets-signed).
 
 ### 1.7 Storage
 
-Reuse interface from design.md:
-
-```go
-type Storage interface {
-  CreateSession(escrowID string, config SessionConfig, group []SlotAssignment, balance uint64) error
-  AppendDiff(escrowID string, rec DiffRecord) error
-  AddSignature(escrowID string, nonce uint64, slotID uint32, sig []byte) error
-  GetState(escrowID string) (*EscrowState, error)
-  GetDiffs(escrowID string, fromNonce, toNonce uint64) ([]DiffRecord, error)
-}
-```
+Storage interface: see [design.md Storage Interface](./design.md#storage-interface).
 
 All writes are persistent immediately. `GetState` returns persisted state, not an in-memory cache. On restart, the state machine replays from stored diffs if needed.
 
