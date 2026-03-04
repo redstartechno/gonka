@@ -206,7 +206,7 @@ func TestUser_Finalize(t *testing.T) {
 	err := session.Finalize(ctx)
 	require.NoError(t, err)
 
-	st := session.StateMachine().GetState()
+	st := session.StateMachine().SnapshotState()
 	require.True(t, st.Finalizing)
 	for id, rec := range st.Inferences {
 		require.Equal(t, types.StatusFinished, rec.Status, "inference %d should be finished", id)

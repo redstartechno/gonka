@@ -3,7 +3,6 @@ package protocol
 import (
 	"context"
 	"crypto/sha256"
-	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -90,7 +89,7 @@ func TestProtocol_HappyPath_15Inferences(t *testing.T) {
 	}
 
 	// Verify all 15 inferences.
-	st := env.session.StateMachine().GetState()
+	st := env.session.StateMachine().SnapshotState()
 
 	// Count finished inferences. Due to pipelining, the first few might still
 	// be pending/started since MsgFinishInference gets included in later diffs.
@@ -302,17 +301,12 @@ func TestProtocol_ExecutorAssignment(t *testing.T) {
 		result, err := env.session.SendInference(ctx, params)
 		require.NoError(t, err)
 
-		inferenceID := result.InferenceID
-		expectedHostIdx := int(inferenceID % 5)
-
-		// Only the executor should return a receipt.
-		if expectedHostIdx == int(inferenceID%5) {
-			require.NotNil(t, result.Receipt, "executor host should return receipt for inference %d", inferenceID)
-		}
+		// The executor should return a receipt.
+		require.NotNil(t, result.Receipt, "executor host should return receipt for inference %d", result.InferenceID)
 	}
 
 	// Verify executor assignment in state.
-	st := env.session.StateMachine().GetState()
+	st := env.session.StateMachine().SnapshotState()
 	for id, rec := range st.Inferences {
 		expectedSlot := uint32(id % 5)
 		require.Equal(t, expectedSlot, rec.ExecutorSlot, "inference %d should have executor slot %d", id, expectedSlot)
@@ -491,7 +485,7 @@ func TestProtocol_Timeout_UserSide(t *testing.T) {
 	_, err = sm.ApplyDiff(diff2)
 	require.NoError(t, err)
 
-	st := sm.GetState()
+	st := sm.SnapshotState()
 	require.Equal(t, types.StatusTimedOut, st.Inferences[1].Status)
 	require.Equal(t, uint32(1), st.HostStats[1].Missed)
 	require.Equal(t, uint64(100000), st.Balance, "balance should be fully restored")
@@ -511,7 +505,7 @@ func TestProtocol_Finalize_AllInferencesFinished(t *testing.T) {
 	require.NoError(t, err)
 
 	// ALL 15 must be finished (not just >= 13 as in the non-finalized case).
-	st := env.session.StateMachine().GetState()
+	st := env.session.StateMachine().SnapshotState()
 	require.True(t, st.Finalizing)
 	for id, rec := range st.Inferences {
 		require.Equal(t, types.StatusFinished, rec.Status, "inference %d should be finished", id)
@@ -567,7 +561,7 @@ func TestProtocol_VaryingInferenceCosts(t *testing.T) {
 	err := env.session.Finalize(ctx)
 	require.NoError(t, err)
 
-	st := env.session.StateMachine().GetState()
+	st := env.session.StateMachine().SnapshotState()
 
 	// Compute expected cumulative cost (token_price=1).
 	expectedTotal := uint64(0)
@@ -662,5 +656,4 @@ func TestProtocol_SignatureThreshold(t *testing.T) {
 	}
 
 	// TODO: Phase 3 adds BroadcastDiff for 2/3+ collection at single nonce.
-	_ = fmt.Sprintf("collected sigs for %d nonces", len(sigs))
 }

@@ -145,18 +145,19 @@ func (m *Memory) GetDiffs(escrowID string, fromNonce, toNonce uint64) ([]types.D
 
 	var result []types.DiffRecord
 	for _, d := range s.diffs {
-		if d.Nonce >= fromNonce && d.Nonce <= toNonce {
-			// Deep copy signatures.
-			sigsCopy := make(map[uint32][]byte, len(d.Signatures))
-			for k, v := range d.Signatures {
-				vc := make([]byte, len(v))
-				copy(vc, v)
-				sigsCopy[k] = vc
-			}
-			dc := d
-			dc.Signatures = sigsCopy
-			result = append(result, dc)
+		if d.Nonce < fromNonce || d.Nonce > toNonce {
+			continue
 		}
+		// Deep copy signatures.
+		sigsCopy := make(map[uint32][]byte, len(d.Signatures))
+		for k, v := range d.Signatures {
+			vc := make([]byte, len(v))
+			copy(vc, v)
+			sigsCopy[k] = vc
+		}
+		dc := d
+		dc.Signatures = sigsCopy
+		result = append(result, dc)
 	}
 
 	return result, nil

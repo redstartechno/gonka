@@ -78,7 +78,6 @@ type MsgStartInference struct {
 	InputLength   uint64                 `protobuf:"varint,4,opt,name=input_length,json=inputLength,proto3" json:"input_length,omitempty"`
 	MaxTokens     uint64                 `protobuf:"varint,5,opt,name=max_tokens,json=maxTokens,proto3" json:"max_tokens,omitempty"`
 	StartedAt     int64                  `protobuf:"varint,6,opt,name=started_at,json=startedAt,proto3" json:"started_at,omitempty"`
-	ExecutorSig   []byte                 `protobuf:"bytes,7,opt,name=executor_sig,json=executorSig,proto3" json:"executor_sig,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -153,13 +152,6 @@ func (x *MsgStartInference) GetStartedAt() int64 {
 		return x.StartedAt
 	}
 	return 0
-}
-
-func (x *MsgStartInference) GetExecutorSig() []byte {
-	if x != nil {
-		return x.ExecutorSig
-	}
-	return nil
 }
 
 type MsgConfirmStart struct {
@@ -654,7 +646,7 @@ var File_subnet_v1_tx_proto protoreflect.FileDescriptor
 
 const file_subnet_v1_tx_proto_rawDesc = "" +
 	"\n" +
-	"\x12subnet/v1/tx.proto\x12\tsubnet.v1\"\xf1\x01\n" +
+	"\x12subnet/v1/tx.proto\x12\tsubnet.v1\"\xce\x01\n" +
 	"\x11MsgStartInference\x12!\n" +
 	"\finference_id\x18\x01 \x01(\x04R\vinferenceId\x12\x1f\n" +
 	"\vprompt_hash\x18\x02 \x01(\fR\n" +
@@ -664,8 +656,7 @@ const file_subnet_v1_tx_proto_rawDesc = "" +
 	"\n" +
 	"max_tokens\x18\x05 \x01(\x04R\tmaxTokens\x12\x1d\n" +
 	"\n" +
-	"started_at\x18\x06 \x01(\x03R\tstartedAt\x12!\n" +
-	"\fexecutor_sig\x18\a \x01(\fR\vexecutorSig\"W\n" +
+	"started_at\x18\x06 \x01(\x03R\tstartedAt\"W\n" +
 	"\x0fMsgConfirmStart\x12!\n" +
 	"\finference_id\x18\x01 \x01(\x04R\vinferenceId\x12!\n" +
 	"\fexecutor_sig\x18\x02 \x01(\fR\vexecutorSig\"\xec\x01\n" +

@@ -423,3 +423,25 @@ func TestHost_PayloadMismatch_Params(t *testing.T) {
 	})
 	require.ErrorIs(t, err, types.ErrPayloadMismatch)
 }
+
+func TestHost_ExecuteFailure_ReturnsReceiptNoMempool(t *testing.T) {
+	hosts := []*signing.Secp256k1Signer{testutil.MustGenerateKey(t), testutil.MustGenerateKey(t), testutil.MustGenerateKey(t)}
+	user := testutil.MustGenerateKey(t)
+
+	// Create host with a failing engine at slot 1 (executor for inference 1).
+	group := testutil.MakeGroup(hosts)
+	config := testutil.DefaultConfig(len(hosts))
+	verifier := signing.NewSecp256k1Verifier()
+	sm := state.NewStateMachine("escrow-1", config, group, 10000, user.Address(), verifier)
+	engine := stub.NewFailingEngine(fmt.Errorf("GPU error"))
+	h, err := NewHost(sm, hosts[1], engine, "escrow-1", group, 10, nil)
+	require.NoError(t, err)
+
+	diff := testutil.SignDiff(t, user, 1, []*types.SubnetTx{testutil.StartTx(1)})
+	resp, err := h.HandleRequest(context.Background(), HostRequest{
+		Diffs: []types.Diff{diff}, Nonce: 1, Payload: defaultPayload(),
+	})
+	require.NoError(t, err, "should not return error on engine failure")
+	require.NotNil(t, resp.Receipt, "receipt should still be present")
+	require.Empty(t, resp.Mempool, "mempool should be empty (no MsgFinishInference)")
+}

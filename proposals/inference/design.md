@@ -30,7 +30,7 @@ Defined in the subnet package's own proto files. No shared types with mainnet pr
 
 | Tx | Proposer | Purpose |
 |----|----------|---------|
-| MsgStartInference | user | Authorize inference, reserve max cost. Optional executor_sig for fast path |
+| MsgStartInference | user | Authorize inference, reserve max cost |
 | MsgConfirmStart | user | Deliver executor receipt (executor_sig). pending -> started |
 | MsgFinishInference | host | Record completion, response hash, token counts |
 | MsgTimeoutInference | user | Declare timeout with votes as evidence |
@@ -173,8 +173,7 @@ Validation is probabilistic. Most inferences follow `pending -> started -> finis
 
 Transitions and state updates:
 
-- MsgStartInference: creates record with status=pending, reserves max_cost from available balance. `max_cost = (input_length + max_tokens) * per_token_price` where input_length is prompt length in characters (caveat: overestimates for Latin, may underestimate for CJK; acceptable for now). inference_id must equal the diff's nonce. executor_slot is derived: `group[inference_id % len(group)].SlotID`. At most one MsgStartInference per diff. Rejected if state.finalizing == true.
-- MsgFinalizeRound: sets state.finalizing = true. Irreversible. After this, MsgStartInference is rejected. At most one per session. Diffs after this contain only cleanup txs (MsgRevealSeed, MsgFinishInference, MsgValidation, etc.).
+- MsgStartInference: creates record with status=pending, reserves max_cost from available balance. `max_cost = (input_length + max_tokens) * per_token_price` where input_length is prompt length in characters (caveat: overestimates for Latin, may underestimate for CJK; acceptable for now). inference_id must equal the diff's nonce. executor_slot is derived: `group[inference_id % len(group)].SlotID`. At most one MsgStartInference per diff. Rejected if state.finalizing == true.- MsgFinalizeRound: sets state.finalizing = true. Irreversible. After this, MsgStartInference is rejected. At most one per session. Diffs after this contain only cleanup txs (MsgRevealSeed, MsgFinishInference, MsgValidation, etc.).
 - MsgConfirmStart: verifies executor receipt signature against executor's public key, pending->started.
 - MsgFinishInference: verifies executor_slot matches inference's assigned executor. started->finished. `actual_cost = (input_tokens + output_tokens) * per_token_price`. Rejects if actual_cost > reserved_cost. Releases reserved_cost - actual_cost to balance. Updates host_stats[executor_slot].cost += actual_cost.
 - MsgValidation: verifies validator_slot != executor_slot. finished->validated (valid=true) or finished->challenged (valid=false). Q: how to verify no unauthorized validation? Deferred to ShouldValidate (Phase 4).

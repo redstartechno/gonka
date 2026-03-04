@@ -171,7 +171,7 @@ func TestFullSession_HappyPath(t *testing.T) {
 	}
 
 	// Verify all inferences finished.
-	state := sm.GetState()
+	state := sm.SnapshotState()
 	require.Len(t, state.Inferences, numInferences)
 	for id, rec := range state.Inferences {
 		require.Equal(t, types.StatusFinished, rec.Status, "inference %d", id)

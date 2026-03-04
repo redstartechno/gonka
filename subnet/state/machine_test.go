@@ -90,7 +90,7 @@ func TestApplyDiff_StartInference(t *testing.T) {
 	_, err := sm.ApplyDiff(diff)
 	require.NoError(t, err)
 
-	state := sm.GetState()
+	state := sm.SnapshotState()
 	rec := state.Inferences[1]
 	require.NotNil(t, rec)
 	require.Equal(t, types.StatusPending, rec.Status)
@@ -120,7 +120,7 @@ func TestApplyDiff_ConfirmStart(t *testing.T) {
 	_, err = sm.ApplyDiff(diff)
 	require.NoError(t, err)
 
-	state := sm.GetState()
+	state := sm.SnapshotState()
 	require.Equal(t, types.StatusStarted, state.Inferences[1].Status)
 }
 
@@ -163,18 +163,18 @@ func TestApplyDiff_FinishInference(t *testing.T) {
 	_, err = sm.ApplyDiff(diff)
 	require.NoError(t, err)
 
-	// Finish inference.
+	// Finish inference. Executor is slot 1 (hosts[1]).
 	finishMsg := &types.MsgFinishInference{
 		InferenceId: 1, ResponseHash: []byte("response"),
 		InputTokens: 80, OutputTokens: 40, ExecutorSlot: 1,
 	}
-	finishMsg.ProposerSig = testutil.SignProposerTx(t, hosts[0], finishMsg)
+	finishMsg.ProposerSig = testutil.SignProposerTx(t, hosts[1], finishMsg)
 
 	diff = testutil.SignDiff(t, user, 3, []*types.SubnetTx{txFinish(finishMsg)})
 	_, err = sm.ApplyDiff(diff)
 	require.NoError(t, err)
 
-	state := sm.GetState()
+	state := sm.SnapshotState()
 	rec := state.Inferences[1]
 	require.Equal(t, types.StatusFinished, rec.Status)
 	require.Equal(t, uint64(120), rec.ActualCost) // (80+40)*1
@@ -251,12 +251,12 @@ func TestApplyDiff_Validation_Valid(t *testing.T) {
 	valMsg := &types.MsgValidation{InferenceId: 1, ValidatorSlot: 0, Valid: true}
 	valMsg.ProposerSig = testutil.SignProposerTx(t, hosts[0], valMsg)
 
-	nonce := sm.GetState().LatestNonce + 1
+	nonce := sm.SnapshotState().LatestNonce + 1
 	diff := testutil.SignDiff(t, user, nonce, []*types.SubnetTx{txValidation(valMsg)})
 	_, err := sm.ApplyDiff(diff)
 	require.NoError(t, err)
 
-	state := sm.GetState()
+	state := sm.SnapshotState()
 	require.Equal(t, types.StatusValidated, state.Inferences[1].Status)
 }
 
@@ -269,7 +269,7 @@ func TestApplyDiff_Validation_SelfValidation(t *testing.T) {
 	valMsg := &types.MsgValidation{InferenceId: 1, ValidatorSlot: 1, Valid: true}
 	valMsg.ProposerSig = testutil.SignProposerTx(t, hosts[1], valMsg)
 
-	nonce := sm.GetState().LatestNonce + 1
+	nonce := sm.SnapshotState().LatestNonce + 1
 	diff := testutil.SignDiff(t, user, nonce, []*types.SubnetTx{txValidation(valMsg)})
 	_, err := sm.ApplyDiff(diff)
 	require.ErrorIs(t, err, types.ErrSelfValidation)
@@ -288,11 +288,11 @@ func TestApplyDiff_Validation_Invalid_ChallengeVoting(t *testing.T) {
 	valMsg := &types.MsgValidation{InferenceId: 1, ValidatorSlot: 0, Valid: false}
 	valMsg.ProposerSig = testutil.SignProposerTx(t, hosts[0], valMsg)
 
-	nonce := sm.GetState().LatestNonce + 1
+	nonce := sm.SnapshotState().LatestNonce + 1
 	diff := testutil.SignDiff(t, user, nonce, []*types.SubnetTx{txValidation(valMsg)})
 	_, err := sm.ApplyDiff(diff)
 	require.NoError(t, err)
-	require.Equal(t, types.StatusChallenged, sm.GetState().Inferences[1].Status)
+	require.Equal(t, types.StatusChallenged, sm.SnapshotState().Inferences[1].Status)
 
 	// Vote invalid from 3 slots -> majority (>5/2=2) -> invalidated.
 	var voteTxs []*types.SubnetTx
@@ -302,12 +302,12 @@ func TestApplyDiff_Validation_Invalid_ChallengeVoting(t *testing.T) {
 		voteTxs = append(voteTxs, txVote(voteMsg))
 	}
 
-	nonce = sm.GetState().LatestNonce + 1
+	nonce = sm.SnapshotState().LatestNonce + 1
 	diff = testutil.SignDiff(t, user, nonce, voteTxs)
 	_, err = sm.ApplyDiff(diff)
 	require.NoError(t, err)
 
-	state := sm.GetState()
+	state := sm.SnapshotState()
 	rec := state.Inferences[1]
 	require.Equal(t, types.StatusInvalidated, rec.Status)
 	require.Equal(t, uint32(1), state.HostStats[1].Invalid)
@@ -341,7 +341,7 @@ func TestApplyDiff_Timeout_Refused(t *testing.T) {
 	_, err = sm.ApplyDiff(diff)
 	require.NoError(t, err)
 
-	state := sm.GetState()
+	state := sm.SnapshotState()
 	require.Equal(t, types.StatusTimedOut, state.Inferences[1].Status)
 	require.Equal(t, uint32(1), state.HostStats[1].Missed)
 	require.Equal(t, uint64(10000), state.Balance)
@@ -381,7 +381,7 @@ func TestApplyDiff_Timeout_Execution(t *testing.T) {
 	_, err = sm.ApplyDiff(diff)
 	require.NoError(t, err)
 
-	state := sm.GetState()
+	state := sm.SnapshotState()
 	require.Equal(t, types.StatusTimedOut, state.Inferences[1].Status)
 	require.Equal(t, uint32(1), state.HostStats[1].Missed)
 	require.Equal(t, uint64(10000), state.Balance)
@@ -479,7 +479,7 @@ func TestApplyDiff_Timeout_AfterFinish(t *testing.T) {
 		votes = append(votes, v)
 	}
 
-	nonce := sm.GetState().LatestNonce + 1
+	nonce := sm.SnapshotState().LatestNonce + 1
 	diff := testutil.SignDiff(t, user, nonce, []*types.SubnetTx{txTimeout(&types.MsgTimeoutInference{
 		InferenceId: 1, Reason: types.TimeoutReason_TIMEOUT_REASON_EXECUTION, Votes: votes,
 	})})
@@ -516,7 +516,7 @@ func TestApplyDiff_FinalizeRound(t *testing.T) {
 	diff := testutil.SignDiff(t, user, 1, []*types.SubnetTx{txFinalize()})
 	_, err := sm.ApplyDiff(diff)
 	require.NoError(t, err)
-	require.True(t, sm.GetState().Finalizing)
+	require.True(t, sm.SnapshotState().Finalizing)
 
 	// MsgStartInference after finalize -> rejected.
 	diff = testutil.SignDiff(t, user, 2, []*types.SubnetTx{txStart(&types.MsgStartInference{
@@ -557,12 +557,12 @@ func TestApplyDiff_FinalizeRound_HostTxsStillAccepted(t *testing.T) {
 		InferenceId: 1, ResponseHash: []byte("response"),
 		InputTokens: 80, OutputTokens: 40, ExecutorSlot: 1,
 	}
-	finishMsg.ProposerSig = testutil.SignProposerTx(t, hosts[0], finishMsg)
+	finishMsg.ProposerSig = testutil.SignProposerTx(t, hosts[1], finishMsg)
 
 	diff = testutil.SignDiff(t, user, 4, []*types.SubnetTx{txFinish(finishMsg)})
 	_, err = sm.ApplyDiff(diff)
 	require.NoError(t, err)
-	require.Equal(t, types.StatusFinished, sm.GetState().Inferences[1].Status)
+	require.Equal(t, types.StatusFinished, sm.SnapshotState().Inferences[1].Status)
 }
 
 func TestApplyDiff_DuplicateTimeout(t *testing.T) {
@@ -676,7 +676,7 @@ func TestApplyDiff_FullLifecycle(t *testing.T) {
 			InferenceId: infID, ResponseHash: []byte("response"),
 			InputTokens: 80, OutputTokens: 40, ExecutorSlot: uint32(executorSlotIdx),
 		}
-		finishMsg.ProposerSig = testutil.SignProposerTx(t, hosts[0], finishMsg)
+		finishMsg.ProposerSig = testutil.SignProposerTx(t, hosts[executorSlotIdx], finishMsg)
 		nonce++
 		diff = testutil.SignDiff(t, user, nonce, []*types.SubnetTx{txFinish(finishMsg)})
 		_, err = sm.ApplyDiff(diff)
@@ -727,7 +727,7 @@ func TestApplyDiff_FullLifecycle(t *testing.T) {
 		}
 	}
 
-	state := sm.GetState()
+	state := sm.SnapshotState()
 	var finished, timedOut, validated, invalidated int
 	for _, rec := range state.Inferences {
 		switch rec.Status {
@@ -830,7 +830,7 @@ func TestApplyDiff_ValidationVote_AlreadyResolved(t *testing.T) {
 	// Challenge.
 	valMsg := &types.MsgValidation{InferenceId: 1, ValidatorSlot: 0, Valid: false}
 	valMsg.ProposerSig = testutil.SignProposerTx(t, hosts[0], valMsg)
-	nonce := sm.GetState().LatestNonce + 1
+	nonce := sm.SnapshotState().LatestNonce + 1
 	diff := testutil.SignDiff(t, user, nonce, []*types.SubnetTx{txValidation(valMsg)})
 	_, err := sm.ApplyDiff(diff)
 	require.NoError(t, err)
@@ -843,16 +843,16 @@ func TestApplyDiff_ValidationVote_AlreadyResolved(t *testing.T) {
 		voteTxs = append(voteTxs, txVote(voteMsg))
 	}
 
-	nonce = sm.GetState().LatestNonce + 1
+	nonce = sm.SnapshotState().LatestNonce + 1
 	diff = testutil.SignDiff(t, user, nonce, voteTxs)
 	_, err = sm.ApplyDiff(diff)
 	require.NoError(t, err)
 
-	state := sm.GetState()
+	state := sm.SnapshotState()
 	require.Equal(t, types.StatusInvalidated, state.Inferences[1].Status)
 }
 
-func TestGetState_DeepCopy(t *testing.T) {
+func TestSnapshotState_DeepCopy(t *testing.T) {
 	hosts := []*signing.Secp256k1Signer{testutil.MustGenerateKey(t), testutil.MustGenerateKey(t), testutil.MustGenerateKey(t)}
 	sm, user := newTestSM(t, hosts, 10000)
 
@@ -865,7 +865,7 @@ func TestGetState_DeepCopy(t *testing.T) {
 	require.NoError(t, err)
 
 	// Get state and mutate the copy.
-	stateCopy := sm.GetState()
+	stateCopy := sm.SnapshotState()
 	stateCopy.Balance = 999999
 	stateCopy.Inferences[1].Status = types.StatusTimedOut
 	stateCopy.Inferences[1].PromptHash[0] = 0xFF
@@ -873,7 +873,7 @@ func TestGetState_DeepCopy(t *testing.T) {
 	stateCopy.Group[0].Weight = 999
 
 	// Verify original state is unaffected.
-	original := sm.GetState()
+	original := sm.SnapshotState()
 	require.Equal(t, uint64(10000-150), original.Balance)
 	require.Equal(t, types.StatusPending, original.Inferences[1].Status)
 	require.Equal(t, byte('p'), original.Inferences[1].PromptHash[0])
@@ -886,7 +886,7 @@ func TestGetState_DeepCopy(t *testing.T) {
 func applyStartConfirmFinish(t *testing.T, sm *StateMachine, user *signing.Secp256k1Signer, hosts []*signing.Secp256k1Signer, inferenceID uint64) {
 	t.Helper()
 	executorSlotIdx := inferenceID % uint64(len(hosts))
-	nonce := sm.GetState().LatestNonce + 1
+	nonce := sm.SnapshotState().LatestNonce + 1
 
 	diff := testutil.SignDiff(t, user, nonce, []*types.SubnetTx{txStart(&types.MsgStartInference{
 		InferenceId: inferenceID, PromptHash: []byte("prompt"), Model: "llama",
@@ -907,9 +907,128 @@ func applyStartConfirmFinish(t *testing.T, sm *StateMachine, user *signing.Secp2
 		InferenceId: inferenceID, ResponseHash: []byte("response"),
 		InputTokens: 80, OutputTokens: 40, ExecutorSlot: uint32(executorSlotIdx),
 	}
-	finishMsg.ProposerSig = testutil.SignProposerTx(t, hosts[0], finishMsg)
+	finishMsg.ProposerSig = testutil.SignProposerTx(t, hosts[executorSlotIdx], finishMsg)
 	nonce++
 	diff = testutil.SignDiff(t, user, nonce, []*types.SubnetTx{txFinish(finishMsg)})
+	_, err = sm.ApplyDiff(diff)
+	require.NoError(t, err)
+}
+
+// txRevealSeed wraps MsgRevealSeed in a SubnetTx.
+func txRevealSeed(msg *types.MsgRevealSeed) *types.SubnetTx {
+	return &types.SubnetTx{Tx: &types.SubnetTx_RevealSeed{RevealSeed: msg}}
+}
+
+// --- Wrong-proposer tests ---
+
+func TestApplyDiff_FinishInference_WrongProposer(t *testing.T) {
+	hosts := []*signing.Secp256k1Signer{testutil.MustGenerateKey(t), testutil.MustGenerateKey(t), testutil.MustGenerateKey(t)}
+	sm, user := newTestSM(t, hosts, 10000)
+
+	// Start + confirm. Executor for inference 1 is slot 1 (hosts[1]).
+	applyStartConfirmFinish_Setup(t, sm, user, hosts, 1)
+
+	// Sign finish with hosts[0] (in group, but not the executor).
+	finishMsg := &types.MsgFinishInference{
+		InferenceId: 1, ResponseHash: []byte("response"),
+		InputTokens: 80, OutputTokens: 40, ExecutorSlot: 1,
+	}
+	finishMsg.ProposerSig = testutil.SignProposerTx(t, hosts[0], finishMsg)
+
+	nonce := sm.LatestNonce() + 1
+	diff := testutil.SignDiff(t, user, nonce, []*types.SubnetTx{txFinish(finishMsg)})
+	_, err := sm.ApplyDiff(diff)
+	require.ErrorIs(t, err, types.ErrInvalidProposerSig)
+}
+
+func TestApplyDiff_Validation_WrongProposer(t *testing.T) {
+	hosts := []*signing.Secp256k1Signer{testutil.MustGenerateKey(t), testutil.MustGenerateKey(t), testutil.MustGenerateKey(t)}
+	sm, user := newTestSM(t, hosts, 10000)
+
+	applyStartConfirmFinish(t, sm, user, hosts, 1)
+
+	// Validator is slot 0, but sign with hosts[2] (in group, wrong slot).
+	valMsg := &types.MsgValidation{InferenceId: 1, ValidatorSlot: 0, Valid: true}
+	valMsg.ProposerSig = testutil.SignProposerTx(t, hosts[2], valMsg)
+
+	nonce := sm.LatestNonce() + 1
+	diff := testutil.SignDiff(t, user, nonce, []*types.SubnetTx{txValidation(valMsg)})
+	_, err := sm.ApplyDiff(diff)
+	require.ErrorIs(t, err, types.ErrInvalidProposerSig)
+}
+
+func TestApplyDiff_ValidationVote_WrongProposer(t *testing.T) {
+	hosts := []*signing.Secp256k1Signer{
+		testutil.MustGenerateKey(t), testutil.MustGenerateKey(t), testutil.MustGenerateKey(t),
+		testutil.MustGenerateKey(t), testutil.MustGenerateKey(t),
+	}
+	sm, user := newTestSM(t, hosts, 10000)
+
+	applyStartConfirmFinish(t, sm, user, hosts, 1)
+
+	// Challenge.
+	valMsg := &types.MsgValidation{InferenceId: 1, ValidatorSlot: 0, Valid: false}
+	valMsg.ProposerSig = testutil.SignProposerTx(t, hosts[0], valMsg)
+	nonce := sm.LatestNonce() + 1
+	diff := testutil.SignDiff(t, user, nonce, []*types.SubnetTx{txValidation(valMsg)})
+	_, err := sm.ApplyDiff(diff)
+	require.NoError(t, err)
+
+	// Vote from slot 2, but sign with hosts[3] (in group, wrong slot).
+	voteMsg := &types.MsgValidationVote{InferenceId: 1, VoterSlot: 2, VoteValid: false}
+	voteMsg.ProposerSig = testutil.SignProposerTx(t, hosts[3], voteMsg)
+
+	nonce = sm.LatestNonce() + 1
+	diff = testutil.SignDiff(t, user, nonce, []*types.SubnetTx{txVote(voteMsg)})
+	_, err = sm.ApplyDiff(diff)
+	require.ErrorIs(t, err, types.ErrInvalidProposerSig)
+}
+
+func TestApplyDiff_RevealSeed_WrongProposer(t *testing.T) {
+	hosts := []*signing.Secp256k1Signer{testutil.MustGenerateKey(t), testutil.MustGenerateKey(t), testutil.MustGenerateKey(t)}
+	sm, user := newTestSM(t, hosts, 10000)
+
+	// RevealSeed from slot 0, signed by hosts[1] (in group, wrong slot).
+	seedMsg := &types.MsgRevealSeed{SlotId: 0, Signature: []byte("seed")}
+	seedMsg.ProposerSig = testutil.SignProposerTx(t, hosts[1], seedMsg)
+
+	diff := testutil.SignDiff(t, user, 1, []*types.SubnetTx{txRevealSeed(seedMsg)})
+	_, err := sm.ApplyDiff(diff)
+	require.ErrorIs(t, err, types.ErrInvalidProposerSig)
+}
+
+func TestApplyDiff_RevealSeed_InvalidSlot(t *testing.T) {
+	hosts := []*signing.Secp256k1Signer{testutil.MustGenerateKey(t), testutil.MustGenerateKey(t), testutil.MustGenerateKey(t)}
+	sm, user := newTestSM(t, hosts, 10000)
+
+	// RevealSeed with slot 99 (not in group).
+	seedMsg := &types.MsgRevealSeed{SlotId: 99, Signature: []byte("seed")}
+	seedMsg.ProposerSig = testutil.SignProposerTx(t, hosts[0], seedMsg)
+
+	diff := testutil.SignDiff(t, user, 1, []*types.SubnetTx{txRevealSeed(seedMsg)})
+	_, err := sm.ApplyDiff(diff)
+	require.ErrorIs(t, err, types.ErrSlotNotInGroup)
+}
+
+// applyStartConfirmFinish_Setup applies start + confirm only (no finish).
+// Used when we need to test finish with specific proposer.
+func applyStartConfirmFinish_Setup(t *testing.T, sm *StateMachine, user *signing.Secp256k1Signer, hosts []*signing.Secp256k1Signer, inferenceID uint64) {
+	t.Helper()
+	executorSlotIdx := inferenceID % uint64(len(hosts))
+	nonce := sm.LatestNonce() + 1
+
+	diff := testutil.SignDiff(t, user, nonce, []*types.SubnetTx{txStart(&types.MsgStartInference{
+		InferenceId: inferenceID, PromptHash: []byte("prompt"), Model: "llama",
+		InputLength: 100, MaxTokens: 50, StartedAt: 1000,
+	})})
+	_, err := sm.ApplyDiff(diff)
+	require.NoError(t, err)
+
+	execSig := testutil.SignExecutorReceipt(t, hosts[executorSlotIdx], inferenceID, []byte("prompt"), "llama", 100, 50, 1000)
+	nonce++
+	diff = testutil.SignDiff(t, user, nonce, []*types.SubnetTx{txConfirm(&types.MsgConfirmStart{
+		InferenceId: inferenceID, ExecutorSig: execSig,
+	})})
 	_, err = sm.ApplyDiff(diff)
 	require.NoError(t, err)
 }

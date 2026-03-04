@@ -125,9 +125,18 @@ func (sm *StateMachine) ApplyDiff(diff types.Diff) ([]byte, error) {
 	return root, nil
 }
 
-// GetState returns a deep copy of the current escrow state.
-// Q: do we need deepcopy?
-func (sm *StateMachine) GetState() types.EscrowState {
+// LatestNonce returns the current nonce without deep-copying state.
+func (sm *StateMachine) LatestNonce() uint64 {
+	return sm.state.LatestNonce
+}
+
+// IsFinalizing returns whether the session is in finalizing state.
+func (sm *StateMachine) IsFinalizing() bool {
+	return sm.state.Finalizing
+}
+
+// SnapshotState returns a deep copy of the current escrow state.
+func (sm *StateMachine) SnapshotState() types.EscrowState {
 	s := *sm.state
 
 	// Deep copy Group.
@@ -291,10 +300,10 @@ func (sm *StateMachine) applyFinishInference(msg *types.MsgFinishInference) erro
 		return fmt.Errorf("%w: expected %d, got %d", types.ErrWrongExecutorSlot, rec.ExecutorSlot, msg.ExecutorSlot)
 	}
 
-	// Verify proposer signature.
+	// Verify proposer signature from executor.
 	cloned := proto.Clone(msg).(*types.MsgFinishInference)
 	cloned.ProposerSig = nil
-	if err := sm.verifyProposerSig(cloned, msg.ProposerSig); err != nil {
+	if err := sm.verifyProposerSig(cloned, msg.ProposerSig, sm.slotToAddress[rec.ExecutorSlot]); err != nil {
 		return err
 	}
 
@@ -335,10 +344,10 @@ func (sm *StateMachine) applyValidation(msg *types.MsgValidation) error {
 		return types.ErrSelfValidation
 	}
 
-	// Verify proposer signature.
+	// Verify proposer signature from validator.
 	clonedV := proto.Clone(msg).(*types.MsgValidation)
 	clonedV.ProposerSig = nil
-	if err := sm.verifyProposerSig(clonedV, msg.ProposerSig); err != nil {
+	if err := sm.verifyProposerSig(clonedV, msg.ProposerSig, sm.slotToAddress[msg.ValidatorSlot]); err != nil {
 		return err
 	}
 
@@ -374,10 +383,10 @@ func (sm *StateMachine) applyValidationVote(msg *types.MsgValidationVote) error 
 		return fmt.Errorf("%w: slot %d", types.ErrDuplicateVote, msg.VoterSlot)
 	}
 
-	// Verify proposer signature.
+	// Verify proposer signature from voter.
 	clonedVV := proto.Clone(msg).(*types.MsgValidationVote)
 	clonedVV.ProposerSig = nil
-	if err := sm.verifyProposerSig(clonedVV, msg.ProposerSig); err != nil {
+	if err := sm.verifyProposerSig(clonedVV, msg.ProposerSig, sm.slotToAddress[msg.VoterSlot]); err != nil {
 		return err
 	}
 
@@ -481,10 +490,15 @@ func (sm *StateMachine) applyTimeout(msg *types.MsgTimeoutInference) error {
 }
 
 func (sm *StateMachine) applyRevealSeed(msg *types.MsgRevealSeed) error {
-	// Verify proposer signature.
+	// Verify slot is in group.
+	if _, ok := sm.slotToAddress[msg.SlotId]; !ok {
+		return fmt.Errorf("%w: slot %d", types.ErrSlotNotInGroup, msg.SlotId)
+	}
+
+	// Verify proposer signature from slot owner.
 	clonedRS := proto.Clone(msg).(*types.MsgRevealSeed)
 	clonedRS.ProposerSig = nil
-	if err := sm.verifyProposerSig(clonedRS, msg.ProposerSig); err != nil {
+	if err := sm.verifyProposerSig(clonedRS, msg.ProposerSig, sm.slotToAddress[msg.SlotId]); err != nil {
 		return err
 	}
 
@@ -514,9 +528,9 @@ func BuildDiffContent(nonce uint64, txs []*types.SubnetTx) *types.DiffContent {
 	}
 }
 
-// verifyProposerSig verifies that sig was produced by a group member over
+// verifyProposerSig verifies that sig was produced by expectedAddress over
 // msgWithoutSig (the proto message with its proposer_sig field already zeroed).
-func (sm *StateMachine) verifyProposerSig(msgWithoutSig proto.Message, sig []byte) error {
+func (sm *StateMachine) verifyProposerSig(msgWithoutSig proto.Message, sig []byte, expectedAddress string) error {
 	data, err := proto.Marshal(msgWithoutSig)
 	if err != nil {
 		return fmt.Errorf("marshal for proposer sig: %w", err)
@@ -527,8 +541,8 @@ func (sm *StateMachine) verifyProposerSig(msgWithoutSig proto.Message, sig []byt
 		return fmt.Errorf("%w: %v", types.ErrInvalidProposerSig, err)
 	}
 
-	if !sm.addressInGroup[recovered] {
-		return fmt.Errorf("%w: address %s", types.ErrInvalidProposerSig, recovered)
+	if recovered != expectedAddress {
+		return fmt.Errorf("%w: expected %s, got %s", types.ErrInvalidProposerSig, expectedAddress, recovered)
 	}
 
 	return nil

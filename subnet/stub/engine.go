@@ -46,6 +46,19 @@ func (e *ConfigurableEngine) Execute(_ context.Context, req subnet.ExecuteReques
 	return &cp, nil
 }
 
+// FailingEngine always returns an error from Execute.
+type FailingEngine struct {
+	Err error
+}
+
+func NewFailingEngine(err error) *FailingEngine {
+	return &FailingEngine{Err: err}
+}
+
+func (e *FailingEngine) Execute(_ context.Context, _ subnet.ExecuteRequest) (*subnet.ExecuteResult, error) {
+	return nil, e.Err
+}
+
 // ValidationEngine returns fixed validation results for testing.
 type ValidationEngine struct {
 	Valid bool

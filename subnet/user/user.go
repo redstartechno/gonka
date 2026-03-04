@@ -232,7 +232,8 @@ func (s *Session) Finalize(ctx context.Context) error {
 		nonce := s.nonce + 1
 		hostIdx := int(nonce % uint64(n))
 
-		txs := s.pendingTxs
+		txs := make([]*types.SubnetTx, len(s.pendingTxs))
+		copy(txs, s.pendingTxs)
 		if i == 0 {
 			txs = append(txs, &types.SubnetTx{Tx: &types.SubnetTx_FinalizeRound{
 				FinalizeRound: &types.MsgFinalizeRound{},

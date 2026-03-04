@@ -15,7 +15,6 @@ message MsgStartInference {
   uint64 input_length = 4;
   uint64 max_tokens = 5;
   int64  started_at = 6;
-  bytes  executor_sig = 7;
 }
 
 message MsgConfirmStart {
