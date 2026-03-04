@@ -24,4 +24,6 @@ var (
 	ErrInvalidVoteSig        = errors.New("invalid vote signature")
 	ErrInvalidInferenceID    = errors.New("inference_id must equal diff nonce")
 	ErrSlotNotInGroup        = errors.New("slot not in group")
+	ErrHostNotInGroup        = errors.New("host signer address not in group")
+	ErrGroupSizeMismatch     = errors.New("hosts count does not match group size")
 )

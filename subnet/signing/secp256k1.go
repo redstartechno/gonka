@@ -56,12 +56,10 @@ func (v *Secp256k1Verifier) RecoverAddress(message []byte, sig []byte) (string, 
 	return addr.Hex(), nil
 }
 
-// PublicKeyBytes returns the uncompressed public key bytes for the signer.
 func (s *Secp256k1Signer) PublicKeyBytes() []byte {
 	return crypto.FromECDSAPub(&s.key.PublicKey)
 }
 
-// GenerateKey creates a new random secp256k1 key pair wrapped in a Signer.
 func GenerateKey() (*Secp256k1Signer, error) {
 	key, err := crypto.GenerateKey()
 	if err != nil {
@@ -70,7 +68,6 @@ func GenerateKey() (*Secp256k1Signer, error) {
 	return NewSecp256k1Signer(key), nil
 }
 
-// AddressFromPubKey derives the Ethereum-style address from uncompressed public key bytes.
 func AddressFromPubKey(pubkey []byte) string {
 	return common.BytesToAddress(crypto.Keccak256(pubkey[1:])[12:]).Hex()
 }

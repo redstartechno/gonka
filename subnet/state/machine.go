@@ -18,13 +18,12 @@ type StateMachine struct {
 	userAddress string
 
 	// Lookup maps derived from group at construction time.
-	slotToAddress map[uint32]string
-	slotToPubKey  map[uint32][]byte
-	addressToSlot map[string]uint32
-	totalSlots    uint32
+	slotToAddress  map[uint32]string
+	slotToPubKey   map[uint32][]byte
+	addressInGroup map[string]bool
+	totalSlots     uint32
 }
 
-// NewStateMachine creates a state machine for a session.
 func NewStateMachine(
 	escrowID string,
 	config types.SessionConfig,
@@ -35,11 +34,11 @@ func NewStateMachine(
 ) *StateMachine {
 	slotToAddr := make(map[uint32]string, len(group))
 	slotToPub := make(map[uint32][]byte, len(group))
-	addrToSlot := make(map[string]uint32, len(group))
+	addrInGroup := make(map[string]bool, len(group))
 	for _, s := range group {
 		slotToAddr[s.SlotID] = s.ValidatorAddress
 		slotToPub[s.SlotID] = s.PublicKey
-		addrToSlot[s.ValidatorAddress] = s.SlotID
+		addrInGroup[s.ValidatorAddress] = true
 	}
 
 	groupCopy := make([]types.SlotAssignment, len(group))
@@ -59,12 +58,12 @@ func NewStateMachine(
 			Inferences: make(map[uint64]*types.InferenceRecord),
 			HostStats:  hostStats,
 		},
-		verifier:      verifier,
-		userAddress:   userAddress,
-		slotToAddress: slotToAddr,
-		slotToPubKey:  slotToPub,
-		addressToSlot: addrToSlot,
-		totalSlots:    uint32(len(group)),
+		verifier:       verifier,
+		userAddress:    userAddress,
+		slotToAddress:  slotToAddr,
+		slotToPubKey:   slotToPub,
+		addressInGroup: addrInGroup,
+		totalSlots:     uint32(len(group)),
 	}
 }
 
@@ -573,24 +572,21 @@ func (sm *StateMachine) verifyProposerSig(msg proto.Message, sig []byte, clearSi
 		return fmt.Errorf("%w: %v", types.ErrInvalidProposerSig, err)
 	}
 
-	if _, ok := sm.addressToSlot[recovered]; !ok {
+	if !sm.addressInGroup[recovered] {
 		return fmt.Errorf("%w: address %s", types.ErrInvalidProposerSig, recovered)
 	}
 
 	return nil
 }
 
-// TotalSlots returns the number of slots in the group.
 func (sm *StateMachine) TotalSlots() uint32 {
 	return sm.totalSlots
 }
 
-// SlotAddress returns the validator address for a slot.
 func (sm *StateMachine) SlotAddress(slotID uint32) string {
 	return sm.slotToAddress[slotID]
 }
 
-// SortedSlotIDs returns slot IDs sorted ascending.
 func SortedSlotIDs(group []types.SlotAssignment) []uint32 {
 	ids := make([]uint32, len(group))
 	for i, s := range group {
