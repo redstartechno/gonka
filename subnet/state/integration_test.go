@@ -6,6 +6,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 
+	"subnet/internal/testutil"
 	"subnet/signing"
 	"subnet/types"
 )
@@ -21,14 +22,13 @@ func TestFullSession_HappyPath(t *testing.T) {
 	// Generate keys.
 	hosts := make([]*signing.Secp256k1Signer, numHosts)
 	for i := range hosts {
-		hosts[i] = mustGenerateKey(t)
+		hosts[i] = testutil.MustGenerateKey(t)
 	}
-	user := mustGenerateKey(t)
+	user := testutil.MustGenerateKey(t)
 	verifier := signing.NewSecp256k1Verifier()
 
-	group := makeGroup(hosts)
-	config := defaultConfig()
-	config.VoteThreshold = uint32(numHosts) / 2
+	group := testutil.MakeGroup(hosts)
+	config := testutil.DefaultConfig(numHosts)
 	escrowID := "escrow-integration"
 	initialBalance := uint64(100000)
 
@@ -60,7 +60,7 @@ func TestFullSession_HappyPath(t *testing.T) {
 
 		// Include accumulated ConfirmStart txs.
 		for _, pc := range pendingConfirms {
-			execSig := signExecutorReceipt(t, hosts[pc.executorIdx],
+			execSig := testutil.SignExecutorReceipt(t, hosts[pc.executorIdx],
 				pc.inferenceID, []byte("prompt"), "llama", 100, 50, int64(pc.inferenceID)*1000)
 			txs = append(txs, txConfirm(&types.MsgConfirmStart{
 				InferenceId: pc.inferenceID,
@@ -78,7 +78,7 @@ func TestFullSession_HappyPath(t *testing.T) {
 				OutputTokens: 40,
 				ExecutorSlot: uint32(pf.executorIdx),
 			}
-			proposerSig := signProposerTx(t, hosts[pf.executorIdx], finishMsg)
+			proposerSig := testutil.SignProposerTx(t, hosts[pf.executorIdx], finishMsg)
 			finishMsg.ProposerSig = proposerSig
 			txs = append(txs, txFinish(finishMsg))
 		}
@@ -95,7 +95,7 @@ func TestFullSession_HappyPath(t *testing.T) {
 		}))
 
 		nonce++
-		diff := signDiff(t, user, nonce, txs)
+		diff := testutil.SignDiff(t, user, nonce, txs)
 		stateRoot, err := sm.ApplyDiff(diff)
 		require.NoError(t, err, "diff %d", nonce)
 
@@ -130,7 +130,7 @@ func TestFullSession_HappyPath(t *testing.T) {
 	// Apply remaining confirms and finishes.
 	var finalTxs []*types.SubnetTx
 	for _, pc := range pendingConfirms {
-		execSig := signExecutorReceipt(t, hosts[pc.executorIdx],
+		execSig := testutil.SignExecutorReceipt(t, hosts[pc.executorIdx],
 			pc.inferenceID, []byte("prompt"), "llama", 100, 50, int64(pc.inferenceID)*1000)
 		finalTxs = append(finalTxs, txConfirm(&types.MsgConfirmStart{
 			InferenceId: pc.inferenceID,
@@ -145,13 +145,13 @@ func TestFullSession_HappyPath(t *testing.T) {
 			OutputTokens: 40,
 			ExecutorSlot: uint32(pf.executorIdx),
 		}
-		proposerSig := signProposerTx(t, hosts[pf.executorIdx], finishMsg)
+		proposerSig := testutil.SignProposerTx(t, hosts[pf.executorIdx], finishMsg)
 		finishMsg.ProposerSig = proposerSig
 		finalTxs = append(finalTxs, txFinish(finishMsg))
 	}
 
 	nonce++
-	diff := signDiff(t, user, nonce, finalTxs)
+	diff := testutil.SignDiff(t, user, nonce, finalTxs)
 	finalStateRoot, err := sm.ApplyDiff(diff)
 	require.NoError(t, err)
 

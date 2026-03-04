@@ -2,12 +2,16 @@ package protocol
 
 import (
 	"context"
+	"crypto/sha256"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 
+	"subnet"
 	"subnet/host"
+	"subnet/internal/testutil"
 	"subnet/signing"
 	"subnet/state"
 	"subnet/stub"
@@ -16,35 +20,6 @@ import (
 )
 
 // --- helpers ---
-
-func mustGenerateKey(t *testing.T) *signing.Secp256k1Signer {
-	t.Helper()
-	s, err := signing.GenerateKey()
-	require.NoError(t, err)
-	return s
-}
-
-func makeGroup(signers []*signing.Secp256k1Signer) []types.SlotAssignment {
-	group := make([]types.SlotAssignment, len(signers))
-	for i, s := range signers {
-		group[i] = types.SlotAssignment{
-			SlotID:           uint32(i),
-			ValidatorAddress: s.Address(),
-			PublicKey:        s.PublicKeyBytes(),
-			Weight:           1,
-		}
-	}
-	return group
-}
-
-func defaultConfig(numHosts int) types.SessionConfig {
-	return types.SessionConfig{
-		RefusalTimeout:   60,
-		ExecutionTimeout: 1200,
-		TokenPrice:       1,
-		VoteThreshold:    uint32(numHosts) / 2,
-	}
-}
 
 type testEnv struct {
 	session *user.Session
@@ -59,11 +34,11 @@ func setupEnv(t *testing.T, numHosts int, balance, grace uint64) *testEnv {
 	t.Helper()
 	hostSigners := make([]*signing.Secp256k1Signer, numHosts)
 	for i := range hostSigners {
-		hostSigners[i] = mustGenerateKey(t)
+		hostSigners[i] = testutil.MustGenerateKey(t)
 	}
-	userSigner := mustGenerateKey(t)
-	group := makeGroup(hostSigners)
-	config := defaultConfig(numHosts)
+	userSigner := testutil.MustGenerateKey(t)
+	group := testutil.MakeGroup(hostSigners)
+	config := testutil.DefaultConfig(numHosts)
 	verifier := signing.NewSecp256k1Verifier()
 
 	hosts := make([]*host.Host, numHosts)
@@ -213,11 +188,11 @@ func TestProtocol_SignatureWithholding(t *testing.T) {
 	// Manual protocol drive: 3 hosts, grace=2.
 	hostSigners := make([]*signing.Secp256k1Signer, 3)
 	for i := range hostSigners {
-		hostSigners[i] = mustGenerateKey(t)
+		hostSigners[i] = testutil.MustGenerateKey(t)
 	}
-	userSigner := mustGenerateKey(t)
-	group := makeGroup(hostSigners)
-	config := defaultConfig(3)
+	userSigner := testutil.MustGenerateKey(t)
+	group := testutil.MakeGroup(hostSigners)
+	config := testutil.DefaultConfig(3)
 	verifier := signing.NewSecp256k1Verifier()
 
 	// Create host at slot 1 with grace=2.
@@ -229,7 +204,7 @@ func TestProtocol_SignatureWithholding(t *testing.T) {
 	ctx := context.Background()
 
 	// Nonce 1: start inference 1, executor=slot 1.
-	diff1 := signDiff(t, userSigner, 1, []*types.SubnetTx{startTx(1)})
+	diff1 := testutil.SignDiff(t, userSigner, 1, []*types.SubnetTx{testutil.StartTx(1)})
 	resp, err := h.HandleRequest(ctx, host.HostRequest{Diffs: []types.Diff{diff1}})
 	require.NoError(t, err)
 	require.NotNil(t, resp.StateSig, "should sign at nonce 1")
@@ -242,7 +217,7 @@ func TestProtocol_SignatureWithholding(t *testing.T) {
 	// Nonce 3: 1+2=3, not < 3 -> OK
 	// Nonce 4: 1+2=3 < 4 -> stale -> withhold
 	for n := uint64(2); n <= 4; n++ {
-		diff := signDiff(t, userSigner, n, nil)
+		diff := testutil.SignDiff(t, userSigner, n, nil)
 		resp, err = h.HandleRequest(ctx, host.HostRequest{Diffs: []types.Diff{diff}})
 		require.NoError(t, err)
 		if n < 4 {
@@ -259,11 +234,11 @@ func TestProtocol_SignatureWithholding(t *testing.T) {
 func TestProtocol_SignatureResumesAfterInclusion(t *testing.T) {
 	hostSigners := make([]*signing.Secp256k1Signer, 3)
 	for i := range hostSigners {
-		hostSigners[i] = mustGenerateKey(t)
+		hostSigners[i] = testutil.MustGenerateKey(t)
 	}
-	userSigner := mustGenerateKey(t)
-	group := makeGroup(hostSigners)
-	config := defaultConfig(3)
+	userSigner := testutil.MustGenerateKey(t)
+	group := testutil.MakeGroup(hostSigners)
+	config := testutil.DefaultConfig(3)
 	verifier := signing.NewSecp256k1Verifier()
 
 	sm := state.NewStateMachine("escrow-1", config, group, 100000, userSigner.Address(), verifier)
@@ -274,7 +249,7 @@ func TestProtocol_SignatureResumesAfterInclusion(t *testing.T) {
 	ctx := context.Background()
 
 	// Nonce 1: start inference 1.
-	diff1 := signDiff(t, userSigner, 1, []*types.SubnetTx{startTx(1)})
+	diff1 := testutil.SignDiff(t, userSigner, 1, []*types.SubnetTx{testutil.StartTx(1)})
 	resp, err := h.HandleRequest(ctx, host.HostRequest{Diffs: []types.Diff{diff1}})
 	require.NoError(t, err)
 	finishTx := resp.Mempool[0]
@@ -289,18 +264,18 @@ func TestProtocol_SignatureResumesAfterInclusion(t *testing.T) {
 	confirmTx := &types.SubnetTx{Tx: &types.SubnetTx_ConfirmStart{ConfirmStart: &types.MsgConfirmStart{
 		InferenceId: 1, ExecutorSig: receiptSig,
 	}}}
-	diff2 := signDiff(t, userSigner, 2, []*types.SubnetTx{confirmTx})
+	diff2 := testutil.SignDiff(t, userSigner, 2, []*types.SubnetTx{confirmTx})
 
 	// Nonces 3,4: empty (push past grace).
-	diff3 := signDiff(t, userSigner, 3, nil)
-	diff4 := signDiff(t, userSigner, 4, nil)
+	diff3 := testutil.SignDiff(t, userSigner, 3, nil)
+	diff4 := testutil.SignDiff(t, userSigner, 4, nil)
 
 	resp, err = h.HandleRequest(ctx, host.HostRequest{Diffs: []types.Diff{diff2, diff3, diff4}})
 	require.NoError(t, err)
 	require.Nil(t, resp.StateSig, "should withhold (stale)")
 
 	// Nonce 5: include the finish tx -> mempool cleared.
-	diff5 := signDiff(t, userSigner, 5, []*types.SubnetTx{finishTx})
+	diff5 := testutil.SignDiff(t, userSigner, 5, []*types.SubnetTx{finishTx})
 	resp, err = h.HandleRequest(ctx, host.HostRequest{Diffs: []types.Diff{diff5}})
 	require.NoError(t, err)
 	require.NotNil(t, resp.StateSig, "should resume signing after inclusion")
@@ -332,25 +307,294 @@ func TestProtocol_ExecutorAssignment(t *testing.T) {
 	}
 }
 
-// --- helpers for manual protocol driving ---
-
-func signDiff(t *testing.T, signer signing.Signer, nonce uint64, txs []*types.SubnetTx) types.Diff {
+func setupEnvWithEngines(t *testing.T, numHosts int, balance, grace uint64, engines []subnet.InferenceEngine) *testEnv {
 	t.Helper()
-	content := state.BuildDiffContent(nonce, txs)
-	data, err := proto.Marshal(content)
+	hostSigners := make([]*signing.Secp256k1Signer, numHosts)
+	for i := range hostSigners {
+		hostSigners[i] = testutil.MustGenerateKey(t)
+	}
+	userSigner := testutil.MustGenerateKey(t)
+	group := testutil.MakeGroup(hostSigners)
+	config := testutil.DefaultConfig(numHosts)
+	verifier := signing.NewSecp256k1Verifier()
+
+	hosts := make([]*host.Host, numHosts)
+	clients := make([]user.HostClient, numHosts)
+	for i := range hostSigners {
+		sm := state.NewStateMachine("escrow-1", config, group, balance, userSigner.Address(), verifier)
+		h, err := host.NewHost(sm, hostSigners[i], engines[i], "escrow-1", group, grace, nil)
+		require.NoError(t, err)
+		hosts[i] = h
+		clients[i] = &user.InProcessClient{Host: h}
+	}
+
+	userSM := state.NewStateMachine("escrow-1", config, group, balance, userSigner.Address(), verifier)
+	session, err := user.NewSession(userSM, userSigner, "escrow-1", group, clients)
 	require.NoError(t, err)
-	sig, err := signer.Sign(data)
-	require.NoError(t, err)
-	return types.Diff{Nonce: nonce, Txs: txs, UserSig: sig}
+
+	return &testEnv{
+		session: session,
+		hosts:   hosts,
+		signers: hostSigners,
+		user:    userSigner,
+		group:   group,
+		config:  config,
+	}
 }
 
-func startTx(inferenceID uint64) *types.SubnetTx {
-	return &types.SubnetTx{Tx: &types.SubnetTx_StartInference{StartInference: &types.MsgStartInference{
-		InferenceId: inferenceID,
-		PromptHash:  []byte("prompt"),
-		Model:       "llama",
-		InputLength: 100,
-		MaxTokens:   50,
-		StartedAt:   1000,
-	}}}
+// --- New tests ---
+
+func TestProtocol_StateSignatureContent(t *testing.T) {
+	env := setupEnv(t, 3, 100000, 100)
+	ctx := context.Background()
+	params := defaultParams()
+	verifier := signing.NewSecp256k1Verifier()
+
+	for i := 0; i < 3; i++ {
+		_, err := env.session.SendInference(ctx, params)
+		require.NoError(t, err)
+	}
+
+	// Replay diffs through a fresh StateMachine to get state roots at each nonce.
+	replaySM := state.NewStateMachine("escrow-1", env.config, env.group, 100000, env.user.Address(), verifier)
+	roots := make(map[uint64][]byte)
+	for _, diff := range env.session.Diffs() {
+		root, err := replaySM.ApplyDiff(diff)
+		require.NoError(t, err)
+		roots[diff.Nonce] = root
+	}
+
+	// For each collected signature, verify it was signed over StateSignatureContent.
+	sigs := env.session.Signatures()
+	for nonce, slotSigs := range sigs {
+		root, ok := roots[nonce]
+		require.True(t, ok, "must have root for nonce %d", nonce)
+		for slotID, sig := range slotSigs {
+			sigContent := &types.StateSignatureContent{
+				StateRoot: root,
+				EscrowId:  "escrow-1",
+				Nonce:     nonce,
+			}
+			sigData, err := proto.Marshal(sigContent)
+			require.NoError(t, err)
+			addr, err := verifier.RecoverAddress(sigData, sig)
+			require.NoError(t, err)
+			require.Equal(t, env.group[slotID].ValidatorAddress, addr,
+				"nonce %d slot %d: signature must recover to correct host", nonce, slotID)
+		}
+	}
+}
+
+func TestProtocol_StateConvergence(t *testing.T) {
+	env := setupEnv(t, 5, 1000000, 100)
+	ctx := context.Background()
+	params := defaultParams()
+
+	for i := 0; i < 10; i++ {
+		_, err := env.session.SendInference(ctx, params)
+		require.NoError(t, err)
+	}
+
+	// Send full catch-up diffs to every host.
+	allDiffs := env.session.Diffs()
+	var hostRoots [][]byte
+	for i, h := range env.hosts {
+		resp, err := h.HandleRequest(ctx, host.HostRequest{Diffs: allDiffs})
+		require.NoError(t, err, "host %d", i)
+		require.NotNil(t, resp)
+
+		root, err := h.StateRoot()
+		require.NoError(t, err, "host %d StateRoot", i)
+		hostRoots = append(hostRoots, root)
+	}
+
+	// All hosts should have the same state root.
+	for i := 1; i < len(hostRoots); i++ {
+		require.Equal(t, hostRoots[0], hostRoots[i],
+			"host %d root differs from host 0", i)
+	}
+}
+
+func TestProtocol_Timeout_UserSide(t *testing.T) {
+	// Manual protocol drive: 5 hosts. Start inference, compose timeout.
+	hostSigners := make([]*signing.Secp256k1Signer, 5)
+	for i := range hostSigners {
+		hostSigners[i] = testutil.MustGenerateKey(t)
+	}
+	userSigner := testutil.MustGenerateKey(t)
+	group := testutil.MakeGroup(hostSigners)
+	config := testutil.DefaultConfig(5)
+	verifier := signing.NewSecp256k1Verifier()
+
+	// Create all hosts.
+	hosts := make([]*host.Host, 5)
+	for i := range hosts {
+		sm := state.NewStateMachine("escrow-1", config, group, 100000, userSigner.Address(), verifier)
+		engine := stub.NewInferenceEngine()
+		h, err := host.NewHost(sm, hostSigners[i], engine, "escrow-1", group, 100, nil)
+		require.NoError(t, err)
+		hosts[i] = h
+	}
+
+	ctx := context.Background()
+
+	// Nonce 1: start inference 1. Executor = slot 1%5 = 1.
+	diff1 := testutil.SignDiff(t, userSigner, 1, []*types.SubnetTx{testutil.StartTx(1)})
+	// Send to host 1 (round-robin: nonce 1 % 5 = 1).
+	resp, err := hosts[1].HandleRequest(ctx, host.HostRequest{Diffs: []types.Diff{diff1}})
+	require.NoError(t, err)
+	require.NotNil(t, resp.Receipt)
+
+	// Compose timeout: collect votes from non-executor hosts (slots 0, 2, 3).
+	var votes []*types.TimeoutVote
+	for _, slot := range []uint32{0, 2, 3} {
+		v := testutil.SignTimeoutVote(t, hostSigners[slot], "escrow-1", 1, types.TimeoutReason_TIMEOUT_REASON_REFUSED, true)
+		v.VoterSlot = slot
+		votes = append(votes, v)
+	}
+
+	diff2 := testutil.SignDiff(t, userSigner, 2, []*types.SubnetTx{
+		{Tx: &types.SubnetTx_TimeoutInference{TimeoutInference: &types.MsgTimeoutInference{
+			InferenceId: 1,
+			Reason:      types.TimeoutReason_TIMEOUT_REASON_REFUSED,
+			Votes:       votes,
+		}}},
+	})
+
+	// Apply timeout to host 2.
+	resp, err = hosts[2].HandleRequest(ctx, host.HostRequest{Diffs: []types.Diff{diff1, diff2}})
+	require.NoError(t, err)
+
+	// Verify via a fresh state machine.
+	sm := state.NewStateMachine("escrow-1", config, group, 100000, userSigner.Address(), verifier)
+	_, err = sm.ApplyDiff(diff1)
+	require.NoError(t, err)
+	_, err = sm.ApplyDiff(diff2)
+	require.NoError(t, err)
+
+	st := sm.GetState()
+	require.Equal(t, types.StatusTimedOut, st.Inferences[1].Status)
+	require.Equal(t, uint32(1), st.HostStats[1].Missed)
+	require.Equal(t, uint64(100000), st.Balance, "balance should be fully restored")
+}
+
+func TestProtocol_Finalize_AllInferencesFinished(t *testing.T) {
+	env := setupEnv(t, 5, 1000000, 100)
+	ctx := context.Background()
+	params := defaultParams()
+
+	for i := 0; i < 15; i++ {
+		_, err := env.session.SendInference(ctx, params)
+		require.NoError(t, err)
+	}
+
+	err := env.session.Finalize(ctx)
+	require.NoError(t, err)
+
+	// ALL 15 must be finished (not just >= 13 as in the non-finalized case).
+	st := env.session.StateMachine().GetState()
+	require.True(t, st.Finalizing)
+	for id, rec := range st.Inferences {
+		require.Equal(t, types.StatusFinished, rec.Status, "inference %d should be finished", id)
+	}
+}
+
+func TestProtocol_VaryingInferenceCosts(t *testing.T) {
+	defaultHash := sha256.Sum256([]byte("stub"))
+	defaultResult := subnet.ExecuteResult{
+		ResponseHash: defaultHash[:],
+		InputTokens:  80,
+		OutputTokens: 40,
+	}
+
+	// 6 inferences with different engine outputs.
+	overrides := map[uint64]subnet.ExecuteResult{
+		1: {ResponseHash: defaultHash[:], InputTokens: 50, OutputTokens: 20},
+		2: {ResponseHash: defaultHash[:], InputTokens: 90, OutputTokens: 45},
+		3: {ResponseHash: defaultHash[:], InputTokens: 30, OutputTokens: 10},
+		4: {ResponseHash: defaultHash[:], InputTokens: 100, OutputTokens: 50},
+		5: {ResponseHash: defaultHash[:], InputTokens: 60, OutputTokens: 30},
+		6: {ResponseHash: defaultHash[:], InputTokens: 40, OutputTokens: 15},
+	}
+
+	// All 3 hosts share the same configurable engine.
+	engines := make([]subnet.InferenceEngine, 3)
+	for i := range engines {
+		engines[i] = &stub.ConfigurableEngine{
+			Default:  defaultResult,
+			Override: overrides,
+		}
+	}
+
+	env := setupEnvWithEngines(t, 3, 1000000, 100, engines)
+	ctx := context.Background()
+
+	// Send 6 inferences with different params.
+	paramsList := []user.InferenceParams{
+		{Model: "llama", PromptHash: []byte("p1"), InputLength: 100, MaxTokens: 50, StartedAt: 1000},
+		{Model: "llama", PromptHash: []byte("p2"), InputLength: 200, MaxTokens: 100, StartedAt: 2000},
+		{Model: "llama", PromptHash: []byte("p3"), InputLength: 50, MaxTokens: 25, StartedAt: 3000},
+		{Model: "llama", PromptHash: []byte("p4"), InputLength: 150, MaxTokens: 75, StartedAt: 4000},
+		{Model: "llama", PromptHash: []byte("p5"), InputLength: 80, MaxTokens: 40, StartedAt: 5000},
+		{Model: "llama", PromptHash: []byte("p6"), InputLength: 60, MaxTokens: 30, StartedAt: 6000},
+	}
+
+	for _, p := range paramsList {
+		_, err := env.session.SendInference(ctx, p)
+		require.NoError(t, err)
+	}
+
+	// Finalize to ensure all inferences complete.
+	err := env.session.Finalize(ctx)
+	require.NoError(t, err)
+
+	st := env.session.StateMachine().GetState()
+
+	// Compute expected cumulative cost (token_price=1).
+	expectedTotal := uint64(0)
+	for id := uint64(1); id <= 6; id++ {
+		o := overrides[id]
+		expectedTotal += o.InputTokens + o.OutputTokens
+	}
+
+	// Verify balance = initial - sum(actual_costs).
+	require.Equal(t, uint64(1000000)-expectedTotal, st.Balance)
+
+	// Verify per-host cost stats.
+	totalHostCost := uint64(0)
+	for _, hs := range st.HostStats {
+		totalHostCost += hs.Cost
+	}
+	require.Equal(t, expectedTotal, totalHostCost)
+
+	// Verify individual inference costs.
+	for id := uint64(1); id <= 6; id++ {
+		rec := st.Inferences[id]
+		require.Equal(t, types.StatusFinished, rec.Status, "inference %d", id)
+		o := overrides[id]
+		require.Equal(t, o.InputTokens+o.OutputTokens, rec.ActualCost, "inference %d cost", id)
+	}
+}
+
+func TestProtocol_SignatureThreshold(t *testing.T) {
+	env := setupEnv(t, 5, 1000000, 100)
+	ctx := context.Background()
+	params := defaultParams()
+
+	for i := 0; i < 15; i++ {
+		_, err := env.session.SendInference(ctx, params)
+		require.NoError(t, err)
+	}
+
+	sigs := env.session.Signatures()
+
+	// Current limitation: each round-robin host signs once per nonce it sees.
+	// Verify we collected exactly 1 signature per nonce.
+	for nonce, slotSigs := range sigs {
+		require.Len(t, slotSigs, 1,
+			"nonce %d: expected 1 signature (current limitation), got %d", nonce, len(slotSigs))
+	}
+
+	// TODO: Phase 3 adds BroadcastDiff for 2/3+ collection at single nonce.
+	_ = fmt.Sprintf("collected sigs for %d nonces", len(sigs))
 }

@@ -200,6 +200,136 @@ func (s *Session) SendInference(ctx context.Context, params InferenceParams) (*I
 	}, nil
 }
 
+// Finalize sends MsgFinalizeRound, then propagates remaining txs until
+// all hosts have the complete state and have signed it.
+//
+// Phase A: collect remaining txs. Round-robin through hosts, sending pending
+// txs. Hosts return mempool entries (MsgFinishInference) that haven't been
+// seen yet. Ends when a full pass produces no new pending txs.
+//
+// Phase B: propagate complete state. One final round-robin pass where every
+// host has the complete state. Collects final signatures.
+func (s *Session) Finalize(ctx context.Context) error {
+	// Compose the finalize diff.
+	nonce := s.nonce + 1
+	hostIdx := int(nonce % uint64(len(s.group)))
+
+	var txs []*types.SubnetTx
+	txs = append(txs, s.pendingTxs...)
+	txs = append(txs, &types.SubnetTx{Tx: &types.SubnetTx_FinalizeRound{
+		FinalizeRound: &types.MsgFinalizeRound{},
+	}})
+
+	content := state.BuildDiffContent(nonce, txs)
+	data, err := proto.Marshal(content)
+	if err != nil {
+		return fmt.Errorf("marshal diff content: %w", err)
+	}
+	sig, err := s.signer.Sign(data)
+	if err != nil {
+		return fmt.Errorf("sign diff: %w", err)
+	}
+
+	diff := types.Diff{Nonce: nonce, Txs: txs, UserSig: sig}
+	if _, err := s.sm.ApplyDiff(diff); err != nil {
+		return fmt.Errorf("local apply finalize: %w", err)
+	}
+	s.diffs = append(s.diffs, diff)
+	s.nonce = nonce
+	s.pendingTxs = nil
+
+	// Send to target host.
+	catchUp := s.DiffsForHost(hostIdx)
+	resp, err := s.clients[hostIdx].Send(ctx, host.HostRequest{Diffs: catchUp})
+	if err != nil {
+		return fmt.Errorf("send finalize to host %d: %w", hostIdx, err)
+	}
+	if err := s.ProcessResponse(hostIdx, resp); err != nil {
+		return fmt.Errorf("process finalize response from host %d: %w", hostIdx, err)
+	}
+
+	// Phase A: collect remaining txs via round-robin until no new txs.
+	for {
+		newTxs := false
+		for i := 0; i < len(s.group); i++ {
+			if len(s.pendingTxs) == 0 && i > 0 {
+				// No pending txs and we've sent to at least one host this pass.
+				continue
+			}
+			if len(s.pendingTxs) > 0 {
+				newTxs = true
+			}
+
+			nonce = s.nonce + 1
+			hostIdx = int(nonce % uint64(len(s.group)))
+
+			content = state.BuildDiffContent(nonce, s.pendingTxs)
+			data, err = proto.Marshal(content)
+			if err != nil {
+				return fmt.Errorf("marshal diff content: %w", err)
+			}
+			sig, err = s.signer.Sign(data)
+			if err != nil {
+				return fmt.Errorf("sign diff: %w", err)
+			}
+
+			diff = types.Diff{Nonce: nonce, Txs: s.pendingTxs, UserSig: sig}
+			if _, err := s.sm.ApplyDiff(diff); err != nil {
+				return fmt.Errorf("local apply: %w", err)
+			}
+			s.diffs = append(s.diffs, diff)
+			s.nonce = nonce
+			s.pendingTxs = nil
+
+			catchUp = s.DiffsForHost(hostIdx)
+			resp, err = s.clients[hostIdx].Send(ctx, host.HostRequest{Diffs: catchUp})
+			if err != nil {
+				return fmt.Errorf("send to host %d: %w", hostIdx, err)
+			}
+			if err := s.ProcessResponse(hostIdx, resp); err != nil {
+				return fmt.Errorf("process response from host %d: %w", hostIdx, err)
+			}
+		}
+		if !newTxs && len(s.pendingTxs) == 0 {
+			break
+		}
+	}
+
+	// Phase B: one final pass to propagate complete state + collect signatures.
+	for i := 0; i < len(s.group); i++ {
+		nonce = s.nonce + 1
+		hostIdx = int(nonce % uint64(len(s.group)))
+
+		content = state.BuildDiffContent(nonce, nil)
+		data, err = proto.Marshal(content)
+		if err != nil {
+			return fmt.Errorf("marshal diff content: %w", err)
+		}
+		sig, err = s.signer.Sign(data)
+		if err != nil {
+			return fmt.Errorf("sign diff: %w", err)
+		}
+
+		diff = types.Diff{Nonce: nonce, Txs: nil, UserSig: sig}
+		if _, err := s.sm.ApplyDiff(diff); err != nil {
+			return fmt.Errorf("local apply: %w", err)
+		}
+		s.diffs = append(s.diffs, diff)
+		s.nonce = nonce
+
+		catchUp = s.DiffsForHost(hostIdx)
+		resp, err = s.clients[hostIdx].Send(ctx, host.HostRequest{Diffs: catchUp})
+		if err != nil {
+			return fmt.Errorf("send to host %d: %w", hostIdx, err)
+		}
+		if err := s.ProcessResponse(hostIdx, resp); err != nil {
+			return fmt.Errorf("process response from host %d: %w", hostIdx, err)
+		}
+	}
+
+	return nil
+}
+
 func (s *Session) Signatures() map[uint64]map[uint32][]byte {
 	return s.signatures
 }

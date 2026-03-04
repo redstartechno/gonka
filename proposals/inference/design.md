@@ -872,6 +872,13 @@ func Mount(group *echo.Group, engine InferenceEngine, validator ValidationEngine
 The dapi server startup wires the adapters and mounts the group at `/subnet/v1/`. The subnet handler receives user requests with diffs, applies them to subnet state, calls `InferenceEngine.Execute()`, creates MsgFinishInference for subnet state, signs the new state, returns signature + streaming response.
 
 
+## Attack Vectors
+
+Documented in `subnet/docs/attacks.md`. Each attack gets one section:
+header names the attack, body lists mitigations as a numbered list.
+Add new entries there when identifying new vectors.
+
+
 ## Open Questions
 
 1. Re-propagation timeout: 120s is a starting point. Should it scale with model latency or be fixed?

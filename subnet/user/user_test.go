@@ -2,63 +2,46 @@ package user
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
+	"subnet"
 	"subnet/host"
+	"subnet/internal/testutil"
 	"subnet/signing"
 	"subnet/state"
 	"subnet/stub"
 	"subnet/types"
 )
 
-func mustGenerateKey(t *testing.T) *signing.Secp256k1Signer {
-	t.Helper()
-	s, err := signing.GenerateKey()
-	require.NoError(t, err)
-	return s
-}
-
-func makeGroup(signers []*signing.Secp256k1Signer) []types.SlotAssignment {
-	group := make([]types.SlotAssignment, len(signers))
-	for i, s := range signers {
-		group[i] = types.SlotAssignment{
-			SlotID:           uint32(i),
-			ValidatorAddress: s.Address(),
-			PublicKey:        s.PublicKeyBytes(),
-			Weight:           1,
-		}
-	}
-	return group
-}
-
-func defaultConfig() types.SessionConfig {
-	return types.SessionConfig{
-		RefusalTimeout:   60,
-		ExecutionTimeout: 1200,
-		TokenPrice:       1,
-		VoteThreshold:    0,
-	}
-}
-
 func setupSession(t *testing.T, numHosts int, balance uint64, grace uint64) (*Session, []*signing.Secp256k1Signer, *signing.Secp256k1Signer) {
+	t.Helper()
+	return setupSessionWithEngine(t, numHosts, balance, grace, nil)
+}
+
+func setupSessionWithEngine(t *testing.T, numHosts int, balance uint64, grace uint64, engines []subnet.InferenceEngine) (*Session, []*signing.Secp256k1Signer, *signing.Secp256k1Signer) {
 	t.Helper()
 	hosts := make([]*signing.Secp256k1Signer, numHosts)
 	for i := range hosts {
-		hosts[i] = mustGenerateKey(t)
+		hosts[i] = testutil.MustGenerateKey(t)
 	}
-	user := mustGenerateKey(t)
-	group := makeGroup(hosts)
-	config := defaultConfig()
-	config.VoteThreshold = uint32(numHosts) / 2
+	user := testutil.MustGenerateKey(t)
+	group := testutil.MakeGroup(hosts)
+	config := testutil.DefaultConfig(numHosts)
 	verifier := signing.NewSecp256k1Verifier()
 
 	// Create hosts.
 	clients := make([]HostClient, numHosts)
 	for i := range hosts {
 		sm := state.NewStateMachine("escrow-1", config, group, balance, user.Address(), verifier)
-		engine := stub.NewInferenceEngine()
+		var engine subnet.InferenceEngine
+		if engines != nil {
+			engine = engines[i]
+		} else {
+			engine = stub.NewInferenceEngine()
+		}
 		h, err := host.NewHost(sm, hosts[i], engine, "escrow-1", group, grace, nil)
 		require.NoError(t, err)
 		clients[i] = &InProcessClient{Host: h}
@@ -146,4 +129,86 @@ func TestUser_CollectsSignatures(t *testing.T) {
 	nonce1Sigs, ok := sigs[1]
 	require.True(t, ok, "should have sigs for nonce 1")
 	require.NotNil(t, nonce1Sigs[1], "slot 1 should have signed")
+}
+
+// ErrorClient always returns an error.
+type ErrorClient struct {
+	Err error
+}
+
+func (c *ErrorClient) Send(_ context.Context, _ host.HostRequest) (*host.HostResponse, error) {
+	return nil, c.Err
+}
+
+func TestUser_HostError_StateConsistency(t *testing.T) {
+	numHosts := 3
+	hosts := make([]*signing.Secp256k1Signer, numHosts)
+	for i := range hosts {
+		hosts[i] = testutil.MustGenerateKey(t)
+	}
+	userKey := testutil.MustGenerateKey(t)
+	group := testutil.MakeGroup(hosts)
+	config := testutil.DefaultConfig(numHosts)
+	verifier := signing.NewSecp256k1Verifier()
+
+	// Create real hosts for slots 0 and 2, error client for slot 1.
+	clients := make([]HostClient, numHosts)
+	for i := range hosts {
+		if i == 1 {
+			clients[i] = &ErrorClient{Err: fmt.Errorf("host unavailable")}
+			continue
+		}
+		sm := state.NewStateMachine("escrow-1", config, group, 100000, userKey.Address(), verifier)
+		engine := stub.NewInferenceEngine()
+		h, err := host.NewHost(sm, hosts[i], engine, "escrow-1", group, 100, nil)
+		require.NoError(t, err)
+		clients[i] = &InProcessClient{Host: h}
+	}
+
+	userSM := state.NewStateMachine("escrow-1", config, group, 100000, userKey.Address(), verifier)
+	session, err := NewSession(userSM, userKey, "escrow-1", group, clients)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	params := InferenceParams{
+		Model: "llama", PromptHash: []byte("prompt"),
+		InputLength: 100, MaxTokens: 50, StartedAt: 1000,
+	}
+
+	// Nonce 1 -> host 1 (error client). Should fail.
+	_, err = session.SendInference(ctx, params)
+	require.Error(t, err, "send to error host should fail")
+
+	// User's local state should have advanced (diff was applied locally before send).
+	require.Equal(t, uint64(1), session.Nonce(), "nonce should have advanced")
+	require.Len(t, session.Diffs(), 1, "diff should be recorded")
+
+	// Next inference (nonce 2) -> host 2 (working). Should succeed with catch-up.
+	result, err := session.SendInference(ctx, params)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, uint64(2), session.Nonce())
+}
+
+func TestUser_Finalize(t *testing.T) {
+	session, _, _ := setupSession(t, 3, 100000, 100)
+	ctx := context.Background()
+	params := InferenceParams{
+		Model: "llama", PromptHash: []byte("prompt"),
+		InputLength: 100, MaxTokens: 50, StartedAt: 1000,
+	}
+
+	for i := 0; i < 3; i++ {
+		_, err := session.SendInference(ctx, params)
+		require.NoError(t, err)
+	}
+
+	err := session.Finalize(ctx)
+	require.NoError(t, err)
+
+	st := session.StateMachine().GetState()
+	require.True(t, st.Finalizing)
+	for id, rec := range st.Inferences {
+		require.Equal(t, types.StatusFinished, rec.Status, "inference %d should be finished", id)
+	}
 }

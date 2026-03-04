@@ -78,6 +78,8 @@ func NewHost(
 	}, nil
 }
 
+func (h *Host) StateRoot() ([]byte, error) { return h.sm.ComputeStateRoot() }
+
 func (h *Host) HandleRequest(ctx context.Context, req HostRequest) (*HostResponse, error) {
 	var receipt []byte
 
@@ -179,7 +181,16 @@ func (h *Host) HandleRequest(ctx context.Context, req HostRequest) (*HostRespons
 		if err != nil {
 			return nil, fmt.Errorf("compute state root: %w", err)
 		}
-		sig, err := h.signer.Sign(root)
+		sigContent := &types.StateSignatureContent{
+			StateRoot: root,
+			EscrowId:  h.escrowID,
+			Nonce:     nonce,
+		}
+		sigData, err := proto.Marshal(sigContent)
+		if err != nil {
+			return nil, fmt.Errorf("marshal state sig content: %w", err)
+		}
+		sig, err := h.signer.Sign(sigData)
 		if err != nil {
 			return nil, fmt.Errorf("sign state root: %w", err)
 		}

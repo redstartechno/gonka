@@ -8,52 +8,14 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 
+	"subnet/internal/testutil"
 	"subnet/signing"
 	"subnet/state"
 	"subnet/stub"
 	"subnet/types"
 )
 
-// --- Test helpers (mirrors state/machine_test.go patterns) ---
-
-func mustGenerateKey(t *testing.T) *signing.Secp256k1Signer {
-	t.Helper()
-	s, err := signing.GenerateKey()
-	require.NoError(t, err)
-	return s
-}
-
-func makeGroup(signers []*signing.Secp256k1Signer) []types.SlotAssignment {
-	group := make([]types.SlotAssignment, len(signers))
-	for i, s := range signers {
-		group[i] = types.SlotAssignment{
-			SlotID:           uint32(i),
-			ValidatorAddress: s.Address(),
-			PublicKey:        s.PublicKeyBytes(),
-			Weight:           1,
-		}
-	}
-	return group
-}
-
-func defaultConfig() types.SessionConfig {
-	return types.SessionConfig{
-		RefusalTimeout:   60,
-		ExecutionTimeout: 1200,
-		TokenPrice:       1,
-		VoteThreshold:    0,
-	}
-}
-
-func signDiff(t *testing.T, signer signing.Signer, nonce uint64, txs []*types.SubnetTx) types.Diff {
-	t.Helper()
-	content := state.BuildDiffContent(nonce, txs)
-	data, err := proto.Marshal(content)
-	require.NoError(t, err)
-	sig, err := signer.Sign(data)
-	require.NoError(t, err)
-	return types.Diff{Nonce: nonce, Txs: txs, UserSig: sig}
-}
+// --- Package-specific test helpers ---
 
 func newTestHost(t *testing.T, hostIdx int, hosts []*signing.Secp256k1Signer, user *signing.Secp256k1Signer, balance uint64, grace uint64) *Host {
 	t.Helper()
@@ -62,9 +24,8 @@ func newTestHost(t *testing.T, hostIdx int, hosts []*signing.Secp256k1Signer, us
 
 func newTestHostWithChecker(t *testing.T, hostIdx int, hosts []*signing.Secp256k1Signer, user *signing.Secp256k1Signer, balance uint64, grace uint64, checker AcceptanceChecker) *Host {
 	t.Helper()
-	group := makeGroup(hosts)
-	config := defaultConfig()
-	config.VoteThreshold = uint32(len(hosts)) / 2
+	group := testutil.MakeGroup(hosts)
+	config := testutil.DefaultConfig(len(hosts))
 	verifier := signing.NewSecp256k1Verifier()
 	sm := state.NewStateMachine("escrow-1", config, group, balance, user.Address(), verifier)
 	engine := stub.NewInferenceEngine()
@@ -73,63 +34,59 @@ func newTestHostWithChecker(t *testing.T, hostIdx int, hosts []*signing.Secp256k
 	return h
 }
 
-func startInferenceTx(inferenceID uint64) *types.SubnetTx {
-	return &types.SubnetTx{Tx: &types.SubnetTx_StartInference{StartInference: &types.MsgStartInference{
-		InferenceId: inferenceID,
-		PromptHash:  []byte("prompt"),
-		Model:       "llama",
-		InputLength: 100,
-		MaxTokens:   50,
-		StartedAt:   1000,
-	}}}
-}
-
 // --- Tests ---
 
 func TestHost_AppliesDiffs(t *testing.T) {
-	hosts := []*signing.Secp256k1Signer{mustGenerateKey(t), mustGenerateKey(t), mustGenerateKey(t)}
-	user := mustGenerateKey(t)
+	hosts := []*signing.Secp256k1Signer{testutil.MustGenerateKey(t), testutil.MustGenerateKey(t), testutil.MustGenerateKey(t)}
+	user := testutil.MustGenerateKey(t)
 	h := newTestHost(t, 0, hosts, user, 10000, 10)
 
-	diff := signDiff(t, user, 1, []*types.SubnetTx{startInferenceTx(1)})
+	diff := testutil.SignDiff(t, user, 1, []*types.SubnetTx{testutil.StartTx(1)})
 	resp, err := h.HandleRequest(context.Background(), HostRequest{Diffs: []types.Diff{diff}})
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), resp.Nonce)
 }
 
 func TestHost_SignsState(t *testing.T) {
-	hosts := []*signing.Secp256k1Signer{mustGenerateKey(t), mustGenerateKey(t), mustGenerateKey(t)}
-	user := mustGenerateKey(t)
+	hosts := []*signing.Secp256k1Signer{testutil.MustGenerateKey(t), testutil.MustGenerateKey(t), testutil.MustGenerateKey(t)}
+	user := testutil.MustGenerateKey(t)
 	h := newTestHost(t, 0, hosts, user, 10000, 10)
 
-	diff := signDiff(t, user, 1, []*types.SubnetTx{startInferenceTx(1)})
+	diff := testutil.SignDiff(t, user, 1, []*types.SubnetTx{testutil.StartTx(1)})
 	resp, err := h.HandleRequest(context.Background(), HostRequest{Diffs: []types.Diff{diff}})
 	require.NoError(t, err)
 	require.NotNil(t, resp.StateSig)
 
-	// Verify the signature recovers to host[0]'s address.
+	// Verify the signature recovers to host[0]'s address against StateSignatureContent.
 	verifier := signing.NewSecp256k1Verifier()
-	group := makeGroup(hosts)
-	config := defaultConfig()
-	config.VoteThreshold = uint32(len(hosts)) / 2
+	group := testutil.MakeGroup(hosts)
+	config := testutil.DefaultConfig(len(hosts))
 	sm2 := state.NewStateMachine("escrow-1", config, group, 10000, user.Address(), verifier)
 	_, err = sm2.ApplyDiff(diff)
 	require.NoError(t, err)
 	root, err := sm2.ComputeStateRoot()
 	require.NoError(t, err)
 
-	addr, err := verifier.RecoverAddress(root, resp.StateSig)
+	sigContent := &types.StateSignatureContent{
+		StateRoot: root,
+		EscrowId:  "escrow-1",
+		Nonce:     1,
+	}
+	sigData, err := proto.Marshal(sigContent)
+	require.NoError(t, err)
+
+	addr, err := verifier.RecoverAddress(sigData, resp.StateSig)
 	require.NoError(t, err)
 	require.Equal(t, hosts[0].Address(), addr)
 }
 
 func TestHost_ExecutorReceipt(t *testing.T) {
 	// 3 hosts. Inference 1: executor = group[1%3] = slot 1.
-	hosts := []*signing.Secp256k1Signer{mustGenerateKey(t), mustGenerateKey(t), mustGenerateKey(t)}
-	user := mustGenerateKey(t)
+	hosts := []*signing.Secp256k1Signer{testutil.MustGenerateKey(t), testutil.MustGenerateKey(t), testutil.MustGenerateKey(t)}
+	user := testutil.MustGenerateKey(t)
 	h := newTestHost(t, 1, hosts, user, 10000, 10) // host at slot 1
 
-	diff := signDiff(t, user, 1, []*types.SubnetTx{startInferenceTx(1)})
+	diff := testutil.SignDiff(t, user, 1, []*types.SubnetTx{testutil.StartTx(1)})
 	resp, err := h.HandleRequest(context.Background(), HostRequest{Diffs: []types.Diff{diff}})
 	require.NoError(t, err)
 	require.NotNil(t, resp.Receipt, "executor should return receipt")
@@ -153,22 +110,22 @@ func TestHost_ExecutorReceipt(t *testing.T) {
 
 func TestHost_NonExecutorNoReceipt(t *testing.T) {
 	// 3 hosts. Inference 1: executor = slot 1. Host 0 is NOT executor.
-	hosts := []*signing.Secp256k1Signer{mustGenerateKey(t), mustGenerateKey(t), mustGenerateKey(t)}
-	user := mustGenerateKey(t)
+	hosts := []*signing.Secp256k1Signer{testutil.MustGenerateKey(t), testutil.MustGenerateKey(t), testutil.MustGenerateKey(t)}
+	user := testutil.MustGenerateKey(t)
 	h := newTestHost(t, 0, hosts, user, 10000, 10) // host at slot 0
 
-	diff := signDiff(t, user, 1, []*types.SubnetTx{startInferenceTx(1)})
+	diff := testutil.SignDiff(t, user, 1, []*types.SubnetTx{testutil.StartTx(1)})
 	resp, err := h.HandleRequest(context.Background(), HostRequest{Diffs: []types.Diff{diff}})
 	require.NoError(t, err)
 	require.Nil(t, resp.Receipt, "non-executor should not return receipt")
 }
 
 func TestHost_ProducesMsgFinish(t *testing.T) {
-	hosts := []*signing.Secp256k1Signer{mustGenerateKey(t), mustGenerateKey(t), mustGenerateKey(t)}
-	user := mustGenerateKey(t)
+	hosts := []*signing.Secp256k1Signer{testutil.MustGenerateKey(t), testutil.MustGenerateKey(t), testutil.MustGenerateKey(t)}
+	user := testutil.MustGenerateKey(t)
 	h := newTestHost(t, 1, hosts, user, 10000, 10) // executor for inference 1
 
-	diff := signDiff(t, user, 1, []*types.SubnetTx{startInferenceTx(1)})
+	diff := testutil.SignDiff(t, user, 1, []*types.SubnetTx{testutil.StartTx(1)})
 	resp, err := h.HandleRequest(context.Background(), HostRequest{Diffs: []types.Diff{diff}})
 	require.NoError(t, err)
 	require.Len(t, resp.Mempool, 1)
@@ -183,26 +140,26 @@ func TestHost_ProducesMsgFinish(t *testing.T) {
 }
 
 func TestHost_WithholdsOnStaleTx(t *testing.T) {
-	hosts := []*signing.Secp256k1Signer{mustGenerateKey(t), mustGenerateKey(t), mustGenerateKey(t)}
-	user := mustGenerateKey(t)
+	hosts := []*signing.Secp256k1Signer{testutil.MustGenerateKey(t), testutil.MustGenerateKey(t), testutil.MustGenerateKey(t)}
+	user := testutil.MustGenerateKey(t)
 	h := newTestHost(t, 1, hosts, user, 100000, 2) // grace=2
 
 	// Nonce 1: start inference 1, executor=slot 1 -> produces mempool entry at nonce 1.
-	diff := signDiff(t, user, 1, []*types.SubnetTx{startInferenceTx(1)})
+	diff := testutil.SignDiff(t, user, 1, []*types.SubnetTx{testutil.StartTx(1)})
 	resp, err := h.HandleRequest(context.Background(), HostRequest{Diffs: []types.Diff{diff}})
 	require.NoError(t, err)
 	require.NotNil(t, resp.StateSig, "should sign at nonce 1 (not stale yet)")
 
 	// Nonces 2,3: empty diffs, mempool entry proposed at 1, grace=2.
 	// At nonce 3: 1+2=3, not < 3 -> still OK.
-	diff2 := signDiff(t, user, 2, nil)
-	diff3 := signDiff(t, user, 3, nil)
+	diff2 := testutil.SignDiff(t, user, 2, nil)
+	diff3 := testutil.SignDiff(t, user, 3, nil)
 	resp, err = h.HandleRequest(context.Background(), HostRequest{Diffs: []types.Diff{diff2, diff3}})
 	require.NoError(t, err)
 	require.NotNil(t, resp.StateSig, "should sign at nonce 3 (1+2=3, not < 3)")
 
 	// Nonce 4: 1+2=3 < 4 -> stale -> withhold.
-	diff4 := signDiff(t, user, 4, nil)
+	diff4 := testutil.SignDiff(t, user, 4, nil)
 	resp, err = h.HandleRequest(context.Background(), HostRequest{Diffs: []types.Diff{diff4}})
 	require.NoError(t, err)
 	require.Nil(t, resp.StateSig, "should withhold at nonce 4 (stale)")
@@ -211,12 +168,12 @@ func TestHost_WithholdsOnStaleTx(t *testing.T) {
 }
 
 func TestHost_SignsAfterIncluded(t *testing.T) {
-	hosts := []*signing.Secp256k1Signer{mustGenerateKey(t), mustGenerateKey(t), mustGenerateKey(t)}
-	user := mustGenerateKey(t)
+	hosts := []*signing.Secp256k1Signer{testutil.MustGenerateKey(t), testutil.MustGenerateKey(t), testutil.MustGenerateKey(t)}
+	user := testutil.MustGenerateKey(t)
 	h := newTestHost(t, 1, hosts, user, 100000, 2) // grace=2
 
 	// Nonce 1: start inference 1 -> executor, mempool entry.
-	diff1 := signDiff(t, user, 1, []*types.SubnetTx{startInferenceTx(1)})
+	diff1 := testutil.SignDiff(t, user, 1, []*types.SubnetTx{testutil.StartTx(1)})
 	resp, err := h.HandleRequest(context.Background(), HostRequest{Diffs: []types.Diff{diff1}})
 	require.NoError(t, err)
 	require.Len(t, resp.Mempool, 1)
@@ -234,19 +191,19 @@ func TestHost_SignsAfterIncluded(t *testing.T) {
 	confirmTx := &types.SubnetTx{Tx: &types.SubnetTx_ConfirmStart{ConfirmStart: &types.MsgConfirmStart{
 		InferenceId: 1, ExecutorSig: receiptSig,
 	}}}
-	diff2 := signDiff(t, user, 2, []*types.SubnetTx{confirmTx})
+	diff2 := testutil.SignDiff(t, user, 2, []*types.SubnetTx{confirmTx})
 
 	// Nonce 3: empty (to push past grace).
-	diff3 := signDiff(t, user, 3, nil)
+	diff3 := testutil.SignDiff(t, user, 3, nil)
 	// Nonce 4: empty (stale at this point).
-	diff4 := signDiff(t, user, 4, nil)
+	diff4 := testutil.SignDiff(t, user, 4, nil)
 
 	resp, err = h.HandleRequest(context.Background(), HostRequest{Diffs: []types.Diff{diff2, diff3, diff4}})
 	require.NoError(t, err)
 	require.Nil(t, resp.StateSig, "should withhold (stale)")
 
 	// Nonce 5: include the finish tx -> mempool cleared -> should sign.
-	diff5 := signDiff(t, user, 5, []*types.SubnetTx{finishTx})
+	diff5 := testutil.SignDiff(t, user, 5, []*types.SubnetTx{finishTx})
 	resp, err = h.HandleRequest(context.Background(), HostRequest{Diffs: []types.Diff{diff5}})
 	require.NoError(t, err)
 	require.NotNil(t, resp.StateSig, "should sign after inclusion")
@@ -254,10 +211,10 @@ func TestHost_SignsAfterIncluded(t *testing.T) {
 }
 
 func TestHost_NotInGroup(t *testing.T) {
-	hosts := []*signing.Secp256k1Signer{mustGenerateKey(t), mustGenerateKey(t)}
-	outsider := mustGenerateKey(t)
-	group := makeGroup(hosts)
-	config := defaultConfig()
+	hosts := []*signing.Secp256k1Signer{testutil.MustGenerateKey(t), testutil.MustGenerateKey(t)}
+	outsider := testutil.MustGenerateKey(t)
+	group := testutil.MakeGroup(hosts)
+	config := testutil.DefaultConfig(len(hosts))
 	verifier := signing.NewSecp256k1Verifier()
 	sm := state.NewStateMachine("escrow-1", config, group, 10000, outsider.Address(), verifier)
 	engine := stub.NewInferenceEngine()
@@ -269,7 +226,7 @@ func TestHost_NotInGroup(t *testing.T) {
 // makeMultiSlotGroup builds a group where signers[dupIdx] occupies two slots.
 // The extra slot is appended at the end.
 func makeMultiSlotGroup(signers []*signing.Secp256k1Signer, dupIdx int) []types.SlotAssignment {
-	group := makeGroup(signers)
+	group := testutil.MakeGroup(signers)
 	// Add a second slot for signers[dupIdx].
 	extra := types.SlotAssignment{
 		SlotID:           uint32(len(signers)),
@@ -282,8 +239,7 @@ func makeMultiSlotGroup(signers []*signing.Secp256k1Signer, dupIdx int) []types.
 
 func newMultiSlotHost(t *testing.T, hostIdx int, hosts []*signing.Secp256k1Signer, user *signing.Secp256k1Signer, group []types.SlotAssignment, balance uint64, grace uint64) *Host {
 	t.Helper()
-	config := defaultConfig()
-	config.VoteThreshold = uint32(len(group)) / 2
+	config := testutil.DefaultConfig(len(group))
 	verifier := signing.NewSecp256k1Verifier()
 	sm := state.NewStateMachine("escrow-1", config, group, balance, user.Address(), verifier)
 	engine := stub.NewInferenceEngine()
@@ -294,8 +250,8 @@ func newMultiSlotHost(t *testing.T, hostIdx int, hosts []*signing.Secp256k1Signe
 
 func TestHost_MultiSlotExecutor(t *testing.T) {
 	// 3 signers, signer[0] holds slots 0 and 3 (4 slots total).
-	hosts := []*signing.Secp256k1Signer{mustGenerateKey(t), mustGenerateKey(t), mustGenerateKey(t)}
-	user := mustGenerateKey(t)
+	hosts := []*signing.Secp256k1Signer{testutil.MustGenerateKey(t), testutil.MustGenerateKey(t), testutil.MustGenerateKey(t)}
+	user := testutil.MustGenerateKey(t)
 	group := makeMultiSlotGroup(hosts, 0)
 	// group has 4 slots: 0(hosts[0]), 1(hosts[1]), 2(hosts[2]), 3(hosts[0]).
 
@@ -308,10 +264,10 @@ func TestHost_MultiSlotExecutor(t *testing.T) {
 
 	// inference_id must equal nonce. Pick nonces that map to the right executor slots.
 	// nonce 4: executor = group[4%4]=group[0] -> slot 0 -> hosts[0] executes.
-	diff1 := signDiff(t, user, 1, nil) // empty diff to advance nonce
-	diff2 := signDiff(t, user, 2, nil)
-	diff3 := signDiff(t, user, 3, nil)
-	diff4 := signDiff(t, user, 4, []*types.SubnetTx{startInferenceTx(4)})
+	diff1 := testutil.SignDiff(t, user, 1, nil) // empty diff to advance nonce
+	diff2 := testutil.SignDiff(t, user, 2, nil)
+	diff3 := testutil.SignDiff(t, user, 3, nil)
+	diff4 := testutil.SignDiff(t, user, 4, []*types.SubnetTx{testutil.StartTx(4)})
 	resp, err := h.HandleRequest(context.Background(), HostRequest{
 		Diffs: []types.Diff{diff1, diff2, diff3, diff4},
 	})
@@ -322,8 +278,8 @@ func TestHost_MultiSlotExecutor(t *testing.T) {
 	require.Equal(t, uint32(0), fin4.ExecutorSlot)
 
 	// nonce 6: executor = group[6%4]=group[2] -> slot 2 -> hosts[2], NOT hosts[0].
-	diff5 := signDiff(t, user, 5, nil)
-	diff6 := signDiff(t, user, 6, []*types.SubnetTx{startInferenceTx(6)})
+	diff5 := testutil.SignDiff(t, user, 5, nil)
+	diff6 := testutil.SignDiff(t, user, 6, []*types.SubnetTx{testutil.StartTx(6)})
 	resp, err = h.HandleRequest(context.Background(), HostRequest{
 		Diffs: []types.Diff{diff5, diff6},
 	})
@@ -331,7 +287,7 @@ func TestHost_MultiSlotExecutor(t *testing.T) {
 	require.Nil(t, resp.Receipt, "host should NOT execute for slot 2")
 
 	// nonce 7: executor = group[7%4]=group[3] -> slot 3 -> hosts[0] again.
-	diff7 := signDiff(t, user, 7, []*types.SubnetTx{startInferenceTx(7)})
+	diff7 := testutil.SignDiff(t, user, 7, []*types.SubnetTx{testutil.StartTx(7)})
 	resp, err = h.HandleRequest(context.Background(), HostRequest{
 		Diffs: []types.Diff{diff7},
 	})
@@ -361,8 +317,8 @@ func (m *mockAcceptanceChecker) Check(st types.EscrowState) error {
 }
 
 func TestHost_WithholdsOnAcceptanceBlock(t *testing.T) {
-	hosts := []*signing.Secp256k1Signer{mustGenerateKey(t), mustGenerateKey(t), mustGenerateKey(t)}
-	user := mustGenerateKey(t)
+	hosts := []*signing.Secp256k1Signer{testutil.MustGenerateKey(t), testutil.MustGenerateKey(t), testutil.MustGenerateKey(t)}
+	user := testutil.MustGenerateKey(t)
 
 	// Block whenever there's any inference in the state.
 	checker := &mockAcceptanceChecker{
@@ -373,21 +329,21 @@ func TestHost_WithholdsOnAcceptanceBlock(t *testing.T) {
 	h := newTestHostWithChecker(t, 0, hosts, user, 10000, 100, checker)
 
 	// Empty diff: no inferences -> should sign.
-	diff1 := signDiff(t, user, 1, nil)
+	diff1 := testutil.SignDiff(t, user, 1, nil)
 	resp, err := h.HandleRequest(context.Background(), HostRequest{Diffs: []types.Diff{diff1}})
 	require.NoError(t, err)
 	require.NotNil(t, resp.StateSig, "should sign with no inferences")
 
 	// Diff with start inference: checker blocks.
-	diff2 := signDiff(t, user, 2, []*types.SubnetTx{startInferenceTx(2)})
+	diff2 := testutil.SignDiff(t, user, 2, []*types.SubnetTx{testutil.StartTx(2)})
 	resp, err = h.HandleRequest(context.Background(), HostRequest{Diffs: []types.Diff{diff2}})
 	require.NoError(t, err)
 	require.Nil(t, resp.StateSig, "should withhold due to acceptance check")
 }
 
 func TestHost_AcceptanceBlockPersistsAcrossRounds(t *testing.T) {
-	hosts := []*signing.Secp256k1Signer{mustGenerateKey(t), mustGenerateKey(t), mustGenerateKey(t)}
-	user := mustGenerateKey(t)
+	hosts := []*signing.Secp256k1Signer{testutil.MustGenerateKey(t), testutil.MustGenerateKey(t), testutil.MustGenerateKey(t)}
+	user := testutil.MustGenerateKey(t)
 
 	callCount := 0
 	// Block for first 2 calls, then allow.
@@ -400,19 +356,19 @@ func TestHost_AcceptanceBlockPersistsAcrossRounds(t *testing.T) {
 	h := newTestHostWithChecker(t, 0, hosts, user, 100000, 100, checker)
 
 	// Round 1: blocked.
-	diff1 := signDiff(t, user, 1, []*types.SubnetTx{startInferenceTx(1)})
+	diff1 := testutil.SignDiff(t, user, 1, []*types.SubnetTx{testutil.StartTx(1)})
 	resp, err := h.HandleRequest(context.Background(), HostRequest{Diffs: []types.Diff{diff1}})
 	require.NoError(t, err)
 	require.Nil(t, resp.StateSig, "round 1: blocked")
 
 	// Round 2: still blocked.
-	diff2 := signDiff(t, user, 2, nil)
+	diff2 := testutil.SignDiff(t, user, 2, nil)
 	resp, err = h.HandleRequest(context.Background(), HostRequest{Diffs: []types.Diff{diff2}})
 	require.NoError(t, err)
 	require.Nil(t, resp.StateSig, "round 2: still blocked")
 
 	// Round 3: checker allows.
-	diff3 := signDiff(t, user, 3, nil)
+	diff3 := testutil.SignDiff(t, user, 3, nil)
 	resp, err = h.HandleRequest(context.Background(), HostRequest{Diffs: []types.Diff{diff3}})
 	require.NoError(t, err)
 	require.NotNil(t, resp.StateSig, "round 3: checker allows signing")
