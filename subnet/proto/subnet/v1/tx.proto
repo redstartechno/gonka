@@ -2,6 +2,12 @@ syntax = "proto3";
 package subnet.v1;
 option go_package = "subnet/types";
 
+enum TimeoutReason {
+  TIMEOUT_REASON_UNSPECIFIED = 0;
+  TIMEOUT_REASON_REFUSED = 1;
+  TIMEOUT_REASON_EXECUTION = 2;
+}
+
 message MsgStartInference {
   uint64 inference_id = 1;
   bytes  prompt_hash = 2;
@@ -28,7 +34,7 @@ message MsgFinishInference {
 
 message MsgTimeoutInference {
   uint64 inference_id = 1;
-  string reason = 2;
+  TimeoutReason reason = 2;
   repeated TimeoutVote votes = 3;
 }
 

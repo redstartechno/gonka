@@ -28,7 +28,7 @@ Goal: standalone `subnet/` Go module that can apply diffs, track state, compute 
 
 Deliverables:
 1. Project structure and Go module
-2. Proto definitions for all 7 subnet transaction types
+2. Proto definitions for all 8 subnet transaction types
 3. Domain types (EscrowState, InferenceRecord, HostStats, Diff)
 4. State machine: apply diffs, verify nonces, update balances/stats
 5. State hashing (two-level Merkle)
@@ -271,7 +271,7 @@ type SlotAssignment struct {
 // NewStateMachine creates a state machine for a session.
 // group and balance come from mainnet escrow data.
 // verifier is used to check all signatures (user, executor, host-proposed txs).
-func NewStateMachine(escrowID string, config SessionConfig, group []SlotAssignment, balance uint64, verifier Verifier) StateMachine
+func NewStateMachine(escrowID string, config SessionConfig, group []SlotAssignment, balance uint64, userAddress string, verifier Verifier) StateMachine
 
 type StateMachine interface {
   // ApplyDiff validates and applies a diff at the next expected nonce.
@@ -543,7 +543,7 @@ Scope:
   - GET /subnet/v1/sessions/{id}/diffs (state recovery)
   - GET /subnet/v1/sessions/{id}/mempool (unsettled txs)
 - Request authentication: X-Subnet-Signature header (see design.md Request Authentication)
-- Gossip: nonce propagation to K=3 random peers, lazy tx gossip after K rounds, re-propagation on gap detection (120s)
+- Gossip: nonce propagation to K=10 random peers, lazy tx gossip after K rounds, re-propagation on gap detection (120s)
 - Timeout verification: user contacts non-executor hosts, hosts contact executor, return signed votes
 - Equivocation detection: conflicting state hashes at same nonce via gossip
 

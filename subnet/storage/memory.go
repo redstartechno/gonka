@@ -8,11 +8,12 @@ import (
 )
 
 type sessionData struct {
-	escrowID string
-	config   types.SessionConfig
-	group    []types.SlotAssignment
-	balance  uint64
-	diffs    []types.DiffRecord
+	escrowID     string
+	config       types.SessionConfig
+	group        []types.SlotAssignment
+	balance      uint64
+	diffs        []types.DiffRecord
+	nonceToIndex map[uint64]int
 }
 
 // Memory is an in-memory storage implementation for testing.
@@ -46,10 +47,11 @@ func (m *Memory) CreateSession(escrowID string, config types.SessionConfig, grou
 	}
 
 	m.sessions[escrowID] = &sessionData{
-		escrowID: escrowID,
-		config:   config,
-		group:    groupCopy,
-		balance:  balance,
+		escrowID:     escrowID,
+		config:       config,
+		group:        groupCopy,
+		balance:      balance,
+		nonceToIndex: make(map[uint64]int),
 	}
 	return nil
 }
@@ -73,6 +75,7 @@ func (m *Memory) AppendDiff(escrowID string, rec types.DiffRecord) error {
 	rec.Signatures = sigsCopy
 
 	s.diffs = append(s.diffs, rec)
+	s.nonceToIndex[rec.Nonce] = len(s.diffs) - 1
 	return nil
 }
 
@@ -85,19 +88,17 @@ func (m *Memory) AddSignature(escrowID string, nonce uint64, slotID uint32, sig 
 		return fmt.Errorf("session %s not found", escrowID)
 	}
 
-	for i := range s.diffs {
-		if s.diffs[i].Nonce == nonce {
-			if s.diffs[i].Signatures == nil {
-				s.diffs[i].Signatures = make(map[uint32][]byte)
-			}
-			sc := make([]byte, len(sig))
-			copy(sc, sig)
-			s.diffs[i].Signatures[slotID] = sc
-			return nil
-		}
+	idx, ok := s.nonceToIndex[nonce]
+	if !ok {
+		return fmt.Errorf("diff at nonce %d not found for session %s", nonce, escrowID)
 	}
-
-	return fmt.Errorf("diff at nonce %d not found for session %s", nonce, escrowID)
+	if s.diffs[idx].Signatures == nil {
+		s.diffs[idx].Signatures = make(map[uint32][]byte)
+	}
+	sc := make([]byte, len(sig))
+	copy(sc, sig)
+	s.diffs[idx].Signatures[slotID] = sc
+	return nil
 }
 
 func (m *Memory) GetState(escrowID string) (*types.EscrowState, error) {

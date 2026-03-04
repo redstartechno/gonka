@@ -81,7 +81,7 @@ func signExecutorReceipt(t *testing.T, signer signing.Signer, inferenceID uint64
 	return sig
 }
 
-func signTimeoutVote(t *testing.T, signer signing.Signer, escrowID string, inferenceID uint64, reason string, accept bool) *types.TimeoutVote {
+func signTimeoutVote(t *testing.T, signer signing.Signer, escrowID string, inferenceID uint64, reason types.TimeoutReason, accept bool) *types.TimeoutVote {
 	t.Helper()
 	content := &types.TimeoutVoteContent{
 		EscrowId:    escrowID,
@@ -435,13 +435,13 @@ func TestApplyDiff_Timeout_Refused(t *testing.T) {
 
 	var votes []*types.TimeoutVote
 	for _, slot := range []uint32{0, 2, 3} {
-		v := signTimeoutVote(t, hosts[slot], "escrow-1", 1, "refused", true)
+		v := signTimeoutVote(t, hosts[slot], "escrow-1", 1, types.TimeoutReason_TIMEOUT_REASON_REFUSED, true)
 		v.VoterSlot = slot
 		votes = append(votes, v)
 	}
 
 	diff = signDiff(t, user, 2, []*types.SubnetTx{txTimeout(&types.MsgTimeoutInference{
-		InferenceId: 1, Reason: "refused", Votes: votes,
+		InferenceId: 1, Reason: types.TimeoutReason_TIMEOUT_REASON_REFUSED, Votes: votes,
 	})})
 	_, err = sm.ApplyDiff(diff)
 	require.NoError(t, err)
@@ -475,13 +475,13 @@ func TestApplyDiff_Timeout_Execution(t *testing.T) {
 
 	var votes []*types.TimeoutVote
 	for _, slot := range []uint32{0, 2, 3} {
-		v := signTimeoutVote(t, hosts[slot], "escrow-1", 1, "execution", true)
+		v := signTimeoutVote(t, hosts[slot], "escrow-1", 1, types.TimeoutReason_TIMEOUT_REASON_EXECUTION, true)
 		v.VoterSlot = slot
 		votes = append(votes, v)
 	}
 
 	diff = signDiff(t, user, 3, []*types.SubnetTx{txTimeout(&types.MsgTimeoutInference{
-		InferenceId: 1, Reason: "execution", Votes: votes,
+		InferenceId: 1, Reason: types.TimeoutReason_TIMEOUT_REASON_EXECUTION, Votes: votes,
 	})})
 	_, err = sm.ApplyDiff(diff)
 	require.NoError(t, err)
@@ -509,12 +509,12 @@ func TestApplyDiff_Timeout_WrongReason(t *testing.T) {
 	// reason=execution on pending -> fail.
 	var votes []*types.TimeoutVote
 	for _, slot := range []uint32{0, 2, 3} {
-		v := signTimeoutVote(t, hosts[slot], "escrow-1", 1, "execution", true)
+		v := signTimeoutVote(t, hosts[slot], "escrow-1", 1, types.TimeoutReason_TIMEOUT_REASON_EXECUTION, true)
 		v.VoterSlot = slot
 		votes = append(votes, v)
 	}
 	diff = signDiff(t, user, 2, []*types.SubnetTx{txTimeout(&types.MsgTimeoutInference{
-		InferenceId: 1, Reason: "execution", Votes: votes,
+		InferenceId: 1, Reason: types.TimeoutReason_TIMEOUT_REASON_EXECUTION, Votes: votes,
 	})})
 	_, err = sm.ApplyDiff(diff)
 	require.ErrorIs(t, err, types.ErrInvalidTimeoutReason)
@@ -529,12 +529,12 @@ func TestApplyDiff_Timeout_WrongReason(t *testing.T) {
 
 	var votes2 []*types.TimeoutVote
 	for _, slot := range []uint32{0, 2, 3} {
-		v := signTimeoutVote(t, hosts[slot], "escrow-1", 1, "refused", true)
+		v := signTimeoutVote(t, hosts[slot], "escrow-1", 1, types.TimeoutReason_TIMEOUT_REASON_REFUSED, true)
 		v.VoterSlot = slot
 		votes2 = append(votes2, v)
 	}
 	diff = signDiff(t, user, 3, []*types.SubnetTx{txTimeout(&types.MsgTimeoutInference{
-		InferenceId: 1, Reason: "refused", Votes: votes2,
+		InferenceId: 1, Reason: types.TimeoutReason_TIMEOUT_REASON_REFUSED, Votes: votes2,
 	})})
 	_, err = sm.ApplyDiff(diff)
 	require.ErrorIs(t, err, types.ErrInvalidTimeoutReason)
@@ -557,12 +557,12 @@ func TestApplyDiff_Timeout_InsufficientVotes(t *testing.T) {
 	// Only 2 accept votes (need >2 for 5 total slots).
 	var votes []*types.TimeoutVote
 	for _, slot := range []uint32{0, 2} {
-		v := signTimeoutVote(t, hosts[slot], "escrow-1", 1, "refused", true)
+		v := signTimeoutVote(t, hosts[slot], "escrow-1", 1, types.TimeoutReason_TIMEOUT_REASON_REFUSED, true)
 		v.VoterSlot = slot
 		votes = append(votes, v)
 	}
 	diff = signDiff(t, user, 2, []*types.SubnetTx{txTimeout(&types.MsgTimeoutInference{
-		InferenceId: 1, Reason: "refused", Votes: votes,
+		InferenceId: 1, Reason: types.TimeoutReason_TIMEOUT_REASON_REFUSED, Votes: votes,
 	})})
 	_, err = sm.ApplyDiff(diff)
 	require.ErrorIs(t, err, types.ErrInsufficientVotes)
@@ -579,14 +579,14 @@ func TestApplyDiff_Timeout_AfterFinish(t *testing.T) {
 
 	var votes []*types.TimeoutVote
 	for _, slot := range []uint32{0, 2, 3} {
-		v := signTimeoutVote(t, hosts[slot], "escrow-1", 1, "execution", true)
+		v := signTimeoutVote(t, hosts[slot], "escrow-1", 1, types.TimeoutReason_TIMEOUT_REASON_EXECUTION, true)
 		v.VoterSlot = slot
 		votes = append(votes, v)
 	}
 
 	nonce := sm.GetState().LatestNonce + 1
 	diff := signDiff(t, user, nonce, []*types.SubnetTx{txTimeout(&types.MsgTimeoutInference{
-		InferenceId: 1, Reason: "execution", Votes: votes,
+		InferenceId: 1, Reason: types.TimeoutReason_TIMEOUT_REASON_EXECUTION, Votes: votes,
 	})})
 	_, err := sm.ApplyDiff(diff)
 	require.ErrorIs(t, err, types.ErrInvalidTimeoutReason)
@@ -686,24 +686,24 @@ func TestApplyDiff_DuplicateTimeout(t *testing.T) {
 
 	var votes []*types.TimeoutVote
 	for _, slot := range []uint32{0, 2, 3} {
-		v := signTimeoutVote(t, hosts[slot], "escrow-1", 1, "refused", true)
+		v := signTimeoutVote(t, hosts[slot], "escrow-1", 1, types.TimeoutReason_TIMEOUT_REASON_REFUSED, true)
 		v.VoterSlot = slot
 		votes = append(votes, v)
 	}
 	diff = signDiff(t, user, 2, []*types.SubnetTx{txTimeout(&types.MsgTimeoutInference{
-		InferenceId: 1, Reason: "refused", Votes: votes,
+		InferenceId: 1, Reason: types.TimeoutReason_TIMEOUT_REASON_REFUSED, Votes: votes,
 	})})
 	_, err = sm.ApplyDiff(diff)
 	require.NoError(t, err)
 
 	var votes2 []*types.TimeoutVote
 	for _, slot := range []uint32{0, 2, 3} {
-		v := signTimeoutVote(t, hosts[slot], "escrow-1", 1, "refused", true)
+		v := signTimeoutVote(t, hosts[slot], "escrow-1", 1, types.TimeoutReason_TIMEOUT_REASON_REFUSED, true)
 		v.VoterSlot = slot
 		votes2 = append(votes2, v)
 	}
 	diff = signDiff(t, user, 3, []*types.SubnetTx{txTimeout(&types.MsgTimeoutInference{
-		InferenceId: 1, Reason: "refused", Votes: votes2,
+		InferenceId: 1, Reason: types.TimeoutReason_TIMEOUT_REASON_REFUSED, Votes: votes2,
 	})})
 	_, err = sm.ApplyDiff(diff)
 	require.ErrorIs(t, err, types.ErrInvalidTimeoutReason)
@@ -756,13 +756,13 @@ func TestApplyDiff_FullLifecycle(t *testing.T) {
 				if len(votes) >= 3 {
 					break
 				}
-				v := signTimeoutVote(t, hosts[slot], "escrow-1", infID, "refused", true)
+				v := signTimeoutVote(t, hosts[slot], "escrow-1", infID, types.TimeoutReason_TIMEOUT_REASON_REFUSED, true)
 				v.VoterSlot = slot
 				votes = append(votes, v)
 			}
 			nonce++
 			diff = signDiff(t, user, nonce, []*types.SubnetTx{txTimeout(&types.MsgTimeoutInference{
-				InferenceId: infID, Reason: "refused", Votes: votes,
+				InferenceId: infID, Reason: types.TimeoutReason_TIMEOUT_REASON_REFUSED, Votes: votes,
 			})})
 			_, err = sm.ApplyDiff(diff)
 			require.NoError(t, err)
@@ -909,15 +909,15 @@ func TestApplyDiff_Timeout_DuplicateVoterSlot(t *testing.T) {
 	require.NoError(t, err)
 
 	// Slot 0 votes twice.
-	v0a := signTimeoutVote(t, hosts[0], "escrow-1", 1, "refused", true)
+	v0a := signTimeoutVote(t, hosts[0], "escrow-1", 1, types.TimeoutReason_TIMEOUT_REASON_REFUSED, true)
 	v0a.VoterSlot = 0
-	v0b := signTimeoutVote(t, hosts[0], "escrow-1", 1, "refused", true)
+	v0b := signTimeoutVote(t, hosts[0], "escrow-1", 1, types.TimeoutReason_TIMEOUT_REASON_REFUSED, true)
 	v0b.VoterSlot = 0
-	v2 := signTimeoutVote(t, hosts[2], "escrow-1", 1, "refused", true)
+	v2 := signTimeoutVote(t, hosts[2], "escrow-1", 1, types.TimeoutReason_TIMEOUT_REASON_REFUSED, true)
 	v2.VoterSlot = 2
 
 	diff = signDiff(t, user, 2, []*types.SubnetTx{txTimeout(&types.MsgTimeoutInference{
-		InferenceId: 1, Reason: "refused", Votes: []*types.TimeoutVote{v0a, v0b, v2},
+		InferenceId: 1, Reason: types.TimeoutReason_TIMEOUT_REASON_REFUSED, Votes: []*types.TimeoutVote{v0a, v0b, v2},
 	})})
 	_, err = sm.ApplyDiff(diff)
 	require.ErrorIs(t, err, types.ErrDuplicateVote)

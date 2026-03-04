@@ -116,6 +116,7 @@ func (sm *StateMachine) ApplyDiff(diff types.Diff) ([]byte, error) {
 	sm.state.LatestNonce = diff.Nonce
 
 	// 6. Compute state root.
+	// TODO: optimize for sure
 	root, err := ComputeStateRoot(sm.state.Balance, sm.state.HostStats, sm.state.Inferences)
 	if err != nil {
 		return nil, fmt.Errorf("compute state root: %w", err)
@@ -126,6 +127,7 @@ func (sm *StateMachine) ApplyDiff(diff types.Diff) ([]byte, error) {
 }
 
 // GetState returns a deep copy of the current escrow state.
+// Q: do we need deepcopy?
 func (sm *StateMachine) GetState() types.EscrowState {
 	s := *sm.state
 
@@ -438,16 +440,16 @@ func (sm *StateMachine) applyTimeout(msg *types.MsgTimeoutInference) error {
 
 	// Validate reason matches status.
 	switch msg.Reason {
-	case "refused":
+	case types.TimeoutReason_TIMEOUT_REASON_REFUSED:
 		if rec.Status != types.StatusPending {
 			return fmt.Errorf("%w: reason=refused requires pending, got %d", types.ErrInvalidTimeoutReason, rec.Status)
 		}
-	case "execution":
+	case types.TimeoutReason_TIMEOUT_REASON_EXECUTION:
 		if rec.Status != types.StatusStarted {
 			return fmt.Errorf("%w: reason=execution requires started, got %d", types.ErrInvalidTimeoutReason, rec.Status)
 		}
 	default:
-		return fmt.Errorf("%w: unknown reason %q", types.ErrInvalidTimeoutReason, msg.Reason)
+		return fmt.Errorf("%w: unknown reason %v", types.ErrInvalidTimeoutReason, msg.Reason)
 	}
 
 	// Count accept votes and verify each signature.

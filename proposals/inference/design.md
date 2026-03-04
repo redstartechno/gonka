@@ -528,7 +528,7 @@ Both diffs and latest state are persisted. The state machine owns the in-memory 
 
 ```go
 type Storage interface {
-    CreateSession(escrowID string, group []SlotAssignment, balance uint64) error
+    CreateSession(escrowID string, config SessionConfig, group []SlotAssignment, balance uint64) error
     AppendDiff(escrowID string, rec DiffRecord) error
     AddSignature(escrowID string, nonce uint64, slotID uint32, sig []byte) error
     GetState(escrowID string) (*EscrowState, error)
@@ -557,30 +557,29 @@ Two things with different frequency:
 
 ### Pattern
 
-After processing a user request, the host gossips the current nonce to K=3 random group members.
+After processing a user request, the host gossips the current nonce to K=10 random group members.
 
-Detection probability for a skipped host_i (N=30, K=3). Each request causes one host to gossip to 3 random peers. Probability host_i is NOT among them: ~90%. Cumulative:
+Detection probability for a skipped host_i (N=30, K=10). Each request causes one host to gossip to 10 random peers. Probability host_i is NOT among them: ~65%. Cumulative:
 
-- After 5 requests: ~59% still unaware (41% detection)
-- After 10 requests: ~35% still unaware (65% detection)
-- After 20 requests: ~12% still unaware (88% detection)
-- After 30 requests (one full round): ~4% still unaware (96% detection)
+- After 5 requests: ~12% still unaware (88% detection)
+- After 10 requests: ~1.4% still unaware (98.6% detection)
+- After 15 requests: ~0.2% still unaware (99.8% detection)
 
 As long as majority of hosts are honest and gossiping, propagation is reliable. A few malicious hosts refusing to gossip only slightly reduces the rate.
 
-**Re-propagation.** If a host receives a gossiped nonce but never receives the actual user request within 120 seconds, it re-propagates to K=3 random peers (same as initial gossip, random selection, no tracking of who already received it). This amplifies coverage and signals to the group that a gap was detected.
+**Re-propagation.** If a host receives a gossiped nonce but never receives the actual user request within 120 seconds, it re-propagates to K=10 random peers (same as initial gossip, random selection, no tracking of who already received it). This amplifies coverage and signals to the group that a gap was detected.
 
-Total cost per inference request: K=3 outbound HTTP calls with ~100 byte body. No persistent connections, no new ports. Group members are known from mainnet slot assignment, each already has a public URL.
+Total cost per inference request: K=10 outbound HTTP calls with ~100 byte body. No persistent connections, no new ports. Group members are known from mainnet slot assignment, each already has a public URL.
 
 ### Endpoints
 
 See [API Surface](#api-surface) for all subnet endpoints including gossip routes.
 
-No new ports. No peer discovery (group is deterministic from mainnet). Connection pooling with short idle timeout handles the 3 calls per request without accumulation.
+No new ports. No peer discovery (group is deterministic from mainnet). Connection pooling with short idle timeout handles the 10 calls per request without accumulation.
 
 ### Future Optimization
 
-K=3 random peers over REST is the simplest correct approach. Gossip can be optimized independently of the rest of the system since the interface is just "notify peers about nonce N." Possible future directions: libp2p gossipsub, QUIC transport, adaptive K based on group size, or persistent WebSocket connections within a session. None of these affect the subnet state machine or storage layer.
+K=10 random peers over REST is the simplest correct approach. Gossip can be optimized independently of the rest of the system since the interface is just "notify peers about nonce N." Possible future directions: libp2p gossipsub, QUIC transport, adaptive K based on group size, or persistent WebSocket connections within a session. None of these affect the subnet state machine or storage layer.
 
 
 ## API Surface
@@ -666,7 +665,7 @@ During verification, the verifying host contacts the executor to forward prompt 
 POST /subnet/v1/sessions/{escrow_id}/gossip/nonce
 ```
 
-Nonce propagation. Sent to K=3 random group members after processing a user request.
+Nonce propagation. Sent to K=10 random group members after processing a user request.
 
 ```json
 {

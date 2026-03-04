@@ -21,6 +21,55 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+type TimeoutReason int32
+
+const (
+	TimeoutReason_TIMEOUT_REASON_UNSPECIFIED TimeoutReason = 0
+	TimeoutReason_TIMEOUT_REASON_REFUSED     TimeoutReason = 1
+	TimeoutReason_TIMEOUT_REASON_EXECUTION   TimeoutReason = 2
+)
+
+// Enum value maps for TimeoutReason.
+var (
+	TimeoutReason_name = map[int32]string{
+		0: "TIMEOUT_REASON_UNSPECIFIED",
+		1: "TIMEOUT_REASON_REFUSED",
+		2: "TIMEOUT_REASON_EXECUTION",
+	}
+	TimeoutReason_value = map[string]int32{
+		"TIMEOUT_REASON_UNSPECIFIED": 0,
+		"TIMEOUT_REASON_REFUSED":     1,
+		"TIMEOUT_REASON_EXECUTION":   2,
+	}
+)
+
+func (x TimeoutReason) Enum() *TimeoutReason {
+	p := new(TimeoutReason)
+	*p = x
+	return p
+}
+
+func (x TimeoutReason) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (TimeoutReason) Descriptor() protoreflect.EnumDescriptor {
+	return file_subnet_v1_tx_proto_enumTypes[0].Descriptor()
+}
+
+func (TimeoutReason) Type() protoreflect.EnumType {
+	return &file_subnet_v1_tx_proto_enumTypes[0]
+}
+
+func (x TimeoutReason) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use TimeoutReason.Descriptor instead.
+func (TimeoutReason) EnumDescriptor() ([]byte, []int) {
+	return file_subnet_v1_tx_proto_rawDescGZIP(), []int{0}
+}
+
 type MsgStartInference struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	InferenceId   uint64                 `protobuf:"varint,1,opt,name=inference_id,json=inferenceId,proto3" json:"inference_id,omitempty"`
@@ -252,7 +301,7 @@ func (x *MsgFinishInference) GetProposerSig() []byte {
 type MsgTimeoutInference struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	InferenceId   uint64                 `protobuf:"varint,1,opt,name=inference_id,json=inferenceId,proto3" json:"inference_id,omitempty"`
-	Reason        string                 `protobuf:"bytes,2,opt,name=reason,proto3" json:"reason,omitempty"`
+	Reason        TimeoutReason          `protobuf:"varint,2,opt,name=reason,proto3,enum=subnet.v1.TimeoutReason" json:"reason,omitempty"`
 	Votes         []*TimeoutVote         `protobuf:"bytes,3,rep,name=votes,proto3" json:"votes,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -295,11 +344,11 @@ func (x *MsgTimeoutInference) GetInferenceId() uint64 {
 	return 0
 }
 
-func (x *MsgTimeoutInference) GetReason() string {
+func (x *MsgTimeoutInference) GetReason() TimeoutReason {
 	if x != nil {
 		return x.Reason
 	}
-	return ""
+	return TimeoutReason_TIMEOUT_REASON_UNSPECIFIED
 }
 
 func (x *MsgTimeoutInference) GetVotes() []*TimeoutVote {
@@ -626,10 +675,10 @@ const file_subnet_v1_tx_proto_rawDesc = "" +
 	"\finput_tokens\x18\x03 \x01(\x04R\vinputTokens\x12#\n" +
 	"\routput_tokens\x18\x04 \x01(\x04R\foutputTokens\x12#\n" +
 	"\rexecutor_slot\x18\x05 \x01(\rR\fexecutorSlot\x12!\n" +
-	"\fproposer_sig\x18\x06 \x01(\fR\vproposerSig\"~\n" +
+	"\fproposer_sig\x18\x06 \x01(\fR\vproposerSig\"\x98\x01\n" +
 	"\x13MsgTimeoutInference\x12!\n" +
-	"\finference_id\x18\x01 \x01(\x04R\vinferenceId\x12\x16\n" +
-	"\x06reason\x18\x02 \x01(\tR\x06reason\x12,\n" +
+	"\finference_id\x18\x01 \x01(\x04R\vinferenceId\x120\n" +
+	"\x06reason\x18\x02 \x01(\x0e2\x18.subnet.v1.TimeoutReasonR\x06reason\x12,\n" +
 	"\x05votes\x18\x03 \x03(\v2\x16.subnet.v1.TimeoutVoteR\x05votes\"b\n" +
 	"\vTimeoutVote\x12\x1d\n" +
 	"\n" +
@@ -652,7 +701,11 @@ const file_subnet_v1_tx_proto_rawDesc = "" +
 	"\aslot_id\x18\x01 \x01(\rR\x06slotId\x12\x1c\n" +
 	"\tsignature\x18\x02 \x01(\fR\tsignature\x12!\n" +
 	"\fproposer_sig\x18\x03 \x01(\fR\vproposerSig\"\x12\n" +
-	"\x10MsgFinalizeRoundB\x0eZ\fsubnet/typesb\x06proto3"
+	"\x10MsgFinalizeRound*i\n" +
+	"\rTimeoutReason\x12\x1e\n" +
+	"\x1aTIMEOUT_REASON_UNSPECIFIED\x10\x00\x12\x1a\n" +
+	"\x16TIMEOUT_REASON_REFUSED\x10\x01\x12\x1c\n" +
+	"\x18TIMEOUT_REASON_EXECUTION\x10\x02B\x0eZ\fsubnet/typesb\x06proto3"
 
 var (
 	file_subnet_v1_tx_proto_rawDescOnce sync.Once
@@ -666,25 +719,28 @@ func file_subnet_v1_tx_proto_rawDescGZIP() []byte {
 	return file_subnet_v1_tx_proto_rawDescData
 }
 
+var file_subnet_v1_tx_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
 var file_subnet_v1_tx_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
 var file_subnet_v1_tx_proto_goTypes = []any{
-	(*MsgStartInference)(nil),   // 0: subnet.v1.MsgStartInference
-	(*MsgConfirmStart)(nil),     // 1: subnet.v1.MsgConfirmStart
-	(*MsgFinishInference)(nil),  // 2: subnet.v1.MsgFinishInference
-	(*MsgTimeoutInference)(nil), // 3: subnet.v1.MsgTimeoutInference
-	(*TimeoutVote)(nil),         // 4: subnet.v1.TimeoutVote
-	(*MsgValidation)(nil),       // 5: subnet.v1.MsgValidation
-	(*MsgValidationVote)(nil),   // 6: subnet.v1.MsgValidationVote
-	(*MsgRevealSeed)(nil),       // 7: subnet.v1.MsgRevealSeed
-	(*MsgFinalizeRound)(nil),    // 8: subnet.v1.MsgFinalizeRound
+	(TimeoutReason)(0),          // 0: subnet.v1.TimeoutReason
+	(*MsgStartInference)(nil),   // 1: subnet.v1.MsgStartInference
+	(*MsgConfirmStart)(nil),     // 2: subnet.v1.MsgConfirmStart
+	(*MsgFinishInference)(nil),  // 3: subnet.v1.MsgFinishInference
+	(*MsgTimeoutInference)(nil), // 4: subnet.v1.MsgTimeoutInference
+	(*TimeoutVote)(nil),         // 5: subnet.v1.TimeoutVote
+	(*MsgValidation)(nil),       // 6: subnet.v1.MsgValidation
+	(*MsgValidationVote)(nil),   // 7: subnet.v1.MsgValidationVote
+	(*MsgRevealSeed)(nil),       // 8: subnet.v1.MsgRevealSeed
+	(*MsgFinalizeRound)(nil),    // 9: subnet.v1.MsgFinalizeRound
 }
 var file_subnet_v1_tx_proto_depIdxs = []int32{
-	4, // 0: subnet.v1.MsgTimeoutInference.votes:type_name -> subnet.v1.TimeoutVote
-	1, // [1:1] is the sub-list for method output_type
-	1, // [1:1] is the sub-list for method input_type
-	1, // [1:1] is the sub-list for extension type_name
-	1, // [1:1] is the sub-list for extension extendee
-	0, // [0:1] is the sub-list for field type_name
+	0, // 0: subnet.v1.MsgTimeoutInference.reason:type_name -> subnet.v1.TimeoutReason
+	5, // 1: subnet.v1.MsgTimeoutInference.votes:type_name -> subnet.v1.TimeoutVote
+	2, // [2:2] is the sub-list for method output_type
+	2, // [2:2] is the sub-list for method input_type
+	2, // [2:2] is the sub-list for extension type_name
+	2, // [2:2] is the sub-list for extension extendee
+	0, // [0:2] is the sub-list for field type_name
 }
 
 func init() { file_subnet_v1_tx_proto_init() }
@@ -697,13 +753,14 @@ func file_subnet_v1_tx_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_subnet_v1_tx_proto_rawDesc), len(file_subnet_v1_tx_proto_rawDesc)),
-			NumEnums:      0,
+			NumEnums:      1,
 			NumMessages:   9,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
 		GoTypes:           file_subnet_v1_tx_proto_goTypes,
 		DependencyIndexes: file_subnet_v1_tx_proto_depIdxs,
+		EnumInfos:         file_subnet_v1_tx_proto_enumTypes,
 		MessageInfos:      file_subnet_v1_tx_proto_msgTypes,
 	}.Build()
 	File_subnet_v1_tx_proto = out.File

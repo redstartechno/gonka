@@ -38,7 +38,7 @@ message ExecutorReceiptContent {
 message TimeoutVoteContent {
   string escrow_id = 1;
   uint64 inference_id = 2;
-  string reason = 3;
+  TimeoutReason reason = 3;
   bool   accept = 4;
 }
 

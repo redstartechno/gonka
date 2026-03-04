@@ -343,7 +343,7 @@ type TimeoutVoteContent struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	EscrowId      string                 `protobuf:"bytes,1,opt,name=escrow_id,json=escrowId,proto3" json:"escrow_id,omitempty"`
 	InferenceId   uint64                 `protobuf:"varint,2,opt,name=inference_id,json=inferenceId,proto3" json:"inference_id,omitempty"`
-	Reason        string                 `protobuf:"bytes,3,opt,name=reason,proto3" json:"reason,omitempty"`
+	Reason        TimeoutReason          `protobuf:"varint,3,opt,name=reason,proto3,enum=subnet.v1.TimeoutReason" json:"reason,omitempty"`
 	Accept        bool                   `protobuf:"varint,4,opt,name=accept,proto3" json:"accept,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -393,11 +393,11 @@ func (x *TimeoutVoteContent) GetInferenceId() uint64 {
 	return 0
 }
 
-func (x *TimeoutVoteContent) GetReason() string {
+func (x *TimeoutVoteContent) GetReason() TimeoutReason {
 	if x != nil {
 		return x.Reason
 	}
-	return ""
+	return TimeoutReason_TIMEOUT_REASON_UNSPECIFIED
 }
 
 func (x *TimeoutVoteContent) GetAccept() bool {
@@ -498,11 +498,11 @@ const file_subnet_v1_diff_proto_rawDesc = "" +
 	"\n" +
 	"max_tokens\x18\x05 \x01(\x04R\tmaxTokens\x12\x1d\n" +
 	"\n" +
-	"started_at\x18\x06 \x01(\x03R\tstartedAt\"\x84\x01\n" +
+	"started_at\x18\x06 \x01(\x03R\tstartedAt\"\x9e\x01\n" +
 	"\x12TimeoutVoteContent\x12\x1b\n" +
 	"\tescrow_id\x18\x01 \x01(\tR\bescrowId\x12!\n" +
-	"\finference_id\x18\x02 \x01(\x04R\vinferenceId\x12\x16\n" +
-	"\x06reason\x18\x03 \x01(\tR\x06reason\x12\x16\n" +
+	"\finference_id\x18\x02 \x01(\x04R\vinferenceId\x120\n" +
+	"\x06reason\x18\x03 \x01(\x0e2\x18.subnet.v1.TimeoutReasonR\x06reason\x12\x16\n" +
 	"\x06accept\x18\x04 \x01(\bR\x06accept\"i\n" +
 	"\x15StateSignatureContent\x12\x1d\n" +
 	"\n" +
@@ -537,6 +537,7 @@ var file_subnet_v1_diff_proto_goTypes = []any{
 	(*MsgValidationVote)(nil),      // 10: subnet.v1.MsgValidationVote
 	(*MsgRevealSeed)(nil),          // 11: subnet.v1.MsgRevealSeed
 	(*MsgFinalizeRound)(nil),       // 12: subnet.v1.MsgFinalizeRound
+	(TimeoutReason)(0),             // 13: subnet.v1.TimeoutReason
 }
 var file_subnet_v1_diff_proto_depIdxs = []int32{
 	1,  // 0: subnet.v1.DiffContent.txs:type_name -> subnet.v1.SubnetTx
@@ -548,11 +549,12 @@ var file_subnet_v1_diff_proto_depIdxs = []int32{
 	10, // 6: subnet.v1.SubnetTx.validation_vote:type_name -> subnet.v1.MsgValidationVote
 	11, // 7: subnet.v1.SubnetTx.reveal_seed:type_name -> subnet.v1.MsgRevealSeed
 	12, // 8: subnet.v1.SubnetTx.finalize_round:type_name -> subnet.v1.MsgFinalizeRound
-	9,  // [9:9] is the sub-list for method output_type
-	9,  // [9:9] is the sub-list for method input_type
-	9,  // [9:9] is the sub-list for extension type_name
-	9,  // [9:9] is the sub-list for extension extendee
-	0,  // [0:9] is the sub-list for field type_name
+	13, // 9: subnet.v1.TimeoutVoteContent.reason:type_name -> subnet.v1.TimeoutReason
+	10, // [10:10] is the sub-list for method output_type
+	10, // [10:10] is the sub-list for method input_type
+	10, // [10:10] is the sub-list for extension type_name
+	10, // [10:10] is the sub-list for extension extendee
+	0,  // [0:10] is the sub-list for field type_name
 }
 
 func init() { file_subnet_v1_diff_proto_init() }
