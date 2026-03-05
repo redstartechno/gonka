@@ -45,7 +45,7 @@ func setupServerEnv(t *testing.T) *serverTestEnv {
 	store := storage.NewMemory()
 	require.NoError(t, store.CreateSession("escrow-1", config, group, 100000))
 
-	h, err := host.NewHost(sm, hostSigner, engine, "escrow-1", group, 100, nil, host.WithStorage(store))
+	h, err := host.NewHost(sm, hostSigner, engine, "escrow-1", group, nil, host.WithGrace(100), host.WithStorage(store))
 	require.NoError(t, err)
 
 	srv := NewServer(h, store, "escrow-1", verifier, group, userSigner.Address())

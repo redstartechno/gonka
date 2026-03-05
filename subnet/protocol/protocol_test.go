@@ -45,7 +45,7 @@ func setupEnv(t *testing.T, numHosts int, balance, grace uint64) *testEnv {
 	for i := range hostSigners {
 		sm := state.NewStateMachine("escrow-1", config, group, balance, userSigner.Address(), verifier)
 		engine := stub.NewInferenceEngine()
-		h, err := host.NewHost(sm, hostSigners[i], engine, "escrow-1", group, grace, nil)
+		h, err := host.NewHost(sm, hostSigners[i], engine, "escrow-1", group, nil, host.WithGrace(grace))
 		require.NoError(t, err)
 		hosts[i] = h
 		clients[i] = &user.InProcessClient{Host: h}
@@ -197,7 +197,7 @@ func TestProtocol_SignatureWithholding(t *testing.T) {
 	// Create host at slot 1 with grace=2.
 	sm := state.NewStateMachine("escrow-1", config, group, 100000, userSigner.Address(), verifier)
 	engine := stub.NewInferenceEngine()
-	h, err := host.NewHost(sm, hostSigners[1], engine, "escrow-1", group, 2, nil)
+	h, err := host.NewHost(sm, hostSigners[1], engine, "escrow-1", group, nil, host.WithGrace(2))
 	require.NoError(t, err)
 
 	ctx := context.Background()
@@ -248,7 +248,7 @@ func TestProtocol_SignatureResumesAfterInclusion(t *testing.T) {
 
 	sm := state.NewStateMachine("escrow-1", config, group, 100000, userSigner.Address(), verifier)
 	engine := stub.NewInferenceEngine()
-	h, err := host.NewHost(sm, hostSigners[1], engine, "escrow-1", group, 2, nil)
+	h, err := host.NewHost(sm, hostSigners[1], engine, "escrow-1", group, nil, host.WithGrace(2))
 	require.NoError(t, err)
 
 	ctx := context.Background()
@@ -328,7 +328,7 @@ func setupEnvWithEngines(t *testing.T, numHosts int, balance, grace uint64, engi
 	clients := make([]user.HostClient, numHosts)
 	for i := range hostSigners {
 		sm := state.NewStateMachine("escrow-1", config, group, balance, userSigner.Address(), verifier)
-		h, err := host.NewHost(sm, hostSigners[i], engines[i], "escrow-1", group, grace, nil)
+		h, err := host.NewHost(sm, hostSigners[i], engines[i], "escrow-1", group, nil, host.WithGrace(grace))
 		require.NoError(t, err)
 		hosts[i] = h
 		clients[i] = &user.InProcessClient{Host: h}
@@ -438,7 +438,7 @@ func TestProtocol_Timeout_UserSide(t *testing.T) {
 	for i := range hosts {
 		sm := state.NewStateMachine("escrow-1", config, group, 100000, userSigner.Address(), verifier)
 		engine := stub.NewInferenceEngine()
-		h, err := host.NewHost(sm, hostSigners[i], engine, "escrow-1", group, 100, nil)
+		h, err := host.NewHost(sm, hostSigners[i], engine, "escrow-1", group, nil, host.WithGrace(100))
 		require.NoError(t, err)
 		hosts[i] = h
 	}

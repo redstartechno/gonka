@@ -11,6 +11,25 @@ import (
 	"subnet/types"
 )
 
+func safeMul(a, b uint64) (uint64, bool) {
+	if a == 0 || b == 0 {
+		return 0, true
+	}
+	result := a * b
+	if result/a != b {
+		return 0, false
+	}
+	return result, true
+}
+
+func safeAdd(a, b uint64) (uint64, bool) {
+	result := a + b
+	if result < a {
+		return 0, false
+	}
+	return result, true
+}
+
 // StateMachine applies diffs and tracks session state.
 type StateMachine struct {
 	state       *types.EscrowState
@@ -104,17 +123,21 @@ func (sm *StateMachine) ApplyDiff(diff types.Diff) ([]byte, error) {
 		return nil, types.ErrMultipleStartMsgs
 	}
 
-	// 4. Apply each tx.
+	// 4. Snapshot mutable state for rollback on error.
+	snap := sm.snapshotMutable()
+
+	// 5. Apply each tx.
 	for _, tx := range diff.Txs {
 		if err := sm.applyTx(tx); err != nil {
+			sm.restoreMutable(snap)
 			return nil, err
 		}
 	}
 
-	// 5. Update nonce.
+	// 6. Update nonce.
 	sm.state.LatestNonce = diff.Nonce
 
-	// 6. Compute state root.
+	// 7. Compute state root.
 	// TODO: optimize for sure
 	root, err := ComputeStateRoot(sm.state.Balance, sm.state.HostStats, sm.state.Inferences)
 	if err != nil {
@@ -181,6 +204,56 @@ func (sm *StateMachine) SnapshotState() types.EscrowState {
 	return s
 }
 
+// mutableSnapshot holds the mutable fields of EscrowState for rollback.
+type mutableSnapshot struct {
+	Balance    uint64
+	Finalizing bool
+	Inferences map[uint64]*types.InferenceRecord
+	HostStats  map[uint32]*types.HostStats
+}
+
+func (sm *StateMachine) snapshotMutable() mutableSnapshot {
+	infCopy := make(map[uint64]*types.InferenceRecord, len(sm.state.Inferences))
+	for k, v := range sm.state.Inferences {
+		cp := *v
+		if v.VotedSlots != nil {
+			cp.VotedSlots = make(map[uint32]bool, len(v.VotedSlots))
+			for sk, sv := range v.VotedSlots {
+				cp.VotedSlots[sk] = sv
+			}
+		}
+		if v.PromptHash != nil {
+			cp.PromptHash = make([]byte, len(v.PromptHash))
+			copy(cp.PromptHash, v.PromptHash)
+		}
+		if v.ResponseHash != nil {
+			cp.ResponseHash = make([]byte, len(v.ResponseHash))
+			copy(cp.ResponseHash, v.ResponseHash)
+		}
+		infCopy[k] = &cp
+	}
+
+	hsCopy := make(map[uint32]*types.HostStats, len(sm.state.HostStats))
+	for k, v := range sm.state.HostStats {
+		cp := *v
+		hsCopy[k] = &cp
+	}
+
+	return mutableSnapshot{
+		Balance:    sm.state.Balance,
+		Finalizing: sm.state.Finalizing,
+		Inferences: infCopy,
+		HostStats:  hsCopy,
+	}
+}
+
+func (sm *StateMachine) restoreMutable(snap mutableSnapshot) {
+	sm.state.Balance = snap.Balance
+	sm.state.Finalizing = snap.Finalizing
+	sm.state.Inferences = snap.Inferences
+	sm.state.HostStats = snap.HostStats
+}
+
 // ComputeStateRoot returns the current state root without modifying state.
 func (sm *StateMachine) ComputeStateRoot() ([]byte, error) {
 	return ComputeStateRoot(sm.state.Balance, sm.state.HostStats, sm.state.Inferences)
@@ -223,7 +296,14 @@ func (sm *StateMachine) applyStartInference(msg *types.MsgStartInference) error 
 	executorSlot := sm.state.Group[msg.InferenceId%uint64(len(sm.state.Group))].SlotID
 
 	// Reserve cost: (input_length + max_tokens) * token_price
-	reservedCost := (msg.InputLength + msg.MaxTokens) * sm.state.Config.TokenPrice
+	sum, ok := safeAdd(msg.InputLength, msg.MaxTokens)
+	if !ok {
+		return types.ErrCostOverflow
+	}
+	reservedCost, ok := safeMul(sum, sm.state.Config.TokenPrice)
+	if !ok {
+		return types.ErrCostOverflow
+	}
 	if sm.state.Balance < reservedCost {
 		return types.ErrInsufficientBalance
 	}
@@ -307,7 +387,14 @@ func (sm *StateMachine) applyFinishInference(msg *types.MsgFinishInference) erro
 	}
 
 	// Compute actual cost.
-	actualCost := (msg.InputTokens + msg.OutputTokens) * sm.state.Config.TokenPrice
+	tokenSum, ok := safeAdd(msg.InputTokens, msg.OutputTokens)
+	if !ok {
+		return types.ErrCostOverflow
+	}
+	actualCost, ok := safeMul(tokenSum, sm.state.Config.TokenPrice)
+	if !ok {
+		return types.ErrCostOverflow
+	}
 	if actualCost > rec.ReservedCost {
 		return types.ErrActualCostExceedsMax
 	}

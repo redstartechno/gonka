@@ -1,6 +1,7 @@
 package state
 
 import (
+	"math"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -1008,6 +1009,76 @@ func TestApplyDiff_RevealSeed_InvalidSlot(t *testing.T) {
 	diff := testutil.SignDiff(t, user, 1, []*types.SubnetTx{txRevealSeed(seedMsg)})
 	_, err := sm.ApplyDiff(diff)
 	require.ErrorIs(t, err, types.ErrSlotNotInGroup)
+}
+
+func TestApplyDiff_CostOverflow_StartInference(t *testing.T) {
+	hosts := []*signing.Secp256k1Signer{testutil.MustGenerateKey(t), testutil.MustGenerateKey(t)}
+	sm, user := newTestSM(t, hosts, math.MaxUint64)
+
+	// InputLength + MaxTokens overflows uint64.
+	diff := testutil.SignDiff(t, user, 1, []*types.SubnetTx{txStart(&types.MsgStartInference{
+		InferenceId: 1, PromptHash: []byte("prompt"), Model: "llama",
+		InputLength: math.MaxUint64, MaxTokens: 1, StartedAt: 1000,
+	})})
+	_, err := sm.ApplyDiff(diff)
+	require.ErrorIs(t, err, types.ErrCostOverflow)
+
+	// Multiplication overflows: large input * price.
+	diff = testutil.SignDiff(t, user, 1, []*types.SubnetTx{txStart(&types.MsgStartInference{
+		InferenceId: 1, PromptHash: []byte("prompt"), Model: "llama",
+		InputLength: math.MaxUint64 / 2, MaxTokens: 1, StartedAt: 1000,
+	})})
+	// With TokenPrice=1, the mul won't overflow. Use a custom SM with higher price.
+	config := types.SessionConfig{TokenPrice: 3, VoteThreshold: 1}
+	group := testutil.MakeGroup(hosts)
+	verifier := signing.NewSecp256k1Verifier()
+	smHigh := NewStateMachine("escrow-1", config, group, math.MaxUint64, user.Address(), verifier)
+
+	diff = testutil.SignDiff(t, user, 1, []*types.SubnetTx{txStart(&types.MsgStartInference{
+		InferenceId: 1, PromptHash: []byte("prompt"), Model: "llama",
+		InputLength: math.MaxUint64 / 2, MaxTokens: 1, StartedAt: 1000,
+	})})
+	_, err = smHigh.ApplyDiff(diff)
+	require.ErrorIs(t, err, types.ErrCostOverflow)
+}
+
+func TestApplyDiff_AtomicRollback(t *testing.T) {
+	hosts := []*signing.Secp256k1Signer{testutil.MustGenerateKey(t), testutil.MustGenerateKey(t), testutil.MustGenerateKey(t)}
+	sm, user := newTestSM(t, hosts, 10000)
+
+	// First: apply a valid start.
+	diff := testutil.SignDiff(t, user, 1, []*types.SubnetTx{txStart(&types.MsgStartInference{
+		InferenceId: 1, PromptHash: []byte("prompt"), Model: "llama",
+		InputLength: 100, MaxTokens: 50, StartedAt: 1000,
+	})})
+	_, err := sm.ApplyDiff(diff)
+	require.NoError(t, err)
+
+	balanceBefore := sm.SnapshotState().Balance
+
+	// Diff with two txs: a valid confirm, then an invalid finish (wrong executor slot).
+	// The confirm would succeed, modifying state, but the finish fails.
+	// With atomic rollback, the state should be unchanged.
+	execSig := testutil.SignExecutorReceipt(t, hosts[1], 1, []byte("prompt"), "llama", 100, 50, 1000)
+
+	finishMsg := &types.MsgFinishInference{
+		InferenceId: 1, ResponseHash: []byte("response"),
+		InputTokens: 80, OutputTokens: 40, ExecutorSlot: 2, // Wrong executor slot.
+	}
+	finishMsg.ProposerSig = testutil.SignProposerTx(t, hosts[2], finishMsg)
+
+	diff = testutil.SignDiff(t, user, 2, []*types.SubnetTx{
+		txConfirm(&types.MsgConfirmStart{InferenceId: 1, ExecutorSig: execSig}),
+		txFinish(finishMsg),
+	})
+	_, err = sm.ApplyDiff(diff)
+	require.Error(t, err)
+
+	// State should be unchanged (atomic rollback).
+	st := sm.SnapshotState()
+	require.Equal(t, balanceBefore, st.Balance)
+	require.Equal(t, types.StatusPending, st.Inferences[1].Status, "should still be pending after rollback")
+	require.Equal(t, uint64(1), st.LatestNonce, "nonce should not advance on failure")
 }
 
 // applyStartConfirmFinish_Setup applies start + confirm only (no finish).

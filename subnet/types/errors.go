@@ -23,6 +23,7 @@ var (
 	ErrDuplicateInferenceID  = errors.New("duplicate inference ID")
 	ErrInvalidVoteSig        = errors.New("invalid vote signature")
 	ErrInvalidInferenceID    = errors.New("inference_id must equal diff nonce")
+	ErrCostOverflow          = errors.New("cost calculation overflows uint64")
 	ErrSlotNotInGroup        = errors.New("slot not in group")
 	ErrHostNotInGroup        = errors.New("host signer address not in group")
 	ErrGroupSizeMismatch     = errors.New("hosts count does not match group size")

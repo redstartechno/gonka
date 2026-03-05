@@ -95,7 +95,8 @@ func (s *Server) Register(g *echo.Group) {
 	g.POST("/sessions/:id/verify-timeout", s.handleVerifyTimeout)
 	g.POST("/sessions/:id/gossip/nonce", s.handleGossipNonce)
 	g.POST("/sessions/:id/gossip/txs", s.handleGossipTxs)
-	// GET endpoints intentionally skip group membership check for now.
+	// TODO: GET endpoints are intentionally unauthenticated for now.
+	// Before production, restrict these to group members or add read-only auth.
 	g.GET("/sessions/:id/diffs", s.handleGetDiffs)
 	g.GET("/sessions/:id/mempool", s.handleGetMempool)
 	g.GET("/sessions/:id/signatures", s.handleGetSignatures)
@@ -249,12 +250,14 @@ func (s *Server) handleVerifyTimeout(c echo.Context) error {
 		}
 	}
 
+	nowUnix := time.Now().Unix()
+
 	var accept bool
 	switch reason {
 	case types.TimeoutReason_TIMEOUT_REASON_REFUSED:
-		accept, err = host.VerifyRefusedTimeout(c.Request().Context(), st, req.InferenceID, req.PromptData, localMempool, executorClient, st.Config)
+		accept, err = host.VerifyRefusedTimeout(c.Request().Context(), st, req.InferenceID, req.PromptData, localMempool, executorClient, st.Config, nowUnix)
 	case types.TimeoutReason_TIMEOUT_REASON_EXECUTION:
-		accept, err = host.VerifyExecutionTimeout(c.Request().Context(), st, req.InferenceID, localMempool, executorClient, st.Config)
+		accept, err = host.VerifyExecutionTimeout(c.Request().Context(), st, req.InferenceID, localMempool, executorClient, st.Config, nowUnix)
 	default:
 		return errJSON(c, http.StatusBadRequest, "unknown reason")
 	}
@@ -302,6 +305,9 @@ func (s *Server) handleGossipNonce(c echo.Context) error {
 		return errJSON(c, http.StatusBadRequest, "invalid json")
 	}
 
+	// req.SlotID is self-reported by the sender but not exploitable:
+	// AccumulateGossipSig verifies the signature against the claimed slot's
+	// address, so a forged SlotID will fail sig recovery.
 	if s.gossip != nil {
 		if err := s.gossip.OnNonceReceived(req.Nonce, req.StateHash, req.StateSig, req.SlotID); err != nil {
 			return errJSON(c, http.StatusConflict, err.Error())

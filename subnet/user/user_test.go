@@ -42,7 +42,7 @@ func setupSessionWithEngine(t *testing.T, numHosts int, balance uint64, grace ui
 		} else {
 			engine = stub.NewInferenceEngine()
 		}
-		h, err := host.NewHost(sm, hosts[i], engine, "escrow-1", group, grace, nil)
+		h, err := host.NewHost(sm, hosts[i], engine, "escrow-1", group, nil, host.WithGrace(grace))
 		require.NoError(t, err)
 		clients[i] = &InProcessClient{Host: h}
 	}
@@ -160,7 +160,7 @@ func TestUser_HostError_StateConsistency(t *testing.T) {
 		}
 		sm := state.NewStateMachine("escrow-1", config, group, 100000, userKey.Address(), verifier)
 		engine := stub.NewInferenceEngine()
-		h, err := host.NewHost(sm, hosts[i], engine, "escrow-1", group, 100, nil)
+		h, err := host.NewHost(sm, hosts[i], engine, "escrow-1", group, nil, host.WithGrace(100))
 		require.NoError(t, err)
 		clients[i] = &InProcessClient{Host: h}
 	}

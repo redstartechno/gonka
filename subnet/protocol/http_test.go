@@ -60,8 +60,8 @@ func setupHTTPEnv(t *testing.T, numHosts int, balance, grace uint64) *httpTestEn
 		require.NoError(t, store.CreateSession("escrow-1", config, group, balance))
 		stores[i] = store
 
-		h, err := host.NewHost(sm, hostSigners[i], engine, "escrow-1", group, grace, nil,
-			host.WithStorage(store), host.WithVerifier(verifier))
+		h, err := host.NewHost(sm, hostSigners[i], engine, "escrow-1", group, nil,
+			host.WithGrace(grace), host.WithStorage(store), host.WithVerifier(verifier))
 		require.NoError(t, err)
 		hosts[i] = h
 
@@ -689,19 +689,19 @@ func TestHTTP_StateHashVerification(t *testing.T) {
 	// Build a normal host for slot 0.
 	sm0 := state.NewStateMachine("escrow-1", config, group, 100000, userSigner.Address(), verifier)
 	engine0 := stub.NewInferenceEngine()
-	h0, err := host.NewHost(sm0, hostSigners[0], engine0, "escrow-1", group, 100, nil)
+	h0, err := host.NewHost(sm0, hostSigners[0], engine0, "escrow-1", group, nil, host.WithGrace(100))
 	require.NoError(t, err)
 
 	// Build a tampered host for slot 1 with different initial balance -> different state hash.
 	sm1 := state.NewStateMachine("escrow-1", config, group, 99999, userSigner.Address(), verifier)
 	engine1 := stub.NewInferenceEngine()
-	h1, err := host.NewHost(sm1, hostSigners[1], engine1, "escrow-1", group, 100, nil)
+	h1, err := host.NewHost(sm1, hostSigners[1], engine1, "escrow-1", group, nil, host.WithGrace(100))
 	require.NoError(t, err)
 
 	// Build a normal host for slot 2.
 	sm2 := state.NewStateMachine("escrow-1", config, group, 100000, userSigner.Address(), verifier)
 	engine2 := stub.NewInferenceEngine()
-	h2, err := host.NewHost(sm2, hostSigners[2], engine2, "escrow-1", group, 100, nil)
+	h2, err := host.NewHost(sm2, hostSigners[2], engine2, "escrow-1", group, nil, host.WithGrace(100))
 	require.NoError(t, err)
 
 	clients := []user.HostClient{

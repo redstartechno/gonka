@@ -432,6 +432,7 @@ func (s *Session) CollectTimeoutVotes(
 		}
 	}
 
+	voteThreshold := s.sm.SnapshotState().Config.VoteThreshold
 	for i := 0; i < expected; i++ {
 		res := <-results
 		if res.err != nil {
@@ -441,7 +442,7 @@ func (s *Session) CollectTimeoutVotes(
 			votes = append(votes, res.vote)
 		}
 		// Check if we have enough.
-		if uint32(len(votes)) > s.sm.SnapshotState().Config.VoteThreshold {
+		if uint32(len(votes)) > voteThreshold {
 			break
 		}
 	}

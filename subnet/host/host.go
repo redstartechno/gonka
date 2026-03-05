@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"sync"
 
 	"google.golang.org/protobuf/proto"
 
@@ -53,6 +54,7 @@ type AcceptanceChecker interface {
 
 // Host processes user requests: applies diffs, executes inference, signs state.
 type Host struct {
+	mu       sync.Mutex
 	sm       *state.StateMachine
 	signer   signing.Signer
 	verifier signing.Verifier
@@ -61,7 +63,6 @@ type Host struct {
 	slotIDs  map[uint32]bool
 	group    []types.SlotAssignment
 	mempool  *Mempool
-	grace    uint64
 	checker  AcceptanceChecker
 	store    storage.Storage  // optional, nil = no persistence
 	gsp      *gossip.Gossip   // optional, nil = no gossip pruning
@@ -73,7 +74,6 @@ func NewHost(
 	engine subnet.InferenceEngine,
 	escrowID string,
 	group []types.SlotAssignment,
-	grace uint64,
 	checker AcceptanceChecker,
 	opts ...HostOption,
 ) (*Host, error) {
@@ -95,7 +95,6 @@ func NewHost(
 		slotIDs:  slotIDs,
 		group:    group,
 		mempool:  NewMempool(),
-		grace:    grace,
 		checker:  checker,
 	}
 	for _, opt := range opts {
@@ -103,6 +102,11 @@ func NewHost(
 	}
 	return h, nil
 }
+
+// HostMempool returns the host's mempool. Use this to construct a
+// StalenessChecker after host creation, then set it via WithChecker option
+// or pass it during construction.
+func (h *Host) HostMempool() *Mempool { return h.mempool }
 
 // HostOption configures optional Host behavior.
 type HostOption func(*Host)
@@ -122,10 +126,28 @@ func WithGossip(g *gossip.Gossip) HostOption {
 	return func(h *Host) { h.gsp = g }
 }
 
+// WithGrace adds a StalenessChecker to the host's acceptance chain.
+// If a checker was already set via the constructor, both are composed
+// via CompositeChecker.
+func WithGrace(grace uint64) HostOption {
+	return func(h *Host) {
+		sc := NewStalenessChecker(h.mempool, grace)
+		if h.checker != nil {
+			h.checker = NewCompositeChecker(sc, h.checker)
+		} else {
+			h.checker = sc
+		}
+	}
+}
+
 func (h *Host) StateRoot() ([]byte, error) { return h.sm.ComputeStateRoot() }
 
 // MempoolTxs returns a copy of the current mempool transactions.
-func (h *Host) MempoolTxs() []*types.SubnetTx { return h.mempool.Txs() }
+func (h *Host) MempoolTxs() []*types.SubnetTx {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.mempool.Txs()
+}
 
 // EscrowID returns the escrow ID this host is configured for.
 func (h *Host) EscrowID() string { return h.escrowID }
@@ -137,30 +159,23 @@ func (h *Host) Group() []types.SlotAssignment { return h.group }
 func (h *Host) SlotIDs() map[uint32]bool { return h.slotIDs }
 
 // SnapshotState returns a deep copy of the current state.
-func (h *Host) SnapshotState() types.EscrowState { return h.sm.SnapshotState() }
+func (h *Host) SnapshotState() types.EscrowState {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.sm.SnapshotState()
+}
 
 // Signer returns the host's signer (for timeout vote signing).
 func (h *Host) Signer() signing.Signer { return h.signer }
 
 func (h *Host) HandleRequest(ctx context.Context, req HostRequest) (*HostResponse, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
 	// (a) Apply all new diffs.
 	for _, diff := range req.Diffs {
-		currentNonce := h.sm.LatestNonce()
-		if diff.Nonce <= currentNonce {
-			continue
-		}
-		root, err := h.sm.ApplyDiff(diff)
-		if err != nil {
-			return nil, fmt.Errorf("apply diff nonce %d: %w", diff.Nonce, err)
-		}
-		h.mempool.RemoveIncluded(diff.Txs)
-
-		// Persist diff if storage is configured.
-		if h.store != nil {
-			rec := types.DiffRecord{Diff: diff, StateHash: root}
-			if err := h.store.AppendDiff(h.escrowID, rec); err != nil {
-				return nil, fmt.Errorf("persist diff nonce %d: %w", diff.Nonce, err)
-			}
+		if err := h.applyAndPersist(diff); err != nil {
+			return nil, err
 		}
 	}
 
@@ -170,37 +185,10 @@ func (h *Host) HandleRequest(ctx context.Context, req HostRequest) (*HostRespons
 		return nil, err
 	}
 
-	// (c) Compute state root unconditionally -- needed for gossip and response.
-	nonce := h.sm.LatestNonce()
-	root, err := h.sm.ComputeStateRoot()
+	// (c) Sign state (with acceptance check + mempool staleness).
+	stateSig, root, nonce, err := h.signIfAccepted()
 	if err != nil {
-		return nil, fmt.Errorf("compute state root: %w", err)
-	}
-
-	// (d) State signing (conditional on acceptance check and mempool staleness).
-	var stateSig []byte
-	blocked := false
-	if h.checker != nil {
-		if err := h.checker.Check(h.sm.SnapshotState()); err != nil {
-			blocked = true
-		}
-	}
-	if !h.mempool.HasStale(nonce, h.grace) && !blocked {
-		sig, err := h.signState(nonce, root)
-		if err != nil {
-			return nil, fmt.Errorf("sign state root: %w", err)
-		}
-		stateSig = sig
-
-		// Store own signature in storage.
-		if h.store != nil {
-			for slotID := range h.slotIDs {
-				if err := h.store.AddSignature(h.escrowID, nonce, slotID, sig); err != nil {
-					logging.Debug("store own sig failed", "subsystem", "host", "nonce", nonce, "error", err)
-				}
-			}
-			h.checkFinalization(nonce)
-		}
+		return nil, err
 	}
 
 	return &HostResponse{
@@ -210,6 +198,61 @@ func (h *Host) HandleRequest(ctx context.Context, req HostRequest) (*HostRespons
 		Receipt:   receipt,
 		Mempool:   h.mempool.Txs(),
 	}, nil
+}
+
+// applyAndPersist applies a diff, removes included txs from mempool, and persists.
+// Caller must hold h.mu.
+func (h *Host) applyAndPersist(diff types.Diff) error {
+	currentNonce := h.sm.LatestNonce()
+	if diff.Nonce <= currentNonce {
+		return nil
+	}
+	root, err := h.sm.ApplyDiff(diff)
+	if err != nil {
+		return fmt.Errorf("apply diff nonce %d: %w", diff.Nonce, err)
+	}
+	h.mempool.RemoveIncluded(diff.Txs)
+
+	if h.store != nil {
+		rec := types.DiffRecord{Diff: diff, StateHash: root}
+		if err := h.store.AppendDiff(h.escrowID, rec); err != nil {
+			return fmt.Errorf("persist diff nonce %d: %w", diff.Nonce, err)
+		}
+	}
+	return nil
+}
+
+// signIfAccepted computes state root, checks acceptance, signs if allowed,
+// stores sig and checks finalization. Caller must hold h.mu.
+func (h *Host) signIfAccepted() (stateSig, root []byte, nonce uint64, err error) {
+	nonce = h.sm.LatestNonce()
+	root, err = h.sm.ComputeStateRoot()
+	if err != nil {
+		return nil, nil, 0, fmt.Errorf("compute state root: %w", err)
+	}
+
+	if h.checker != nil {
+		if err := h.checker.Check(h.sm.SnapshotState()); err != nil {
+			return nil, root, nonce, nil // withhold
+		}
+	}
+
+	sig, err := h.signState(nonce, root)
+	if err != nil {
+		return nil, nil, 0, fmt.Errorf("sign state root: %w", err)
+	}
+	stateSig = sig
+
+	if h.store != nil {
+		for slotID := range h.slotIDs {
+			if err := h.store.AddSignature(h.escrowID, nonce, slotID, sig); err != nil {
+				logging.Debug("store own sig failed", "subsystem", "host", "nonce", nonce, "error", err)
+			}
+		}
+		h.checkFinalization(nonce)
+	}
+
+	return stateSig, root, nonce, nil
 }
 
 func (h *Host) findDiff(diffs []types.Diff, nonce uint64) *types.Diff {
@@ -311,6 +354,9 @@ func (h *Host) executeIfAssigned(ctx context.Context, req HostRequest) ([]byte, 
 // The sig must recover to group[senderSlot] and the stateHash must match the
 // stored DiffRecord for that nonce.
 func (h *Host) AccumulateGossipSig(nonce uint64, stateHash, sig []byte, senderSlot uint32) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
 	if h.verifier == nil || h.store == nil {
 		return fmt.Errorf("host not configured for sig accumulation (verifier=%v, store=%v)", h.verifier != nil, h.store != nil)
 	}
@@ -357,43 +403,28 @@ func (h *Host) AccumulateGossipSig(nonce uint64, stateHash, sig []byte, senderSl
 // ApplyRecoveredDiffs applies diffs fetched during gossip recovery.
 // Returns GossipSig for each successfully applied nonce.
 func (h *Host) ApplyRecoveredDiffs(ctx context.Context, diffs []types.Diff) ([]gossip.GossipSig, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
 	var sigs []gossip.GossipSig
 
 	for _, diff := range diffs {
-		currentNonce := h.sm.LatestNonce()
-		if diff.Nonce <= currentNonce {
-			continue
-		}
-		root, err := h.sm.ApplyDiff(diff)
-		if err != nil {
+		if err := h.applyAndPersist(diff); err != nil {
 			return sigs, fmt.Errorf("apply recovered diff nonce %d: %w", diff.Nonce, err)
 		}
-		h.mempool.RemoveIncluded(diff.Txs)
 
-		if h.store != nil {
-			rec := types.DiffRecord{Diff: diff, StateHash: root}
-			if err := h.store.AppendDiff(h.escrowID, rec); err != nil {
-				return sigs, fmt.Errorf("persist recovered diff nonce %d: %w", diff.Nonce, err)
-			}
-		}
-
-		// Sign the state.
-		nonce := h.sm.LatestNonce()
-		sig, err := h.signState(nonce, root)
+		// Sign state with acceptance check (same path as HandleRequest).
+		stateSig, root, nonce, err := h.signIfAccepted()
 		if err != nil {
 			return sigs, fmt.Errorf("sign recovered state: %w", err)
 		}
 
-		// Store own signature.
-		if h.store != nil {
+		if stateSig != nil && h.store != nil {
 			for slotID := range h.slotIDs {
-				if err := h.store.AddSignature(h.escrowID, nonce, slotID, sig); err != nil {
-					logging.Debug("store own sig failed", "subsystem", "host", "nonce", nonce, "error", err)
-				}
 				sigs = append(sigs, gossip.GossipSig{
 					Nonce:     nonce,
 					StateHash: root,
-					Sig:       sig,
+					Sig:       stateSig,
 					SlotID:    slotID,
 				})
 			}

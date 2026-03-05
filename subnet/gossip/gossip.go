@@ -183,6 +183,13 @@ func (g *Gossip) PruneBelow(nonce uint64) {
 			delete(g.seen, n)
 		}
 	}
+
+	// Cap dedup map to prevent unbounded growth. Clearing causes at most
+	// one redundant broadcast per tx, which is harmless.
+	const maxBroadcastedTxs = 10000
+	if len(g.broadcastedTxs) > maxBroadcastedTxs {
+		clear(g.broadcastedTxs)
+	}
 }
 
 // BroadcastTxs sends txs to ALL peers with dedup.

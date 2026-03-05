@@ -29,6 +29,7 @@ func VerifyRefusedTimeout(
 	localMempool []*types.SubnetTx,
 	executorClient ExecutorClient,
 	config types.SessionConfig,
+	nowUnix int64,
 ) (bool, error) {
 	rec, ok := st.Inferences[inferenceID]
 	if !ok {
@@ -36,6 +37,11 @@ func VerifyRefusedTimeout(
 	}
 	if rec.Status != types.StatusPending {
 		return false, fmt.Errorf("inference %d: expected pending, got %d", inferenceID, rec.Status)
+	}
+
+	// Reject if refusal timeout deadline has not passed.
+	if nowUnix-rec.StartedAt < config.RefusalTimeout {
+		return false, nil
 	}
 
 	// Fast path: check local mempool for MsgConfirmStart.
@@ -78,6 +84,7 @@ func VerifyExecutionTimeout(
 	localMempool []*types.SubnetTx,
 	executorClient ExecutorClient,
 	config types.SessionConfig,
+	nowUnix int64,
 ) (bool, error) {
 	rec, ok := st.Inferences[inferenceID]
 	if !ok {
@@ -85,6 +92,11 @@ func VerifyExecutionTimeout(
 	}
 	if rec.Status != types.StatusStarted {
 		return false, fmt.Errorf("inference %d: expected started, got %d", inferenceID, rec.Status)
+	}
+
+	// Reject if execution timeout deadline has not passed.
+	if nowUnix-rec.StartedAt < config.ExecutionTimeout {
+		return false, nil
 	}
 
 	// Fast path: check local mempool for MsgFinishInference.

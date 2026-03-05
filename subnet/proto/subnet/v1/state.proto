@@ -34,6 +34,7 @@ message InferenceRecordProto {
   int64  started_at = 13;
   uint32 votes_valid = 14;
   uint32 votes_invalid = 15;
+  repeated uint32 voted_slots = 16;
 }
 
 message InferencesMapProto {

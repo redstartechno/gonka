@@ -41,7 +41,9 @@ func newTestHostWithChecker(t *testing.T, hostIdx int, hosts []*signing.Secp256k
 	verifier := signing.NewSecp256k1Verifier()
 	sm := state.NewStateMachine("escrow-1", config, group, balance, user.Address(), verifier)
 	engine := stub.NewInferenceEngine()
-	h, err := NewHost(sm, hosts[hostIdx], engine, "escrow-1", group, grace, checker)
+	var opts []HostOption
+	opts = append(opts, WithGrace(grace))
+	h, err := NewHost(sm, hosts[hostIdx], engine, "escrow-1", group, checker, opts...)
 	require.NoError(t, err)
 	return h
 }
@@ -241,7 +243,7 @@ func TestHost_NotInGroup(t *testing.T) {
 	sm := state.NewStateMachine("escrow-1", config, group, 10000, outsider.Address(), verifier)
 	engine := stub.NewInferenceEngine()
 
-	_, err := NewHost(sm, outsider, engine, "escrow-1", group, 10, nil)
+	_, err := NewHost(sm, outsider, engine, "escrow-1", group, nil, WithGrace(10))
 	require.ErrorIs(t, err, types.ErrHostNotInGroup)
 }
 
@@ -265,7 +267,7 @@ func newMultiSlotHost(t *testing.T, hostIdx int, hosts []*signing.Secp256k1Signe
 	verifier := signing.NewSecp256k1Verifier()
 	sm := state.NewStateMachine("escrow-1", config, group, balance, user.Address(), verifier)
 	engine := stub.NewInferenceEngine()
-	h, err := NewHost(sm, hosts[hostIdx], engine, "escrow-1", group, grace, nil)
+	h, err := NewHost(sm, hosts[hostIdx], engine, "escrow-1", group, nil, WithGrace(grace))
 	require.NoError(t, err)
 	return h
 }
@@ -436,8 +438,8 @@ func TestHost_StoresOwnSignature(t *testing.T) {
 
 	sm := state.NewStateMachine("escrow-1", config, group, 10000, user.Address(), verifier)
 	engine := stub.NewInferenceEngine()
-	h, err := NewHost(sm, hosts[0], engine, "escrow-1", group, 10, nil,
-		WithStorage(store), WithVerifier(verifier))
+	h, err := NewHost(sm, hosts[0], engine, "escrow-1", group, nil,
+		WithGrace(10), WithStorage(store), WithVerifier(verifier))
 	require.NoError(t, err)
 
 	diff := testutil.SignDiff(t, user, 1, []*types.SubnetTx{testutil.StartTx(1)})
@@ -462,8 +464,8 @@ func TestHost_AccumulateGossipSig(t *testing.T) {
 
 	sm := state.NewStateMachine("escrow-1", config, group, 10000, user.Address(), verifier)
 	engine := stub.NewInferenceEngine()
-	h, err := NewHost(sm, hosts[0], engine, "escrow-1", group, 10, nil,
-		WithStorage(store), WithVerifier(verifier))
+	h, err := NewHost(sm, hosts[0], engine, "escrow-1", group, nil,
+		WithGrace(10), WithStorage(store), WithVerifier(verifier))
 	require.NoError(t, err)
 
 	// Apply a diff to create a backed nonce.
@@ -503,8 +505,8 @@ func TestHost_AccumulateGossipSig_WrongSigner(t *testing.T) {
 
 	sm := state.NewStateMachine("escrow-1", config, group, 10000, user.Address(), verifier)
 	engine := stub.NewInferenceEngine()
-	h, err := NewHost(sm, hosts[0], engine, "escrow-1", group, 10, nil,
-		WithStorage(store), WithVerifier(verifier))
+	h, err := NewHost(sm, hosts[0], engine, "escrow-1", group, nil,
+		WithGrace(10), WithStorage(store), WithVerifier(verifier))
 	require.NoError(t, err)
 
 	diff := testutil.SignDiff(t, user, 1, []*types.SubnetTx{testutil.StartTx(1)})
@@ -538,8 +540,8 @@ func TestHost_GetSignatures(t *testing.T) {
 
 	sm := state.NewStateMachine("escrow-1", config, group, 10000, user.Address(), verifier)
 	engine := stub.NewInferenceEngine()
-	h, err := NewHost(sm, hosts[0], engine, "escrow-1", group, 10, nil,
-		WithStorage(store), WithVerifier(verifier))
+	h, err := NewHost(sm, hosts[0], engine, "escrow-1", group, nil,
+		WithGrace(10), WithStorage(store), WithVerifier(verifier))
 	require.NoError(t, err)
 
 	diff := testutil.SignDiff(t, user, 1, []*types.SubnetTx{testutil.StartTx(1)})
@@ -572,8 +574,8 @@ func TestHost_FinalizationThreshold(t *testing.T) {
 
 	sm := state.NewStateMachine("escrow-1", config, group, 10000, user.Address(), verifier)
 	engine := stub.NewInferenceEngine()
-	h, err := NewHost(sm, hosts[0], engine, "escrow-1", group, 10, nil,
-		WithStorage(store), WithVerifier(verifier))
+	h, err := NewHost(sm, hosts[0], engine, "escrow-1", group, nil,
+		WithGrace(10), WithStorage(store), WithVerifier(verifier))
 	require.NoError(t, err)
 
 	// Apply a diff so nonce 1 exists.
@@ -640,7 +642,7 @@ func TestHost_ExecuteFailure_ReturnsReceiptNoMempool(t *testing.T) {
 	verifier := signing.NewSecp256k1Verifier()
 	sm := state.NewStateMachine("escrow-1", config, group, 10000, user.Address(), verifier)
 	engine := stub.NewFailingEngine(fmt.Errorf("GPU error"))
-	h, err := NewHost(sm, hosts[1], engine, "escrow-1", group, 10, nil)
+	h, err := NewHost(sm, hosts[1], engine, "escrow-1", group, nil, WithGrace(10))
 	require.NoError(t, err)
 
 	diff := testutil.SignDiff(t, user, 1, []*types.SubnetTx{testutil.StartTx(1)})

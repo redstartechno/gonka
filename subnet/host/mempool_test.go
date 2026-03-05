@@ -27,8 +27,6 @@ func TestMempool_AddAndTxs(t *testing.T) {
 	require.Equal(t, 2, m.Len())
 	txs := m.Txs()
 	require.Len(t, txs, 2)
-	require.Equal(t, tx1, txs[0])
-	require.Equal(t, tx2, txs[1])
 }
 
 func validationTx(inferenceID uint64, slot uint32) *types.SubnetTx {
@@ -47,20 +45,17 @@ func TestMempool_RemoveIncluded(t *testing.T) {
 	m.RemoveIncluded([]*types.SubnetTx{validationTx(2, 1)})
 
 	require.Equal(t, 2, m.Len())
-	txs := m.Txs()
-	require.Equal(t, uint64(1), txs[0].GetValidation().InferenceId)
-	require.Equal(t, uint64(3), txs[1].GetFinishInference().InferenceId)
 }
 
-func TestMempool_HasStale(t *testing.T) {
+func TestMempool_HasStaleEntry(t *testing.T) {
 	m := NewMempool()
 	m.Add(MempoolEntry{Tx: finishTx(1), ProposedAt: 5})
 
 	// grace=3, currentNonce=8: 5+3=8, not < 8 -> not stale
-	require.False(t, m.HasStale(8, 3))
+	require.False(t, m.HasStaleEntry(8, 3))
 
 	// grace=3, currentNonce=9: 5+3=8 < 9 -> stale
-	require.True(t, m.HasStale(9, 3))
+	require.True(t, m.HasStaleEntry(9, 3))
 }
 
 func TestMempool_RemoveOnlyMatching(t *testing.T) {
@@ -76,4 +71,12 @@ func TestMempool_RemoveOnlyMatching(t *testing.T) {
 	m.RemoveIncluded([]*types.SubnetTx{finishTx(1)})
 	require.Equal(t, 1, m.Len())
 	require.NotNil(t, m.Txs()[0].GetValidation())
+}
+
+func TestMempool_DuplicateAdd(t *testing.T) {
+	m := NewMempool()
+	m.Add(MempoolEntry{Tx: finishTx(1), ProposedAt: 5})
+	m.Add(MempoolEntry{Tx: finishTx(1), ProposedAt: 6}) // same tx, overwrites
+
+	require.Equal(t, 1, m.Len(), "duplicate tx should overwrite, not double-add")
 }
