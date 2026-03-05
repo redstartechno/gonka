@@ -5,12 +5,10 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"bytes"
-	"fmt"
-
 	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/require"
 
+	"subnet/gossip"
 	"subnet/host"
 	"subnet/internal/testutil"
 	"subnet/signing"
@@ -183,22 +181,32 @@ func TestHTTP_GossipPropagation(t *testing.T) {
 }
 
 func TestHTTP_EquivocationDetection(t *testing.T) {
-	env := setupHTTPEnv(t, 3, 100000, 100)
-
-	// Set up gossip on server 0.
-	g := setupGossipForHost(t, env, 0)
-
+	env := setupHTTPEnvWithGossip(t, 3, 100000, 100)
 	ctx := context.Background()
 
-	// Send same nonce with different hashes.
-	err := g.OnNonceReceived(1, []byte("hash-a"), []byte("sig-a"), 1)
+	// Send inference to generate a real nonce+stateHash.
+	diff := testutil.SignDiff(t, env.userSigner, 1, []*types.SubnetTx{testutil.StartTx(1)})
+	resp, err := env.clients[0].Send(ctx, host.HostRequest{
+		Diffs: []types.Diff{diff},
+		Nonce: 1,
+		Payload: &host.InferencePayload{
+			Prompt:      testutil.TestPrompt,
+			Model:       "llama",
+			InputLength: 100,
+			MaxTokens:   50,
+			StartedAt:   1000,
+		},
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, resp.StateHash)
+
+	// Gossip nonce directly to host 1 with a conflicting hash.
+	err = env.clients[1].GossipNonce(ctx, 1, resp.StateHash, resp.StateSig, 0)
 	require.NoError(t, err)
 
-	err = g.OnNonceReceived(1, []byte("hash-b"), []byte("sig-b"), 2)
+	err = env.clients[1].GossipNonce(ctx, 1, []byte("wrong-hash"), []byte("wrong-sig"), 2)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "equivocation")
-
-	_ = ctx // used in setup
 }
 
 func TestHTTP_TimeoutRefused(t *testing.T) {
@@ -412,26 +420,141 @@ func (v *httpTimeoutVerifier) VerifyTimeout(ctx context.Context, inferenceID uin
 	return resp.Accept, resp.Signature, resp.VoterSlot, nil
 }
 
-func setupGossipForHost(t *testing.T, env *httpTestEnv, hostIdx int) *gossipHelper {
+// setupHTTPEnvWithGossip creates an HTTP test environment with real Gossip
+// instances wired to each server via HTTPClient peers.
+func setupHTTPEnvWithGossip(t *testing.T, numHosts int, balance, grace uint64) *httpTestEnv {
 	t.Helper()
-	// Import gossip package indirectly through the gossip helper.
-	return &gossipHelper{seen: make(map[uint64][]byte)}
-}
+	env := setupHTTPEnv(t, numHosts, balance, grace)
 
-// gossipHelper is a simple in-test gossip tracker (avoids importing gossip package in protocol tests).
-type gossipHelper struct {
-	seen map[uint64][]byte
-}
-
-func (g *gossipHelper) OnNonceReceived(nonce uint64, stateHash, stateSig []byte, senderSlot uint32) error {
-	if existing, ok := g.seen[nonce]; ok {
-		if !bytes.Equal(existing, stateHash) {
-			return fmt.Errorf("equivocation at nonce %d", nonce)
+	// Create gossip instances. Each host gets HTTPClient peers for all other hosts.
+	for i, srv := range env.servers {
+		var peers []gossip.PeerClient
+		for j, c := range env.clients {
+			if j == i {
+				continue
+			}
+			peers = append(peers, c)
 		}
-		return nil
+		g := gossip.NewGossip("escrow-1", uint32(i), peers, nil)
+		srv.SetGossip(g)
 	}
-	h := make([]byte, len(stateHash))
-	copy(h, stateHash)
-	g.seen[nonce] = h
-	return nil
+
+	return env
+}
+
+func TestHTTP_GossipIntegration(t *testing.T) {
+	env := setupHTTPEnvWithGossip(t, 3, 100000, 100)
+	ctx := context.Background()
+
+	// Send inference to host 0. Gossip should fire to peers.
+	diff := testutil.SignDiff(t, env.userSigner, 1, []*types.SubnetTx{testutil.StartTx(1)})
+	resp, err := env.clients[0].Send(ctx, host.HostRequest{
+		Diffs: []types.Diff{diff},
+		Nonce: 1,
+		Payload: &host.InferencePayload{
+			Prompt:      testutil.TestPrompt,
+			Model:       "llama",
+			InputLength: 100,
+			MaxTokens:   50,
+			StartedAt:   1000,
+		},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, resp.StateSig)
+	require.NotEmpty(t, resp.StateHash)
+
+	// Gossip fires async. Manually verify the same nonce arrives cleanly
+	// at another host (no equivocation error for matching hash).
+	err = env.clients[1].GossipNonce(ctx, 1, resp.StateHash, resp.StateSig, 0)
+	require.NoError(t, err)
+}
+
+func TestHTTP_EquivocationViaGossipHTTP(t *testing.T) {
+	env := setupHTTPEnvWithGossip(t, 3, 100000, 100)
+	ctx := context.Background()
+
+	// First nonce with hash-a.
+	err := env.clients[2].GossipNonce(ctx, 5, []byte("hash-a"), []byte("sig-a"), 0)
+	require.NoError(t, err)
+
+	// Same nonce with different hash -> equivocation.
+	err = env.clients[2].GossipNonce(ctx, 5, []byte("hash-b"), []byte("sig-b"), 1)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "409")
+}
+
+func TestHTTP_LazyTxGossipHTTP(t *testing.T) {
+	env := setupHTTPEnvWithGossip(t, 3, 100000, 100)
+	ctx := context.Background()
+
+	// Send inference to host 1 (executor for nonce=1 with 3 hosts: 1%3=1).
+	diff := testutil.SignDiff(t, env.userSigner, 1, []*types.SubnetTx{testutil.StartTx(1)})
+	resp, err := env.clients[1].Send(ctx, host.HostRequest{
+		Diffs: []types.Diff{diff},
+		Nonce: 1,
+		Payload: &host.InferencePayload{
+			Prompt:      testutil.TestPrompt,
+			Model:       "llama",
+			InputLength: 100,
+			MaxTokens:   50,
+			StartedAt:   1000,
+		},
+	})
+	require.NoError(t, err)
+
+	// Host 1 is executor, so it has mempool txs (finish msg).
+	require.NotEmpty(t, resp.Mempool, "executor should produce mempool txs")
+
+	// Gossip those txs to host 0 via HTTP.
+	err = env.clients[0].GossipTxs(ctx, resp.Mempool)
+	require.NoError(t, err)
+}
+
+func TestHTTP_StateHashVerification(t *testing.T) {
+	// User detects state hash mismatch from a host returning wrong state.
+	numHosts := 3
+	hostSigners := make([]*signing.Secp256k1Signer, numHosts)
+	for i := range hostSigners {
+		hostSigners[i] = testutil.MustGenerateKey(t)
+	}
+	userSigner := testutil.MustGenerateKey(t)
+	group := testutil.MakeGroup(hostSigners)
+	config := testutil.DefaultConfig(numHosts)
+	verifier := signing.NewSecp256k1Verifier()
+
+	// Build a normal host for slot 0.
+	sm0 := state.NewStateMachine("escrow-1", config, group, 100000, userSigner.Address(), verifier)
+	engine0 := stub.NewInferenceEngine()
+	h0, err := host.NewHost(sm0, hostSigners[0], engine0, "escrow-1", group, 100, nil)
+	require.NoError(t, err)
+
+	// Build a tampered host for slot 1 with different initial balance -> different state hash.
+	sm1 := state.NewStateMachine("escrow-1", config, group, 99999, userSigner.Address(), verifier)
+	engine1 := stub.NewInferenceEngine()
+	h1, err := host.NewHost(sm1, hostSigners[1], engine1, "escrow-1", group, 100, nil)
+	require.NoError(t, err)
+
+	// Build a normal host for slot 2.
+	sm2 := state.NewStateMachine("escrow-1", config, group, 100000, userSigner.Address(), verifier)
+	engine2 := stub.NewInferenceEngine()
+	h2, err := host.NewHost(sm2, hostSigners[2], engine2, "escrow-1", group, 100, nil)
+	require.NoError(t, err)
+
+	clients := []user.HostClient{
+		&user.InProcessClient{Host: h0},
+		&user.InProcessClient{Host: h1},
+		&user.InProcessClient{Host: h2},
+	}
+
+	userSM := state.NewStateMachine("escrow-1", config, group, 100000, userSigner.Address(), verifier)
+	session, err := user.NewSession(userSM, userSigner, "escrow-1", group, clients)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	params := defaultParams()
+
+	// First inference goes to host 1 (nonce 1 % 3 = 1) which has wrong balance.
+	_, err = session.SendInference(ctx, params)
+	require.Error(t, err)
+	require.ErrorIs(t, err, types.ErrStateHashMismatch)
 }

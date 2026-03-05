@@ -28,4 +28,5 @@ var (
 	ErrGroupSizeMismatch     = errors.New("hosts count does not match group size")
 	ErrPromptHashMismatch    = errors.New("prompt does not match hash in StartInference")
 	ErrPayloadMismatch       = errors.New("request payload does not match StartInference params")
+	ErrStateHashMismatch     = errors.New("host state hash does not match local state")
 )

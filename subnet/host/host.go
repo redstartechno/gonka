@@ -35,10 +35,11 @@ type HostRequest struct {
 
 // HostResponse carries the host's reply back to the user.
 type HostResponse struct {
-	StateSig []byte // nil = withheld
-	Nonce    uint64 // current nonce after applying diffs
-	Receipt  []byte // executor receipt sig, nil if not executor
-	Mempool  []*types.SubnetTx
+	StateSig  []byte // nil = withheld
+	StateHash []byte // always set after applying diffs
+	Nonce     uint64 // current nonce after applying diffs
+	Receipt   []byte // executor receipt sig, nil if not executor
+	Mempool   []*types.SubnetTx
 }
 
 // AcceptanceChecker is an optional hook that lets the host withhold its
@@ -156,9 +157,14 @@ func (h *Host) HandleRequest(ctx context.Context, req HostRequest) (*HostRespons
 		return nil, err
 	}
 
-	// (c) State signing + response.
+	// (c) Compute state root unconditionally -- needed for gossip and response.
 	nonce := h.sm.LatestNonce()
+	root, err := h.sm.ComputeStateRoot()
+	if err != nil {
+		return nil, fmt.Errorf("compute state root: %w", err)
+	}
 
+	// (d) State signing (conditional on acceptance check and mempool staleness).
 	var stateSig []byte
 	blocked := false
 	if h.checker != nil {
@@ -167,10 +173,6 @@ func (h *Host) HandleRequest(ctx context.Context, req HostRequest) (*HostRespons
 		}
 	}
 	if !h.mempool.HasStale(nonce, h.grace) && !blocked {
-		root, err := h.sm.ComputeStateRoot()
-		if err != nil {
-			return nil, fmt.Errorf("compute state root: %w", err)
-		}
 		sigContent := &types.StateSignatureContent{
 			StateRoot: root,
 			EscrowId:  h.escrowID,
@@ -188,10 +190,11 @@ func (h *Host) HandleRequest(ctx context.Context, req HostRequest) (*HostRespons
 	}
 
 	return &HostResponse{
-		StateSig: stateSig,
-		Nonce:    nonce,
-		Receipt:  receipt,
-		Mempool:  h.mempool.Txs(),
+		StateSig:  stateSig,
+		StateHash: root,
+		Nonce:     nonce,
+		Receipt:   receipt,
+		Mempool:   h.mempool.Txs(),
 	}, nil
 }
 

@@ -1,6 +1,7 @@
 package user
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"fmt"
@@ -135,7 +136,20 @@ func (s *Session) DiffsForHost(hostIdx int) []types.Diff {
 
 // ProcessResponse updates session state from a host response.
 // Queues receipt as MsgConfirmStart, adds mempool txs, stores signature.
+// Verifies that the host's state hash matches the local state root.
 func (s *Session) ProcessResponse(hostIdx int, resp *host.HostResponse) error {
+	// Verify state hash if the host returned one.
+	if len(resp.StateHash) > 0 {
+		localRoot, err := s.sm.ComputeStateRoot()
+		if err != nil {
+			return fmt.Errorf("compute local state root: %w", err)
+		}
+		if !bytes.Equal(localRoot, resp.StateHash) {
+			return fmt.Errorf("%w: host %d at nonce %d (local %x, host %x)",
+				types.ErrStateHashMismatch, hostIdx, resp.Nonce, localRoot, resp.StateHash)
+		}
+	}
+
 	// Store signature.
 	if resp.StateSig != nil {
 		slotID := s.group[hostIdx].SlotID

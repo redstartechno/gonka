@@ -214,7 +214,7 @@ func (s *Server) handleInference(c echo.Context) error {
 
 	// Fire gossip in background if configured.
 	if s.gossip != nil && resp.StateSig != nil {
-		go s.gossip.AfterRequest(context.Background(), resp.Nonce, nil, resp.StateSig)
+		go s.gossip.AfterRequest(context.Background(), resp.Nonce, resp.StateHash, resp.StateSig)
 	}
 
 	return writeJSON(c, http.StatusOK, respJSON)
