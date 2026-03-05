@@ -186,16 +186,7 @@ func (h *Host) HandleRequest(ctx context.Context, req HostRequest) (*HostRespons
 		}
 	}
 	if !h.mempool.HasStale(nonce, h.grace) && !blocked {
-		sigContent := &types.StateSignatureContent{
-			StateRoot: root,
-			EscrowId:  h.escrowID,
-			Nonce:     nonce,
-		}
-		sigData, err := proto.Marshal(sigContent)
-		if err != nil {
-			return nil, fmt.Errorf("marshal state sig content: %w", err)
-		}
-		sig, err := h.signer.Sign(sigData)
+		sig, err := h.signState(nonce, root)
 		if err != nil {
 			return nil, fmt.Errorf("sign state root: %w", err)
 		}
@@ -334,9 +325,9 @@ func (h *Host) AccumulateGossipSig(nonce uint64, stateHash, sig []byte, senderSl
 		EscrowId:  h.escrowID,
 		Nonce:     nonce,
 	}
-	sigData, err := proto.Marshal(sigContent)
-	if err != nil {
-		return fmt.Errorf("marshal sig content: %w", err)
+	sigData, mErr := proto.Marshal(sigContent)
+	if mErr != nil {
+		return fmt.Errorf("marshal sig content: %w", mErr)
 	}
 	addr, err := h.verifier.RecoverAddress(sigData, sig)
 	if err != nil {
@@ -388,16 +379,7 @@ func (h *Host) ApplyRecoveredDiffs(ctx context.Context, diffs []types.Diff) ([]g
 
 		// Sign the state.
 		nonce := h.sm.LatestNonce()
-		sigContent := &types.StateSignatureContent{
-			StateRoot: root,
-			EscrowId:  h.escrowID,
-			Nonce:     nonce,
-		}
-		sigData, err := proto.Marshal(sigContent)
-		if err != nil {
-			return sigs, fmt.Errorf("marshal state sig content: %w", err)
-		}
-		sig, err := h.signer.Sign(sigData)
+		sig, err := h.signState(nonce, root)
 		if err != nil {
 			return sigs, fmt.Errorf("sign recovered state: %w", err)
 		}
@@ -459,6 +441,20 @@ func (h *Host) GetSignatures(nonce uint64) (map[uint32][]byte, error) {
 		return nil, fmt.Errorf("no storage configured")
 	}
 	return h.store.GetSignatures(h.escrowID, nonce)
+}
+
+// signState marshals StateSignatureContent{root, escrowID, nonce} and signs it.
+func (h *Host) signState(nonce uint64, root []byte) ([]byte, error) {
+	sigContent := &types.StateSignatureContent{
+		StateRoot: root,
+		EscrowId:  h.escrowID,
+		Nonce:     nonce,
+	}
+	sigData, err := proto.Marshal(sigContent)
+	if err != nil {
+		return nil, fmt.Errorf("marshal state sig content: %w", err)
+	}
+	return h.signer.Sign(sigData)
 }
 
 func (h *Host) verifyPayload(p *InferencePayload, start *types.MsgStartInference) error {

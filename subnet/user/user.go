@@ -355,7 +355,7 @@ func (s *Session) addPendingTx(tx *types.SubnetTx) {
 // clearPendingTxs resets the pending tx slice and dedup set.
 func (s *Session) clearPendingTxs() {
 	s.pendingTxs = nil
-	s.pendingTxKeys = make(map[string]struct{})
+	clear(s.pendingTxKeys)
 }
 
 func (s *Session) Signatures() map[uint64]map[uint32][]byte {

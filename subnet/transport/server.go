@@ -39,21 +39,6 @@ type Server struct {
 	maxBodySize int64               // max request body bytes, 0 = no limit
 }
 
-func protoMarshal(m proto.Message) ([]byte, error) { return proto.Marshal(m) }
-
-// httpExecutorAdapter wraps HTTPClient to satisfy host.ExecutorClient.
-type httpExecutorAdapter struct {
-	client *HTTPClient
-}
-
-func (a *httpExecutorAdapter) GetMempool(ctx context.Context) ([]*types.SubnetTx, error) {
-	return a.client.GetMempool(ctx)
-}
-
-func (a *httpExecutorAdapter) Send(ctx context.Context, req host.HostRequest) (*host.HostResponse, error) {
-	return a.client.Send(ctx, req)
-}
-
 // ServerOption configures the Server.
 type ServerOption func(*Server)
 
@@ -125,6 +110,11 @@ func writeJSON(c echo.Context, code int, v interface{}) error {
 	return c.Blob(code, echo.MIMEApplicationJSON, b)
 }
 
+// errJSON writes a JSON error response.
+func errJSON(c echo.Context, code int, msg string) error {
+	return writeJSON(c, code, map[string]string{"error": msg})
+}
+
 // isAllowedSender returns true if addr is the session user or a group member.
 func (s *Server) isAllowedSender(addr string) bool {
 	if s.userAddr != "" && addr == s.userAddr {
@@ -151,17 +141,17 @@ func (s *Server) authMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 		sigHex := c.Request().Header.Get(HeaderSignature)
 		tsStr := c.Request().Header.Get(HeaderTimestamp)
 		if sigHex == "" || tsStr == "" {
-			return writeJSON(c, http.StatusUnauthorized, map[string]string{"error": "missing auth headers"})
+			return errJSON(c, http.StatusUnauthorized, "missing auth headers")
 		}
 
 		sig, err := hex.DecodeString(sigHex)
 		if err != nil {
-			return writeJSON(c, http.StatusUnauthorized, map[string]string{"error": "invalid signature hex"})
+			return errJSON(c, http.StatusUnauthorized, "invalid signature hex")
 		}
 
 		ts, err := strconv.ParseInt(tsStr, 10, 64)
 		if err != nil {
-			return writeJSON(c, http.StatusUnauthorized, map[string]string{"error": "invalid timestamp"})
+			return errJSON(c, http.StatusUnauthorized, "invalid timestamp")
 		}
 
 		// Cap body size before reading.
@@ -171,17 +161,17 @@ func (s *Server) authMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 
 		body, err := io.ReadAll(c.Request().Body)
 		if err != nil {
-			return writeJSON(c, http.StatusBadRequest, map[string]string{"error": "read body"})
+			return errJSON(c, http.StatusBadRequest, "read body")
 		}
 
 		now := time.Now().Unix()
 		addr, err := VerifyRequest(s.verifier, s.escrowID, body, sig, ts, now)
 		if err != nil {
-			return writeJSON(c, http.StatusUnauthorized, map[string]string{"error": err.Error()})
+			return errJSON(c, http.StatusUnauthorized, err.Error())
 		}
 
 		if !s.isAllowedSender(addr) {
-			return writeJSON(c, http.StatusForbidden, map[string]string{"error": "sender not in group"})
+			return errJSON(c, http.StatusForbidden, "sender not in group")
 		}
 
 		// Store sender and re-inject body for handler.
@@ -196,22 +186,22 @@ func (s *Server) handleInference(c echo.Context) error {
 
 	var ir InferenceRequest
 	if err := json.Unmarshal(body, &ir); err != nil {
-		return writeJSON(c, http.StatusBadRequest, map[string]string{"error": "invalid json: " + err.Error()})
+		return errJSON(c, http.StatusBadRequest, "invalid json: "+err.Error())
 	}
 
 	req, err := HostRequestFromJSON(ir)
 	if err != nil {
-		return writeJSON(c, http.StatusBadRequest, map[string]string{"error": "decode request: " + err.Error()})
+		return errJSON(c, http.StatusBadRequest, "decode request: "+err.Error())
 	}
 
 	resp, err := s.host.HandleRequest(c.Request().Context(), req)
 	if err != nil {
-		return writeJSON(c, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return errJSON(c, http.StatusInternalServerError, err.Error())
 	}
 
 	respJSON, err := HostResponseToJSON(resp)
 	if err != nil {
-		return writeJSON(c, http.StatusInternalServerError, map[string]string{"error": "encode response: " + err.Error()})
+		return errJSON(c, http.StatusInternalServerError, "encode response: "+err.Error())
 	}
 
 	// Fire gossip in background if configured.
@@ -239,12 +229,12 @@ func (s *Server) handleVerifyTimeout(c echo.Context) error {
 
 	var req VerifyTimeoutRequest
 	if err := json.Unmarshal(body, &req); err != nil {
-		return writeJSON(c, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		return errJSON(c, http.StatusBadRequest, "invalid json")
 	}
 
 	reason, err := TimeoutReasonFromString(req.Reason)
 	if err != nil {
-		return writeJSON(c, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return errJSON(c, http.StatusBadRequest, err.Error())
 	}
 
 	st := s.host.SnapshotState()
@@ -255,7 +245,7 @@ func (s *Server) handleVerifyTimeout(c echo.Context) error {
 	var executorClient host.ExecutorClient
 	if s.peerClients != nil {
 		if pc, ok := s.peerClients[executorIdx]; ok {
-			executorClient = &httpExecutorAdapter{client: pc}
+			executorClient = pc
 		}
 	}
 
@@ -266,10 +256,10 @@ func (s *Server) handleVerifyTimeout(c echo.Context) error {
 	case types.TimeoutReason_TIMEOUT_REASON_EXECUTION:
 		accept, err = host.VerifyExecutionTimeout(c.Request().Context(), st, req.InferenceID, localMempool, executorClient, st.Config)
 	default:
-		return writeJSON(c, http.StatusBadRequest, map[string]string{"error": "unknown reason"})
+		return errJSON(c, http.StatusBadRequest, "unknown reason")
 	}
 	if err != nil {
-		return writeJSON(c, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return errJSON(c, http.StatusInternalServerError, err.Error())
 	}
 
 	resp := VerifyTimeoutResponse{Accept: accept}
@@ -289,13 +279,13 @@ func (s *Server) handleVerifyTimeout(c echo.Context) error {
 			Reason:      reason,
 			Accept:      true,
 		}
-		voteData, err := protoMarshal(voteContent)
+		voteData, err := proto.Marshal(voteContent)
 		if err != nil {
-			return writeJSON(c, http.StatusInternalServerError, map[string]string{"error": "marshal vote"})
+			return errJSON(c, http.StatusInternalServerError, "marshal vote")
 		}
 		sig, err := s.host.Signer().Sign(voteData)
 		if err != nil {
-			return writeJSON(c, http.StatusInternalServerError, map[string]string{"error": "sign vote"})
+			return errJSON(c, http.StatusInternalServerError, "sign vote")
 		}
 		resp.Signature = sig
 		resp.VoterSlot = voterSlot
@@ -309,12 +299,12 @@ func (s *Server) handleGossipNonce(c echo.Context) error {
 
 	var req GossipNonceRequest
 	if err := json.Unmarshal(body, &req); err != nil {
-		return writeJSON(c, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		return errJSON(c, http.StatusBadRequest, "invalid json")
 	}
 
 	if s.gossip != nil {
 		if err := s.gossip.OnNonceReceived(req.Nonce, req.StateHash, req.StateSig, req.SlotID); err != nil {
-			return writeJSON(c, http.StatusConflict, map[string]string{"error": err.Error()})
+			return errJSON(c, http.StatusConflict, err.Error())
 		}
 	}
 
@@ -334,13 +324,13 @@ func (s *Server) handleGossipTxs(c echo.Context) error {
 
 	var req GossipTxsRequest
 	if err := json.Unmarshal(body, &req); err != nil {
-		return writeJSON(c, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		return errJSON(c, http.StatusBadRequest, "invalid json")
 	}
 
 	if s.gossip != nil {
 		txs, err := SubnetTxsFromBytes(req.Txs)
 		if err != nil {
-			return writeJSON(c, http.StatusBadRequest, map[string]string{"error": "decode txs: " + err.Error()})
+			return errJSON(c, http.StatusBadRequest, "decode txs: "+err.Error())
 		}
 		s.gossip.OnTxsReceived(txs)
 	}
@@ -351,16 +341,16 @@ func (s *Server) handleGossipTxs(c echo.Context) error {
 func (s *Server) handleGetSignatures(c echo.Context) error {
 	nonceStr := c.QueryParam("nonce")
 	if nonceStr == "" {
-		return writeJSON(c, http.StatusBadRequest, map[string]string{"error": "missing 'nonce' parameter"})
+		return errJSON(c, http.StatusBadRequest, "missing 'nonce' parameter")
 	}
 	nonce, err := strconv.ParseUint(nonceStr, 10, 64)
 	if err != nil {
-		return writeJSON(c, http.StatusBadRequest, map[string]string{"error": "invalid 'nonce' parameter"})
+		return errJSON(c, http.StatusBadRequest, "invalid 'nonce' parameter")
 	}
 
 	sigs, err := s.host.GetSignatures(nonce)
 	if err != nil {
-		return writeJSON(c, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return errJSON(c, http.StatusInternalServerError, err.Error())
 	}
 
 	return writeJSON(c, http.StatusOK, SignaturesResponse{Signatures: sigs})
@@ -368,7 +358,7 @@ func (s *Server) handleGetSignatures(c echo.Context) error {
 
 func (s *Server) handleGetDiffs(c echo.Context) error {
 	if s.store == nil {
-		return writeJSON(c, http.StatusNotFound, map[string]string{"error": "no storage configured"})
+		return errJSON(c, http.StatusNotFound, "no storage configured")
 	}
 
 	fromStr := c.QueryParam("from")
@@ -376,16 +366,16 @@ func (s *Server) handleGetDiffs(c echo.Context) error {
 
 	from, err := strconv.ParseUint(fromStr, 10, 64)
 	if err != nil {
-		return writeJSON(c, http.StatusBadRequest, map[string]string{"error": "invalid 'from' parameter"})
+		return errJSON(c, http.StatusBadRequest, "invalid 'from' parameter")
 	}
 	to, err := strconv.ParseUint(toStr, 10, 64)
 	if err != nil {
-		return writeJSON(c, http.StatusBadRequest, map[string]string{"error": "invalid 'to' parameter"})
+		return errJSON(c, http.StatusBadRequest, "invalid 'to' parameter")
 	}
 
 	records, err := s.store.GetDiffs(s.escrowID, from, to)
 	if err != nil {
-		return writeJSON(c, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return errJSON(c, http.StatusInternalServerError, err.Error())
 	}
 
 	// Convert to JSON-friendly format.
@@ -398,9 +388,7 @@ func (s *Server) handleGetDiffs(c echo.Context) error {
 	for i, rec := range records {
 		dj, err := DiffToJSON(rec.Diff)
 		if err != nil {
-			return writeJSON(c, http.StatusInternalServerError, map[string]string{
-				"error": fmt.Sprintf("encode diff %d: %v", rec.Nonce, err),
-			})
+			return errJSON(c, http.StatusInternalServerError, fmt.Sprintf("encode diff %d: %v", rec.Nonce, err))
 		}
 		result[i] = diffRecordJSON{DiffJSON: dj, StateHash: rec.StateHash}
 	}
@@ -412,7 +400,7 @@ func (s *Server) handleGetMempool(c echo.Context) error {
 	txs := s.host.MempoolTxs()
 	data, err := SubnetTxsToBytes(txs)
 	if err != nil {
-		return writeJSON(c, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return errJSON(c, http.StatusInternalServerError, err.Error())
 	}
 	return writeJSON(c, http.StatusOK, map[string]interface{}{"txs": data})
 }

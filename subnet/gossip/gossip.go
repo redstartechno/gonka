@@ -52,11 +52,6 @@ type Gossip struct {
 	closeOnce sync.Once
 }
 
-// MempoolSink receives transactions from gossip peers.
-type MempoolSink interface {
-	AddTx(tx *types.SubnetTx)
-}
-
 // NewGossip creates a new gossip instance.
 func NewGossip(escrowID string, slotID uint32, peers []PeerClient, mempool MempoolSink) *Gossip {
 	return &Gossip{

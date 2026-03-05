@@ -70,7 +70,7 @@ func NewStateMachine(
 // ApplyDiff validates and applies a diff, returning the state root.
 func (sm *StateMachine) ApplyDiff(diff types.Diff) ([]byte, error) {
 	// 1. Verify user signature.
-	diffContent := sm.buildDiffContent(diff)
+	diffContent := BuildDiffContent(diff.Nonce, diff.Txs)
 	data, err := proto.Marshal(diffContent)
 	if err != nil {
 		return nil, fmt.Errorf("marshal diff content: %w", err)
@@ -203,7 +203,6 @@ func (sm *StateMachine) applyTx(tx *types.SubnetTx) error {
 	case *types.SubnetTx_RevealSeed:
 		return sm.applyRevealSeed(inner.RevealSeed)
 	case *types.SubnetTx_FinalizeRound:
-		_ = inner.FinalizeRound
 		return sm.applyFinalizeRound()
 	default:
 		return types.ErrEmptyTx
@@ -512,11 +511,6 @@ func (sm *StateMachine) applyFinalizeRound() error {
 	}
 	sm.state.Finalizing = true
 	return nil
-}
-
-// buildDiffContent converts a Diff to the proto DiffContent for signing.
-func (sm *StateMachine) buildDiffContent(diff types.Diff) *types.DiffContent {
-	return BuildDiffContent(diff.Nonce, diff.Txs)
 }
 
 // BuildDiffContent creates the proto DiffContent from nonce and txs for signing.

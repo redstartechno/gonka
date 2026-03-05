@@ -35,3 +35,8 @@ type SigAccumulator interface {
 	AccumulateGossipSig(nonce uint64, stateHash, sig []byte, senderSlot uint32) error
 }
 
+// MempoolSink receives transactions from gossip peers.
+type MempoolSink interface {
+	AddTx(tx *types.SubnetTx)
+}
+
