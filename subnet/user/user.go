@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"sync"
 
 	"google.golang.org/protobuf/proto"
 
@@ -46,6 +47,7 @@ type InferenceResult struct {
 
 // Session manages the user side of the subnet protocol.
 type Session struct {
+	mu            sync.Mutex
 	sm            *state.StateMachine
 	signer        signing.Signer
 	escrowID      string
@@ -85,7 +87,8 @@ func NewSession(
 
 // NextDiff composes a diff with pending txs + new MsgStartInference.
 // Returns the diff and target host index. Does NOT send.
-func (s *Session) NextDiff(params InferenceParams) (types.Diff, int, error) {
+// Caller must hold s.mu.
+func (s *Session) nextDiff(params InferenceParams) (types.Diff, int, error) {
 	nonce := s.nonce + 1
 	hostIdx := int(nonce % uint64(len(s.group)))
 
@@ -108,7 +111,7 @@ func (s *Session) NextDiff(params InferenceParams) (types.Diff, int, error) {
 	}})
 
 	// Sign the diff.
-	content := state.BuildDiffContent(nonce, txs)
+	content := state.BuildDiffContent(s.escrowID, nonce, txs)
 	data, err := proto.Marshal(content)
 	if err != nil {
 		return types.Diff{}, 0, fmt.Errorf("marshal diff content: %w", err)
@@ -122,8 +125,9 @@ func (s *Session) NextDiff(params InferenceParams) (types.Diff, int, error) {
 	return diff, hostIdx, nil
 }
 
-// DiffsForHost returns catch-up diffs for a host (from its last sync nonce to current).
-func (s *Session) DiffsForHost(hostIdx int) []types.Diff {
+// diffsForHost returns catch-up diffs for a host (from its last sync nonce to current).
+// Caller must hold s.mu.
+func (s *Session) diffsForHost(hostIdx int) []types.Diff {
 	lastSent := s.hostSyncNonce[hostIdx]
 	var result []types.Diff
 	for _, d := range s.diffs {
@@ -134,10 +138,9 @@ func (s *Session) DiffsForHost(hostIdx int) []types.Diff {
 	return result
 }
 
-// ProcessResponse updates session state from a host response.
-// Queues receipt as MsgConfirmStart, adds mempool txs, stores signature.
-// Verifies that the host's state hash matches the local state root.
-func (s *Session) ProcessResponse(hostIdx int, resp *host.HostResponse) error {
+// processResponse updates session state from a host response.
+// Caller must hold s.mu.
+func (s *Session) processResponse(hostIdx int, resp *host.HostResponse) error {
 	// Verify state hash if the host returned one.
 	if len(resp.StateHash) > 0 {
 		localRoot, err := s.sm.ComputeStateRoot()
@@ -164,7 +167,6 @@ func (s *Session) ProcessResponse(hostIdx int, resp *host.HostResponse) error {
 
 	// Queue receipt as MsgConfirmStart for the next diff.
 	if resp.Receipt != nil {
-		// The inference ID is the nonce of the diff that triggered the receipt.
 		s.addPendingTx(&types.SubnetTx{
 			Tx: &types.SubnetTx_ConfirmStart{ConfirmStart: &types.MsgConfirmStart{
 				InferenceId: resp.Nonce,
@@ -181,53 +183,106 @@ func (s *Session) ProcessResponse(hostIdx int, resp *host.HostResponse) error {
 	return nil
 }
 
-// SendInference composes diff, sends to correct host, processes response.
-func (s *Session) SendInference(ctx context.Context, params InferenceParams) (*InferenceResult, error) {
-	diff, hostIdx, err := s.NextDiff(params)
+// ProcessResponse updates session state from a host response. Thread-safe.
+func (s *Session) ProcessResponse(hostIdx int, resp *host.HostResponse) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.processResponse(hostIdx, resp)
+}
+
+// DiffsForHost returns catch-up diffs for a host. Thread-safe.
+func (s *Session) DiffsForHost(hostIdx int) []types.Diff {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.diffsForHost(hostIdx)
+}
+
+// NextDiff composes a diff with pending txs + new MsgStartInference. Thread-safe.
+func (s *Session) NextDiff(params InferenceParams) (types.Diff, int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.nextDiff(params)
+}
+
+// preparedInference holds the data prepared under lock for an inference send.
+type preparedInference struct {
+	diff       types.Diff
+	hostIdx    int
+	catchUp    []types.Diff
+	params     InferenceParams
+}
+
+// PrepareInference composes a diff, applies it locally, advances nonce,
+// and returns everything needed for the HTTP send. Thread-safe.
+func (s *Session) PrepareInference(params InferenceParams) (*preparedInference, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	diff, hostIdx, err := s.nextDiff(params)
 	if err != nil {
 		return nil, err
 	}
 
-	// Apply locally to validate.
 	if _, err := s.sm.ApplyDiff(diff); err != nil {
 		return nil, fmt.Errorf("local apply: %w", err)
 	}
 
-	// Record the diff and advance nonce.
 	s.diffs = append(s.diffs, diff)
 	s.nonce = diff.Nonce
-	// Clear pending txs since they're now included in this diff.
 	s.clearPendingTxs()
 
-	// Build catch-up diffs for the target host.
-	catchUpDiffs := s.DiffsForHost(hostIdx)
+	catchUp := s.diffsForHost(hostIdx)
 
-	resp, err := s.clients[hostIdx].Send(ctx, host.HostRequest{
-		Diffs: catchUpDiffs,
-		Nonce: diff.Nonce,
+	return &preparedInference{
+		diff:    diff,
+		hostIdx: hostIdx,
+		catchUp: catchUp,
+		params:  params,
+	}, nil
+}
+
+// SendPrepared sends a prepared inference to the host and processes the response.
+// The HTTP send runs without holding the lock; response processing re-acquires it.
+func (s *Session) SendPrepared(ctx context.Context, p *preparedInference) (*InferenceResult, error) {
+	resp, err := s.clients[p.hostIdx].Send(ctx, host.HostRequest{
+		Diffs: p.catchUp,
+		Nonce: p.diff.Nonce,
 		Payload: &host.InferencePayload{
-			Prompt:      params.Prompt,
-			Model:       params.Model,
-			InputLength: params.InputLength,
-			MaxTokens:   params.MaxTokens,
-			StartedAt:   params.StartedAt,
+			Prompt:      p.params.Prompt,
+			Model:       p.params.Model,
+			InputLength: p.params.InputLength,
+			MaxTokens:   p.params.MaxTokens,
+			StartedAt:   p.params.StartedAt,
 		},
 	})
 	if err != nil {
-		return nil, fmt.Errorf("send to host %d: %w", hostIdx, err)
+		return nil, fmt.Errorf("send to host %d: %w", p.hostIdx, err)
 	}
 
-	if err := s.ProcessResponse(hostIdx, resp); err != nil {
-		return nil, fmt.Errorf("process response from host %d: %w", hostIdx, err)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if err := s.processResponse(p.hostIdx, resp); err != nil {
+		return nil, fmt.Errorf("process response from host %d: %w", p.hostIdx, err)
 	}
 
 	return &InferenceResult{
-		InferenceID: diff.Nonce,
+		InferenceID: p.diff.Nonce,
 		Nonce:       resp.Nonce,
 		Receipt:     resp.Receipt,
 		StateSig:    resp.StateSig,
 		Mempool:     resp.Mempool,
 	}, nil
+}
+
+// SendInference composes diff, sends to correct host, processes response.
+// Convenience wrapper around PrepareInference + SendPrepared.
+func (s *Session) SendInference(ctx context.Context, params InferenceParams) (*InferenceResult, error) {
+	p, err := s.PrepareInference(params)
+	if err != nil {
+		return nil, err
+	}
+	return s.SendPrepared(ctx, p)
 }
 
 // Finalize completes the round in two single-pass phases.
@@ -243,6 +298,7 @@ func (s *Session) Finalize(ctx context.Context) error {
 
 	// Phase A: collect remaining txs, one diff per host.
 	for i := 0; i < n; i++ {
+		s.mu.Lock()
 		nonce := s.nonce + 1
 		hostIdx := int(nonce % uint64(n))
 
@@ -256,38 +312,63 @@ func (s *Session) Finalize(ctx context.Context) error {
 
 		diff, err := s.signDiff(nonce, txs)
 		if err != nil {
+			s.mu.Unlock()
 			return err
 		}
 		if _, err := s.sm.ApplyDiff(diff); err != nil {
+			s.mu.Unlock()
 			return fmt.Errorf("local apply: %w", err)
 		}
 		s.diffs = append(s.diffs, diff)
 		s.nonce = nonce
 		s.clearPendingTxs()
+		catchUp := s.diffsForHost(hostIdx)
+		s.mu.Unlock()
 
-		if err := s.sendAndProcess(ctx, hostIdx); err != nil {
-			return err
+		resp, err := s.clients[hostIdx].Send(ctx, host.HostRequest{Diffs: catchUp, Nonce: nonce})
+		if err != nil {
+			return fmt.Errorf("send to host %d: %w", hostIdx, err)
 		}
+
+		s.mu.Lock()
+		if err := s.processResponse(hostIdx, resp); err != nil {
+			s.mu.Unlock()
+			return fmt.Errorf("process response from host %d: %w", hostIdx, err)
+		}
+		s.mu.Unlock()
 	}
 
 	// Phase B: propagate complete state, collect signatures.
 	for i := 0; i < n; i++ {
+		s.mu.Lock()
 		nonce := s.nonce + 1
 		hostIdx := int(nonce % uint64(n))
 
 		diff, err := s.signDiff(nonce, nil)
 		if err != nil {
+			s.mu.Unlock()
 			return err
 		}
 		if _, err := s.sm.ApplyDiff(diff); err != nil {
+			s.mu.Unlock()
 			return fmt.Errorf("local apply: %w", err)
 		}
 		s.diffs = append(s.diffs, diff)
 		s.nonce = nonce
+		catchUp := s.diffsForHost(hostIdx)
+		s.mu.Unlock()
 
-		if err := s.sendAndProcess(ctx, hostIdx); err != nil {
-			return err
+		resp, err := s.clients[hostIdx].Send(ctx, host.HostRequest{Diffs: catchUp, Nonce: nonce})
+		if err != nil {
+			return fmt.Errorf("send to host %d: %w", hostIdx, err)
 		}
+
+		s.mu.Lock()
+		if err := s.processResponse(hostIdx, resp); err != nil {
+			s.mu.Unlock()
+			return fmt.Errorf("process response from host %d: %w", hostIdx, err)
+		}
+		s.mu.Unlock()
 	}
 
 	return nil
@@ -296,7 +377,7 @@ func (s *Session) Finalize(ctx context.Context) error {
 
 // signDiff builds and signs a diff with the given nonce and txs.
 func (s *Session) signDiff(nonce uint64, txs []*types.SubnetTx) (types.Diff, error) {
-	content := state.BuildDiffContent(nonce, txs)
+	content := state.BuildDiffContent(s.escrowID, nonce, txs)
 	data, err := proto.Marshal(content)
 	if err != nil {
 		return types.Diff{}, fmt.Errorf("marshal diff content: %w", err)
@@ -306,19 +387,6 @@ func (s *Session) signDiff(nonce uint64, txs []*types.SubnetTx) (types.Diff, err
 		return types.Diff{}, fmt.Errorf("sign diff: %w", err)
 	}
 	return types.Diff{Nonce: nonce, Txs: txs, UserSig: sig}, nil
-}
-
-// sendAndProcess sends catch-up diffs to a host and processes the response.
-func (s *Session) sendAndProcess(ctx context.Context, hostIdx int) error {
-	catchUp := s.DiffsForHost(hostIdx)
-	resp, err := s.clients[hostIdx].Send(ctx, host.HostRequest{Diffs: catchUp, Nonce: s.nonce})
-	if err != nil {
-		return fmt.Errorf("send to host %d: %w", hostIdx, err)
-	}
-	if err := s.ProcessResponse(hostIdx, resp); err != nil {
-		return fmt.Errorf("process response from host %d: %w", hostIdx, err)
-	}
-	return nil
 }
 
 // subnetTxKey returns a dedup key for host-proposed txs.
@@ -359,24 +427,30 @@ func (s *Session) clearPendingTxs() {
 }
 
 func (s *Session) Signatures() map[uint64]map[uint32][]byte {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return s.signatures
 }
 
 func (s *Session) Nonce() uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return s.nonce
 }
 
 func (s *Session) Diffs() []types.Diff {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return s.diffs
 }
 
 func (s *Session) PendingTxs() []*types.SubnetTx {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return s.pendingTxs
 }
 
-func (s *Session) StateMachine() *state.StateMachine {
-	return s.sm
-}
+func (s *Session) StateMachine() *state.StateMachine { return s.sm }
 
 // TimeoutVerifier contacts a host for timeout verification votes.
 type TimeoutVerifier interface {

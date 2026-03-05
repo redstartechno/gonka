@@ -50,7 +50,7 @@ func TestHTTPClient_Send_RoundTrip(t *testing.T) {
 	client, _, userSigner, _ := setupClientTestEnv(t)
 	ctx := context.Background()
 
-	diff := testutil.SignDiff(t, userSigner, 1, []*types.SubnetTx{testutil.StartTx(1)})
+	diff := testutil.SignDiff(t, userSigner, "escrow-1", 1, []*types.SubnetTx{testutil.StartTx(1)})
 
 	resp, err := client.Send(ctx, host.HostRequest{
 		Diffs: []types.Diff{diff},
@@ -84,7 +84,7 @@ func TestHTTPClient_GetDiffs(t *testing.T) {
 	ctx := context.Background()
 
 	// Send an inference to create a stored diff.
-	diff := testutil.SignDiff(t, userSigner, 1, []*types.SubnetTx{testutil.StartTx(1)})
+	diff := testutil.SignDiff(t, userSigner, "escrow-1", 1, []*types.SubnetTx{testutil.StartTx(1)})
 	_, err := client.Send(ctx, host.HostRequest{
 		Diffs: []types.Diff{diff},
 		Nonce: 1,
@@ -110,7 +110,7 @@ func TestHTTPClient_GetMempool(t *testing.T) {
 	ctx := context.Background()
 
 	// Send an inference to populate mempool with MsgFinishInference.
-	diff := testutil.SignDiff(t, userSigner, 1, []*types.SubnetTx{testutil.StartTx(1)})
+	diff := testutil.SignDiff(t, userSigner, "escrow-1", 1, []*types.SubnetTx{testutil.StartTx(1)})
 	_, err := client.Send(ctx, host.HostRequest{
 		Diffs: []types.Diff{diff},
 		Nonce: 1,

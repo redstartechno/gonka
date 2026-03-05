@@ -93,7 +93,7 @@ func TestServer_Inference_ValidAuth(t *testing.T) {
 	env := setupServerEnv(t)
 
 	// Build a valid inference request.
-	diff := testutil.SignDiff(t, env.userSigner, 1, []*types.SubnetTx{testutil.StartTx(1)})
+	diff := testutil.SignDiff(t, env.userSigner, "escrow-1", 1, []*types.SubnetTx{testutil.StartTx(1)})
 	dj, err := DiffToJSON(diff)
 	require.NoError(t, err)
 
@@ -157,7 +157,7 @@ func TestServer_GetDiffs(t *testing.T) {
 	env := setupServerEnv(t)
 
 	// First apply a diff via the inference endpoint.
-	diff := testutil.SignDiff(t, env.userSigner, 1, []*types.SubnetTx{testutil.StartTx(1)})
+	diff := testutil.SignDiff(t, env.userSigner, "escrow-1", 1, []*types.SubnetTx{testutil.StartTx(1)})
 	dj, err := DiffToJSON(diff)
 	require.NoError(t, err)
 	ir := InferenceRequest{
@@ -182,7 +182,7 @@ func TestServer_GetMempool(t *testing.T) {
 	env := setupServerEnv(t)
 
 	// Apply a diff to populate the mempool with MsgFinishInference.
-	diff := testutil.SignDiff(t, env.userSigner, 1, []*types.SubnetTx{testutil.StartTx(1)})
+	diff := testutil.SignDiff(t, env.userSigner, "escrow-1", 1, []*types.SubnetTx{testutil.StartTx(1)})
 	dj, err := DiffToJSON(diff)
 	require.NoError(t, err)
 	ir := InferenceRequest{

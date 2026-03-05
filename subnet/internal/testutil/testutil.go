@@ -44,9 +44,9 @@ func DefaultConfig(numHosts int) types.SessionConfig {
 	}
 }
 
-func SignDiff(t *testing.T, signer signing.Signer, nonce uint64, txs []*types.SubnetTx) types.Diff {
+func SignDiff(t *testing.T, signer signing.Signer, escrowID string, nonce uint64, txs []*types.SubnetTx) types.Diff {
 	t.Helper()
-	content := &types.DiffContent{Nonce: nonce, Txs: txs}
+	content := &types.DiffContent{Nonce: nonce, Txs: txs, EscrowId: escrowID}
 	data, err := proto.Marshal(content)
 	require.NoError(t, err)
 	sig, err := signer.Sign(data)
@@ -63,7 +63,7 @@ func SignProposerTx(t *testing.T, signer signing.Signer, msg proto.Message) []by
 	return sig
 }
 
-func SignExecutorReceipt(t *testing.T, signer signing.Signer, inferenceID uint64, promptHash []byte, model string, inputLength, maxTokens uint64, startedAt int64) []byte {
+func SignExecutorReceipt(t *testing.T, signer signing.Signer, escrowID string, inferenceID uint64, promptHash []byte, model string, inputLength, maxTokens uint64, startedAt int64) []byte {
 	t.Helper()
 	content := &types.ExecutorReceiptContent{
 		InferenceId: inferenceID,
@@ -72,6 +72,7 @@ func SignExecutorReceipt(t *testing.T, signer signing.Signer, inferenceID uint64
 		InputLength: inputLength,
 		MaxTokens:   maxTokens,
 		StartedAt:   startedAt,
+		EscrowId:    escrowID,
 	}
 	data, err := proto.Marshal(content)
 	require.NoError(t, err)

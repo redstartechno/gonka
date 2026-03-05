@@ -178,7 +178,7 @@ func TestHTTP_Auth_Rejected(t *testing.T) {
 	badSigner := testutil.MustGenerateKey(t)
 	badClient := transport.NewHTTPClient(env.httpServers[0].URL, "escrow-1", badSigner)
 
-	diff := testutil.SignDiff(t, env.userSigner, 1, []*types.SubnetTx{testutil.StartTx(1)})
+	diff := testutil.SignDiff(t, env.userSigner, "escrow-1", 1, []*types.SubnetTx{testutil.StartTx(1)})
 	_, err := badClient.Send(context.Background(), host.HostRequest{
 		Diffs: []types.Diff{diff},
 		Nonce: 1,
@@ -199,7 +199,7 @@ func TestHTTP_GossipPropagation(t *testing.T) {
 	ctx := context.Background()
 
 	// Send inference via HTTPClient directly to host 0.
-	diff := testutil.SignDiff(t, env.userSigner, 1, []*types.SubnetTx{testutil.StartTx(1)})
+	diff := testutil.SignDiff(t, env.userSigner, "escrow-1", 1, []*types.SubnetTx{testutil.StartTx(1)})
 	resp, err := env.clients[0].Send(ctx, host.HostRequest{
 		Diffs: []types.Diff{diff},
 		Nonce: 1,
@@ -228,7 +228,7 @@ func TestHTTP_EquivocationDetection(t *testing.T) {
 	ctx := context.Background()
 
 	// Send inference to generate a real nonce+stateHash.
-	diff := testutil.SignDiff(t, env.userSigner, 1, []*types.SubnetTx{testutil.StartTx(1)})
+	diff := testutil.SignDiff(t, env.userSigner, "escrow-1", 1, []*types.SubnetTx{testutil.StartTx(1)})
 	resp, err := env.clients[0].Send(ctx, host.HostRequest{
 		Diffs: []types.Diff{diff},
 		Nonce: 1,
@@ -293,7 +293,7 @@ func TestHTTP_TimeoutRefused(t *testing.T) {
 		},
 	}}
 	nonce := env.session.Nonce() + 1
-	diff := testutil.SignDiff(t, env.userSigner, nonce, []*types.SubnetTx{timeoutTx})
+	diff := testutil.SignDiff(t, env.userSigner, "escrow-1", nonce, []*types.SubnetTx{timeoutTx})
 	_, err = env.session.StateMachine().ApplyDiff(diff)
 	require.NoError(t, err)
 
@@ -319,7 +319,7 @@ func TestHTTP_TimeoutExecution(t *testing.T) {
 		},
 	}}
 	nonce := env.session.Nonce() + 1
-	diff := testutil.SignDiff(t, env.userSigner, nonce, []*types.SubnetTx{confirmTx})
+	diff := testutil.SignDiff(t, env.userSigner, "escrow-1", nonce, []*types.SubnetTx{confirmTx})
 	_, err = env.session.StateMachine().ApplyDiff(diff)
 	require.NoError(t, err)
 
@@ -448,7 +448,7 @@ func TestHTTP_GossipAmplification(t *testing.T) {
 	ctx := context.Background()
 
 	// Send inference to host 0. Gossip fires to peers (host 1, host 2).
-	diff := testutil.SignDiff(t, env.userSigner, 1, []*types.SubnetTx{testutil.StartTx(1)})
+	diff := testutil.SignDiff(t, env.userSigner, "escrow-1", 1, []*types.SubnetTx{testutil.StartTx(1)})
 	resp, err := env.clients[0].Send(ctx, host.HostRequest{
 		Diffs: []types.Diff{diff},
 		Nonce: 1,
@@ -612,7 +612,7 @@ func TestHTTP_GossipIntegration(t *testing.T) {
 	ctx := context.Background()
 
 	// Send inference to host 0. Gossip should fire to peers.
-	diff := testutil.SignDiff(t, env.userSigner, 1, []*types.SubnetTx{testutil.StartTx(1)})
+	diff := testutil.SignDiff(t, env.userSigner, "escrow-1", 1, []*types.SubnetTx{testutil.StartTx(1)})
 	resp, err := env.clients[0].Send(ctx, host.HostRequest{
 		Diffs: []types.Diff{diff},
 		Nonce: 1,
@@ -652,7 +652,7 @@ func TestHTTP_LazyTxGossipHTTP(t *testing.T) {
 	ctx := context.Background()
 
 	// Send inference to host 1 (executor for nonce=1 with 3 hosts: 1%3=1).
-	diff := testutil.SignDiff(t, env.userSigner, 1, []*types.SubnetTx{testutil.StartTx(1)})
+	diff := testutil.SignDiff(t, env.userSigner, "escrow-1", 1, []*types.SubnetTx{testutil.StartTx(1)})
 	resp, err := env.clients[1].Send(ctx, host.HostRequest{
 		Diffs: []types.Diff{diff},
 		Nonce: 1,

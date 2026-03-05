@@ -89,7 +89,7 @@ func NewStateMachine(
 // ApplyDiff validates and applies a diff, returning the state root.
 func (sm *StateMachine) ApplyDiff(diff types.Diff) ([]byte, error) {
 	// 1. Verify user signature.
-	diffContent := BuildDiffContent(diff.Nonce, diff.Txs)
+	diffContent := BuildDiffContent(sm.state.EscrowID, diff.Nonce, diff.Txs)
 	data, err := proto.Marshal(diffContent)
 	if err != nil {
 		return nil, fmt.Errorf("marshal diff content: %w", err)
@@ -344,6 +344,7 @@ func (sm *StateMachine) applyConfirmStart(msg *types.MsgConfirmStart) error {
 		InputLength: rec.InputLength,
 		MaxTokens:   rec.MaxTokens,
 		StartedAt:   rec.StartedAt,
+		EscrowId:    sm.state.EscrowID,
 	}
 	receiptData, err := proto.Marshal(receiptContent)
 	if err != nil {
@@ -600,12 +601,13 @@ func (sm *StateMachine) applyFinalizeRound() error {
 	return nil
 }
 
-// BuildDiffContent creates the proto DiffContent from nonce and txs for signing.
+// BuildDiffContent creates the proto DiffContent from nonce, txs, and escrowID for signing.
 // Since Diff.Txs is already []*SubnetTx, no conversion is needed.
-func BuildDiffContent(nonce uint64, txs []*types.SubnetTx) *types.DiffContent {
+func BuildDiffContent(escrowID string, nonce uint64, txs []*types.SubnetTx) *types.DiffContent {
 	return &types.DiffContent{
-		Nonce: nonce,
-		Txs:   txs,
+		Nonce:    nonce,
+		Txs:      txs,
+		EscrowId: escrowID,
 	}
 }
 

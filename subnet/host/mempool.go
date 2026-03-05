@@ -2,6 +2,7 @@ package host
 
 import (
 	"crypto/sha256"
+	"sync"
 
 	"google.golang.org/protobuf/proto"
 
@@ -17,6 +18,7 @@ type MempoolEntry struct {
 // Mempool stores host-proposed txs that haven't been included in a diff yet.
 // Keyed by txHash for O(1) lookup and O(m) removal.
 type Mempool struct {
+	mu      sync.Mutex
 	entries map[uint64]MempoolEntry
 }
 
@@ -25,11 +27,15 @@ func NewMempool() *Mempool {
 }
 
 func (m *Mempool) Add(entry MempoolEntry) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.entries[txHash(entry.Tx)] = entry
 }
 
 // RemoveIncluded removes entries whose tx matches any tx in the diff (by hash).
 func (m *Mempool) RemoveIncluded(txs []*types.SubnetTx) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	for _, tx := range txs {
 		delete(m.entries, txHash(tx))
 	}
@@ -38,6 +44,8 @@ func (m *Mempool) RemoveIncluded(txs []*types.SubnetTx) {
 // HasStaleEntry returns true if any entry was proposed more than grace nonces ago.
 // This is a pure data query with no signing decision.
 func (m *Mempool) HasStaleEntry(currentNonce, grace uint64) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	for _, e := range m.entries {
 		if e.ProposedAt+grace < currentNonce {
 			return true
@@ -47,6 +55,8 @@ func (m *Mempool) HasStaleEntry(currentNonce, grace uint64) bool {
 }
 
 func (m *Mempool) Txs() []*types.SubnetTx {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if len(m.entries) == 0 {
 		return nil
 	}
@@ -58,6 +68,8 @@ func (m *Mempool) Txs() []*types.SubnetTx {
 }
 
 func (m *Mempool) Len() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	return len(m.entries)
 }
 

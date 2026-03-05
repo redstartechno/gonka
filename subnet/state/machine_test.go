@@ -66,12 +66,12 @@ func TestApplyDiff_UserSigVerification(t *testing.T) {
 	wrongUser := testutil.MustGenerateKey(t)
 
 	// Invalid user sig.
-	diff := testutil.SignDiff(t, wrongUser, 1, nil)
+	diff := testutil.SignDiff(t, wrongUser, "escrow-1", 1, nil)
 	_, err := sm.ApplyDiff(diff)
 	require.ErrorIs(t, err, types.ErrInvalidUserSig)
 
 	// Valid user sig.
-	diff = testutil.SignDiff(t, user, 1, nil)
+	diff = testutil.SignDiff(t, user, "escrow-1", 1, nil)
 	_, err = sm.ApplyDiff(diff)
 	require.NoError(t, err)
 }
@@ -80,7 +80,7 @@ func TestApplyDiff_StartInference(t *testing.T) {
 	hosts := []*signing.Secp256k1Signer{testutil.MustGenerateKey(t), testutil.MustGenerateKey(t), testutil.MustGenerateKey(t)}
 	sm, user := newTestSM(t, hosts, 10000)
 
-	diff := testutil.SignDiff(t, user, 1, []*types.SubnetTx{txStart(&types.MsgStartInference{
+	diff := testutil.SignDiff(t, user, "escrow-1", 1, []*types.SubnetTx{txStart(&types.MsgStartInference{
 		InferenceId: 1,
 		PromptHash:  []byte("prompt"),
 		Model:       "llama",
@@ -106,7 +106,7 @@ func TestApplyDiff_ConfirmStart(t *testing.T) {
 	sm, user := newTestSM(t, hosts, 10000)
 
 	// Start inference. Executor slot: 1 % 3 = 1
-	diff := testutil.SignDiff(t, user, 1, []*types.SubnetTx{txStart(&types.MsgStartInference{
+	diff := testutil.SignDiff(t, user, "escrow-1", 1, []*types.SubnetTx{txStart(&types.MsgStartInference{
 		InferenceId: 1, PromptHash: []byte("prompt"), Model: "llama",
 		InputLength: 100, MaxTokens: 50, StartedAt: 1000,
 	})})
@@ -114,8 +114,8 @@ func TestApplyDiff_ConfirmStart(t *testing.T) {
 	require.NoError(t, err)
 
 	// Confirm start with valid executor receipt.
-	execSig := testutil.SignExecutorReceipt(t, hosts[1], 1, []byte("prompt"), "llama", 100, 50, 1000)
-	diff = testutil.SignDiff(t, user, 2, []*types.SubnetTx{txConfirm(&types.MsgConfirmStart{
+	execSig := testutil.SignExecutorReceipt(t, hosts[1], "escrow-1", 1, []byte("prompt"), "llama", 100, 50, 1000)
+	diff = testutil.SignDiff(t, user, "escrow-1", 2, []*types.SubnetTx{txConfirm(&types.MsgConfirmStart{
 		InferenceId: 1, ExecutorSig: execSig,
 	})})
 	_, err = sm.ApplyDiff(diff)
@@ -129,7 +129,7 @@ func TestApplyDiff_ConfirmStart_InvalidReceipt(t *testing.T) {
 	hosts := []*signing.Secp256k1Signer{testutil.MustGenerateKey(t), testutil.MustGenerateKey(t), testutil.MustGenerateKey(t)}
 	sm, user := newTestSM(t, hosts, 10000)
 
-	diff := testutil.SignDiff(t, user, 1, []*types.SubnetTx{txStart(&types.MsgStartInference{
+	diff := testutil.SignDiff(t, user, "escrow-1", 1, []*types.SubnetTx{txStart(&types.MsgStartInference{
 		InferenceId: 1, PromptHash: []byte("prompt"), Model: "llama",
 		InputLength: 100, MaxTokens: 50, StartedAt: 1000,
 	})})
@@ -137,8 +137,8 @@ func TestApplyDiff_ConfirmStart_InvalidReceipt(t *testing.T) {
 	require.NoError(t, err)
 
 	// ConfirmStart with wrong signer (host[0] instead of host[1]).
-	execSig := testutil.SignExecutorReceipt(t, hosts[0], 1, []byte("prompt"), "llama", 100, 50, 1000)
-	diff = testutil.SignDiff(t, user, 2, []*types.SubnetTx{txConfirm(&types.MsgConfirmStart{
+	execSig := testutil.SignExecutorReceipt(t, hosts[0], "escrow-1", 1, []byte("prompt"), "llama", 100, 50, 1000)
+	diff = testutil.SignDiff(t, user, "escrow-1", 2, []*types.SubnetTx{txConfirm(&types.MsgConfirmStart{
 		InferenceId: 1, ExecutorSig: execSig,
 	})})
 	_, err = sm.ApplyDiff(diff)
@@ -150,15 +150,15 @@ func TestApplyDiff_FinishInference(t *testing.T) {
 	sm, user := newTestSM(t, hosts, 10000)
 
 	// Start + confirm.
-	diff := testutil.SignDiff(t, user, 1, []*types.SubnetTx{txStart(&types.MsgStartInference{
+	diff := testutil.SignDiff(t, user, "escrow-1", 1, []*types.SubnetTx{txStart(&types.MsgStartInference{
 		InferenceId: 1, PromptHash: []byte("prompt"), Model: "llama",
 		InputLength: 100, MaxTokens: 50, StartedAt: 1000,
 	})})
 	_, err := sm.ApplyDiff(diff)
 	require.NoError(t, err)
 
-	execSig := testutil.SignExecutorReceipt(t, hosts[1], 1, []byte("prompt"), "llama", 100, 50, 1000)
-	diff = testutil.SignDiff(t, user, 2, []*types.SubnetTx{txConfirm(&types.MsgConfirmStart{
+	execSig := testutil.SignExecutorReceipt(t, hosts[1], "escrow-1", 1, []byte("prompt"), "llama", 100, 50, 1000)
+	diff = testutil.SignDiff(t, user, "escrow-1", 2, []*types.SubnetTx{txConfirm(&types.MsgConfirmStart{
 		InferenceId: 1, ExecutorSig: execSig,
 	})})
 	_, err = sm.ApplyDiff(diff)
@@ -171,7 +171,7 @@ func TestApplyDiff_FinishInference(t *testing.T) {
 	}
 	finishMsg.ProposerSig = testutil.SignProposerTx(t, hosts[1], finishMsg)
 
-	diff = testutil.SignDiff(t, user, 3, []*types.SubnetTx{txFinish(finishMsg)})
+	diff = testutil.SignDiff(t, user, "escrow-1", 3, []*types.SubnetTx{txFinish(finishMsg)})
 	_, err = sm.ApplyDiff(diff)
 	require.NoError(t, err)
 
@@ -188,15 +188,15 @@ func TestApplyDiff_FinishInference_WrongExecutorSlot(t *testing.T) {
 	hosts := []*signing.Secp256k1Signer{testutil.MustGenerateKey(t), testutil.MustGenerateKey(t), testutil.MustGenerateKey(t)}
 	sm, user := newTestSM(t, hosts, 10000)
 
-	diff := testutil.SignDiff(t, user, 1, []*types.SubnetTx{txStart(&types.MsgStartInference{
+	diff := testutil.SignDiff(t, user, "escrow-1", 1, []*types.SubnetTx{txStart(&types.MsgStartInference{
 		InferenceId: 1, PromptHash: []byte("prompt"), Model: "llama",
 		InputLength: 100, MaxTokens: 50, StartedAt: 1000,
 	})})
 	_, err := sm.ApplyDiff(diff)
 	require.NoError(t, err)
 
-	execSig := testutil.SignExecutorReceipt(t, hosts[1], 1, []byte("prompt"), "llama", 100, 50, 1000)
-	diff = testutil.SignDiff(t, user, 2, []*types.SubnetTx{txConfirm(&types.MsgConfirmStart{
+	execSig := testutil.SignExecutorReceipt(t, hosts[1], "escrow-1", 1, []byte("prompt"), "llama", 100, 50, 1000)
+	diff = testutil.SignDiff(t, user, "escrow-1", 2, []*types.SubnetTx{txConfirm(&types.MsgConfirmStart{
 		InferenceId: 1, ExecutorSig: execSig,
 	})})
 	_, err = sm.ApplyDiff(diff)
@@ -208,7 +208,7 @@ func TestApplyDiff_FinishInference_WrongExecutorSlot(t *testing.T) {
 	}
 	finishMsg.ProposerSig = testutil.SignProposerTx(t, hosts[0], finishMsg)
 
-	diff = testutil.SignDiff(t, user, 3, []*types.SubnetTx{txFinish(finishMsg)})
+	diff = testutil.SignDiff(t, user, "escrow-1", 3, []*types.SubnetTx{txFinish(finishMsg)})
 	_, err = sm.ApplyDiff(diff)
 	require.ErrorIs(t, err, types.ErrWrongExecutorSlot)
 }
@@ -217,15 +217,15 @@ func TestApplyDiff_FinishInference_InvalidProposerSig(t *testing.T) {
 	hosts := []*signing.Secp256k1Signer{testutil.MustGenerateKey(t), testutil.MustGenerateKey(t), testutil.MustGenerateKey(t)}
 	sm, user := newTestSM(t, hosts, 10000)
 
-	diff := testutil.SignDiff(t, user, 1, []*types.SubnetTx{txStart(&types.MsgStartInference{
+	diff := testutil.SignDiff(t, user, "escrow-1", 1, []*types.SubnetTx{txStart(&types.MsgStartInference{
 		InferenceId: 1, PromptHash: []byte("prompt"), Model: "llama",
 		InputLength: 100, MaxTokens: 50, StartedAt: 1000,
 	})})
 	_, err := sm.ApplyDiff(diff)
 	require.NoError(t, err)
 
-	execSig := testutil.SignExecutorReceipt(t, hosts[1], 1, []byte("prompt"), "llama", 100, 50, 1000)
-	diff = testutil.SignDiff(t, user, 2, []*types.SubnetTx{txConfirm(&types.MsgConfirmStart{
+	execSig := testutil.SignExecutorReceipt(t, hosts[1], "escrow-1", 1, []byte("prompt"), "llama", 100, 50, 1000)
+	diff = testutil.SignDiff(t, user, "escrow-1", 2, []*types.SubnetTx{txConfirm(&types.MsgConfirmStart{
 		InferenceId: 1, ExecutorSig: execSig,
 	})})
 	_, err = sm.ApplyDiff(diff)
@@ -238,7 +238,7 @@ func TestApplyDiff_FinishInference_InvalidProposerSig(t *testing.T) {
 	}
 	finishMsg.ProposerSig = testutil.SignProposerTx(t, outsider, finishMsg)
 
-	diff = testutil.SignDiff(t, user, 3, []*types.SubnetTx{txFinish(finishMsg)})
+	diff = testutil.SignDiff(t, user, "escrow-1", 3, []*types.SubnetTx{txFinish(finishMsg)})
 	_, err = sm.ApplyDiff(diff)
 	require.ErrorIs(t, err, types.ErrInvalidProposerSig)
 }
@@ -253,7 +253,7 @@ func TestApplyDiff_Validation_Valid(t *testing.T) {
 	valMsg.ProposerSig = testutil.SignProposerTx(t, hosts[0], valMsg)
 
 	nonce := sm.SnapshotState().LatestNonce + 1
-	diff := testutil.SignDiff(t, user, nonce, []*types.SubnetTx{txValidation(valMsg)})
+	diff := testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{txValidation(valMsg)})
 	_, err := sm.ApplyDiff(diff)
 	require.NoError(t, err)
 
@@ -271,7 +271,7 @@ func TestApplyDiff_Validation_SelfValidation(t *testing.T) {
 	valMsg.ProposerSig = testutil.SignProposerTx(t, hosts[1], valMsg)
 
 	nonce := sm.SnapshotState().LatestNonce + 1
-	diff := testutil.SignDiff(t, user, nonce, []*types.SubnetTx{txValidation(valMsg)})
+	diff := testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{txValidation(valMsg)})
 	_, err := sm.ApplyDiff(diff)
 	require.ErrorIs(t, err, types.ErrSelfValidation)
 }
@@ -290,7 +290,7 @@ func TestApplyDiff_Validation_Invalid_ChallengeVoting(t *testing.T) {
 	valMsg.ProposerSig = testutil.SignProposerTx(t, hosts[0], valMsg)
 
 	nonce := sm.SnapshotState().LatestNonce + 1
-	diff := testutil.SignDiff(t, user, nonce, []*types.SubnetTx{txValidation(valMsg)})
+	diff := testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{txValidation(valMsg)})
 	_, err := sm.ApplyDiff(diff)
 	require.NoError(t, err)
 	require.Equal(t, types.StatusChallenged, sm.SnapshotState().Inferences[1].Status)
@@ -304,7 +304,7 @@ func TestApplyDiff_Validation_Invalid_ChallengeVoting(t *testing.T) {
 	}
 
 	nonce = sm.SnapshotState().LatestNonce + 1
-	diff = testutil.SignDiff(t, user, nonce, voteTxs)
+	diff = testutil.SignDiff(t, user, "escrow-1", nonce, voteTxs)
 	_, err = sm.ApplyDiff(diff)
 	require.NoError(t, err)
 
@@ -322,7 +322,7 @@ func TestApplyDiff_Timeout_Refused(t *testing.T) {
 	}
 	sm, user := newTestSM(t, hosts, 10000)
 
-	diff := testutil.SignDiff(t, user, 1, []*types.SubnetTx{txStart(&types.MsgStartInference{
+	diff := testutil.SignDiff(t, user, "escrow-1", 1, []*types.SubnetTx{txStart(&types.MsgStartInference{
 		InferenceId: 1, PromptHash: []byte("prompt"), Model: "llama",
 		InputLength: 100, MaxTokens: 50, StartedAt: 1000,
 	})})
@@ -336,7 +336,7 @@ func TestApplyDiff_Timeout_Refused(t *testing.T) {
 		votes = append(votes, v)
 	}
 
-	diff = testutil.SignDiff(t, user, 2, []*types.SubnetTx{txTimeout(&types.MsgTimeoutInference{
+	diff = testutil.SignDiff(t, user, "escrow-1", 2, []*types.SubnetTx{txTimeout(&types.MsgTimeoutInference{
 		InferenceId: 1, Reason: types.TimeoutReason_TIMEOUT_REASON_REFUSED, Votes: votes,
 	})})
 	_, err = sm.ApplyDiff(diff)
@@ -355,15 +355,15 @@ func TestApplyDiff_Timeout_Execution(t *testing.T) {
 	}
 	sm, user := newTestSM(t, hosts, 10000)
 
-	diff := testutil.SignDiff(t, user, 1, []*types.SubnetTx{txStart(&types.MsgStartInference{
+	diff := testutil.SignDiff(t, user, "escrow-1", 1, []*types.SubnetTx{txStart(&types.MsgStartInference{
 		InferenceId: 1, PromptHash: []byte("prompt"), Model: "llama",
 		InputLength: 100, MaxTokens: 50, StartedAt: 1000,
 	})})
 	_, err := sm.ApplyDiff(diff)
 	require.NoError(t, err)
 
-	execSig := testutil.SignExecutorReceipt(t, hosts[1], 1, []byte("prompt"), "llama", 100, 50, 1000)
-	diff = testutil.SignDiff(t, user, 2, []*types.SubnetTx{txConfirm(&types.MsgConfirmStart{
+	execSig := testutil.SignExecutorReceipt(t, hosts[1], "escrow-1", 1, []byte("prompt"), "llama", 100, 50, 1000)
+	diff = testutil.SignDiff(t, user, "escrow-1", 2, []*types.SubnetTx{txConfirm(&types.MsgConfirmStart{
 		InferenceId: 1, ExecutorSig: execSig,
 	})})
 	_, err = sm.ApplyDiff(diff)
@@ -376,7 +376,7 @@ func TestApplyDiff_Timeout_Execution(t *testing.T) {
 		votes = append(votes, v)
 	}
 
-	diff = testutil.SignDiff(t, user, 3, []*types.SubnetTx{txTimeout(&types.MsgTimeoutInference{
+	diff = testutil.SignDiff(t, user, "escrow-1", 3, []*types.SubnetTx{txTimeout(&types.MsgTimeoutInference{
 		InferenceId: 1, Reason: types.TimeoutReason_TIMEOUT_REASON_EXECUTION, Votes: votes,
 	})})
 	_, err = sm.ApplyDiff(diff)
@@ -395,7 +395,7 @@ func TestApplyDiff_Timeout_WrongReason(t *testing.T) {
 	}
 	sm, user := newTestSM(t, hosts, 10000)
 
-	diff := testutil.SignDiff(t, user, 1, []*types.SubnetTx{txStart(&types.MsgStartInference{
+	diff := testutil.SignDiff(t, user, "escrow-1", 1, []*types.SubnetTx{txStart(&types.MsgStartInference{
 		InferenceId: 1, PromptHash: []byte("prompt"), Model: "llama",
 		InputLength: 100, MaxTokens: 50, StartedAt: 1000,
 	})})
@@ -409,15 +409,15 @@ func TestApplyDiff_Timeout_WrongReason(t *testing.T) {
 		v.VoterSlot = slot
 		votes = append(votes, v)
 	}
-	diff = testutil.SignDiff(t, user, 2, []*types.SubnetTx{txTimeout(&types.MsgTimeoutInference{
+	diff = testutil.SignDiff(t, user, "escrow-1", 2, []*types.SubnetTx{txTimeout(&types.MsgTimeoutInference{
 		InferenceId: 1, Reason: types.TimeoutReason_TIMEOUT_REASON_EXECUTION, Votes: votes,
 	})})
 	_, err = sm.ApplyDiff(diff)
 	require.ErrorIs(t, err, types.ErrInvalidTimeoutReason)
 
 	// Confirm start, then reason=refused on started -> fail.
-	execSig := testutil.SignExecutorReceipt(t, hosts[1], 1, []byte("prompt"), "llama", 100, 50, 1000)
-	diff = testutil.SignDiff(t, user, 2, []*types.SubnetTx{txConfirm(&types.MsgConfirmStart{
+	execSig := testutil.SignExecutorReceipt(t, hosts[1], "escrow-1", 1, []byte("prompt"), "llama", 100, 50, 1000)
+	diff = testutil.SignDiff(t, user, "escrow-1", 2, []*types.SubnetTx{txConfirm(&types.MsgConfirmStart{
 		InferenceId: 1, ExecutorSig: execSig,
 	})})
 	_, err = sm.ApplyDiff(diff)
@@ -429,7 +429,7 @@ func TestApplyDiff_Timeout_WrongReason(t *testing.T) {
 		v.VoterSlot = slot
 		votes2 = append(votes2, v)
 	}
-	diff = testutil.SignDiff(t, user, 3, []*types.SubnetTx{txTimeout(&types.MsgTimeoutInference{
+	diff = testutil.SignDiff(t, user, "escrow-1", 3, []*types.SubnetTx{txTimeout(&types.MsgTimeoutInference{
 		InferenceId: 1, Reason: types.TimeoutReason_TIMEOUT_REASON_REFUSED, Votes: votes2,
 	})})
 	_, err = sm.ApplyDiff(diff)
@@ -443,7 +443,7 @@ func TestApplyDiff_Timeout_InsufficientVotes(t *testing.T) {
 	}
 	sm, user := newTestSM(t, hosts, 10000)
 
-	diff := testutil.SignDiff(t, user, 1, []*types.SubnetTx{txStart(&types.MsgStartInference{
+	diff := testutil.SignDiff(t, user, "escrow-1", 1, []*types.SubnetTx{txStart(&types.MsgStartInference{
 		InferenceId: 1, PromptHash: []byte("prompt"), Model: "llama",
 		InputLength: 100, MaxTokens: 50, StartedAt: 1000,
 	})})
@@ -457,7 +457,7 @@ func TestApplyDiff_Timeout_InsufficientVotes(t *testing.T) {
 		v.VoterSlot = slot
 		votes = append(votes, v)
 	}
-	diff = testutil.SignDiff(t, user, 2, []*types.SubnetTx{txTimeout(&types.MsgTimeoutInference{
+	diff = testutil.SignDiff(t, user, "escrow-1", 2, []*types.SubnetTx{txTimeout(&types.MsgTimeoutInference{
 		InferenceId: 1, Reason: types.TimeoutReason_TIMEOUT_REASON_REFUSED, Votes: votes,
 	})})
 	_, err = sm.ApplyDiff(diff)
@@ -481,7 +481,7 @@ func TestApplyDiff_Timeout_AfterFinish(t *testing.T) {
 	}
 
 	nonce := sm.SnapshotState().LatestNonce + 1
-	diff := testutil.SignDiff(t, user, nonce, []*types.SubnetTx{txTimeout(&types.MsgTimeoutInference{
+	diff := testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{txTimeout(&types.MsgTimeoutInference{
 		InferenceId: 1, Reason: types.TimeoutReason_TIMEOUT_REASON_EXECUTION, Votes: votes,
 	})})
 	_, err := sm.ApplyDiff(diff)
@@ -492,7 +492,7 @@ func TestApplyDiff_NonceSequential(t *testing.T) {
 	hosts := []*signing.Secp256k1Signer{testutil.MustGenerateKey(t), testutil.MustGenerateKey(t)}
 	sm, user := newTestSM(t, hosts, 10000)
 
-	diff := testutil.SignDiff(t, user, 2, nil)
+	diff := testutil.SignDiff(t, user, "escrow-1", 2, nil)
 	_, err := sm.ApplyDiff(diff)
 	require.ErrorIs(t, err, types.ErrInvalidNonce)
 }
@@ -505,7 +505,7 @@ func TestApplyDiff_MultipleMsgStartInference(t *testing.T) {
 		txStart(&types.MsgStartInference{InferenceId: 1, InputLength: 10, MaxTokens: 5}),
 		txStart(&types.MsgStartInference{InferenceId: 1, InputLength: 10, MaxTokens: 5}),
 	}
-	diff := testutil.SignDiff(t, user, 1, txs)
+	diff := testutil.SignDiff(t, user, "escrow-1", 1, txs)
 	_, err := sm.ApplyDiff(diff)
 	require.ErrorIs(t, err, types.ErrMultipleStartMsgs)
 }
@@ -514,20 +514,20 @@ func TestApplyDiff_FinalizeRound(t *testing.T) {
 	hosts := []*signing.Secp256k1Signer{testutil.MustGenerateKey(t), testutil.MustGenerateKey(t), testutil.MustGenerateKey(t)}
 	sm, user := newTestSM(t, hosts, 10000)
 
-	diff := testutil.SignDiff(t, user, 1, []*types.SubnetTx{txFinalize()})
+	diff := testutil.SignDiff(t, user, "escrow-1", 1, []*types.SubnetTx{txFinalize()})
 	_, err := sm.ApplyDiff(diff)
 	require.NoError(t, err)
 	require.True(t, sm.SnapshotState().Finalizing)
 
 	// MsgStartInference after finalize -> rejected.
-	diff = testutil.SignDiff(t, user, 2, []*types.SubnetTx{txStart(&types.MsgStartInference{
+	diff = testutil.SignDiff(t, user, "escrow-1", 2, []*types.SubnetTx{txStart(&types.MsgStartInference{
 		InferenceId: 2, InputLength: 10, MaxTokens: 5,
 	})})
 	_, err = sm.ApplyDiff(diff)
 	require.ErrorIs(t, err, types.ErrSessionFinalizing)
 
 	// Second finalize -> rejected.
-	diff = testutil.SignDiff(t, user, 2, []*types.SubnetTx{txFinalize()})
+	diff = testutil.SignDiff(t, user, "escrow-1", 2, []*types.SubnetTx{txFinalize()})
 	_, err = sm.ApplyDiff(diff)
 	require.ErrorIs(t, err, types.ErrAlreadyFinalizing)
 }
@@ -536,21 +536,21 @@ func TestApplyDiff_FinalizeRound_HostTxsStillAccepted(t *testing.T) {
 	hosts := []*signing.Secp256k1Signer{testutil.MustGenerateKey(t), testutil.MustGenerateKey(t), testutil.MustGenerateKey(t)}
 	sm, user := newTestSM(t, hosts, 10000)
 
-	diff := testutil.SignDiff(t, user, 1, []*types.SubnetTx{txStart(&types.MsgStartInference{
+	diff := testutil.SignDiff(t, user, "escrow-1", 1, []*types.SubnetTx{txStart(&types.MsgStartInference{
 		InferenceId: 1, PromptHash: []byte("prompt"), Model: "llama",
 		InputLength: 100, MaxTokens: 50, StartedAt: 1000,
 	})})
 	_, err := sm.ApplyDiff(diff)
 	require.NoError(t, err)
 
-	execSig := testutil.SignExecutorReceipt(t, hosts[1], 1, []byte("prompt"), "llama", 100, 50, 1000)
-	diff = testutil.SignDiff(t, user, 2, []*types.SubnetTx{txConfirm(&types.MsgConfirmStart{
+	execSig := testutil.SignExecutorReceipt(t, hosts[1], "escrow-1", 1, []byte("prompt"), "llama", 100, 50, 1000)
+	diff = testutil.SignDiff(t, user, "escrow-1", 2, []*types.SubnetTx{txConfirm(&types.MsgConfirmStart{
 		InferenceId: 1, ExecutorSig: execSig,
 	})})
 	_, err = sm.ApplyDiff(diff)
 	require.NoError(t, err)
 
-	diff = testutil.SignDiff(t, user, 3, []*types.SubnetTx{txFinalize()})
+	diff = testutil.SignDiff(t, user, "escrow-1", 3, []*types.SubnetTx{txFinalize()})
 	_, err = sm.ApplyDiff(diff)
 	require.NoError(t, err)
 
@@ -560,7 +560,7 @@ func TestApplyDiff_FinalizeRound_HostTxsStillAccepted(t *testing.T) {
 	}
 	finishMsg.ProposerSig = testutil.SignProposerTx(t, hosts[1], finishMsg)
 
-	diff = testutil.SignDiff(t, user, 4, []*types.SubnetTx{txFinish(finishMsg)})
+	diff = testutil.SignDiff(t, user, "escrow-1", 4, []*types.SubnetTx{txFinish(finishMsg)})
 	_, err = sm.ApplyDiff(diff)
 	require.NoError(t, err)
 	require.Equal(t, types.StatusFinished, sm.SnapshotState().Inferences[1].Status)
@@ -573,7 +573,7 @@ func TestApplyDiff_DuplicateTimeout(t *testing.T) {
 	}
 	sm, user := newTestSM(t, hosts, 10000)
 
-	diff := testutil.SignDiff(t, user, 1, []*types.SubnetTx{txStart(&types.MsgStartInference{
+	diff := testutil.SignDiff(t, user, "escrow-1", 1, []*types.SubnetTx{txStart(&types.MsgStartInference{
 		InferenceId: 1, PromptHash: []byte("prompt"), Model: "llama",
 		InputLength: 100, MaxTokens: 50, StartedAt: 1000,
 	})})
@@ -586,7 +586,7 @@ func TestApplyDiff_DuplicateTimeout(t *testing.T) {
 		v.VoterSlot = slot
 		votes = append(votes, v)
 	}
-	diff = testutil.SignDiff(t, user, 2, []*types.SubnetTx{txTimeout(&types.MsgTimeoutInference{
+	diff = testutil.SignDiff(t, user, "escrow-1", 2, []*types.SubnetTx{txTimeout(&types.MsgTimeoutInference{
 		InferenceId: 1, Reason: types.TimeoutReason_TIMEOUT_REASON_REFUSED, Votes: votes,
 	})})
 	_, err = sm.ApplyDiff(diff)
@@ -598,7 +598,7 @@ func TestApplyDiff_DuplicateTimeout(t *testing.T) {
 		v.VoterSlot = slot
 		votes2 = append(votes2, v)
 	}
-	diff = testutil.SignDiff(t, user, 3, []*types.SubnetTx{txTimeout(&types.MsgTimeoutInference{
+	diff = testutil.SignDiff(t, user, "escrow-1", 3, []*types.SubnetTx{txTimeout(&types.MsgTimeoutInference{
 		InferenceId: 1, Reason: types.TimeoutReason_TIMEOUT_REASON_REFUSED, Votes: votes2,
 	})})
 	_, err = sm.ApplyDiff(diff)
@@ -609,7 +609,7 @@ func TestApplyDiff_EscrowBalanceCheck(t *testing.T) {
 	hosts := []*signing.Secp256k1Signer{testutil.MustGenerateKey(t), testutil.MustGenerateKey(t)}
 	sm, user := newTestSM(t, hosts, 10)
 
-	diff := testutil.SignDiff(t, user, 1, []*types.SubnetTx{txStart(&types.MsgStartInference{
+	diff := testutil.SignDiff(t, user, "escrow-1", 1, []*types.SubnetTx{txStart(&types.MsgStartInference{
 		InferenceId: 1, InputLength: 100, MaxTokens: 50, StartedAt: 1000,
 	})})
 	_, err := sm.ApplyDiff(diff)
@@ -636,7 +636,7 @@ func TestApplyDiff_FullLifecycle(t *testing.T) {
 		infID := nonce
 		executorSlotIdx := infID % uint64(len(hosts))
 
-		diff := testutil.SignDiff(t, user, nonce, []*types.SubnetTx{txStart(&types.MsgStartInference{
+		diff := testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{txStart(&types.MsgStartInference{
 			InferenceId: infID, PromptHash: []byte("prompt"), Model: "llama",
 			InputLength: 100, MaxTokens: 50, StartedAt: int64(infID) * 1000,
 		})})
@@ -657,7 +657,7 @@ func TestApplyDiff_FullLifecycle(t *testing.T) {
 				votes = append(votes, v)
 			}
 			nonce++
-			diff = testutil.SignDiff(t, user, nonce, []*types.SubnetTx{txTimeout(&types.MsgTimeoutInference{
+			diff = testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{txTimeout(&types.MsgTimeoutInference{
 				InferenceId: infID, Reason: types.TimeoutReason_TIMEOUT_REASON_REFUSED, Votes: votes,
 			})})
 			_, err = sm.ApplyDiff(diff)
@@ -665,9 +665,9 @@ func TestApplyDiff_FullLifecycle(t *testing.T) {
 			continue
 		}
 
-		execSig := testutil.SignExecutorReceipt(t, hosts[executorSlotIdx], infID, []byte("prompt"), "llama", 100, 50, int64(infID)*1000)
+		execSig := testutil.SignExecutorReceipt(t, hosts[executorSlotIdx], "escrow-1", infID, []byte("prompt"), "llama", 100, 50, int64(infID)*1000)
 		nonce++
-		diff = testutil.SignDiff(t, user, nonce, []*types.SubnetTx{txConfirm(&types.MsgConfirmStart{
+		diff = testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{txConfirm(&types.MsgConfirmStart{
 			InferenceId: infID, ExecutorSig: execSig,
 		})})
 		_, err = sm.ApplyDiff(diff)
@@ -679,7 +679,7 @@ func TestApplyDiff_FullLifecycle(t *testing.T) {
 		}
 		finishMsg.ProposerSig = testutil.SignProposerTx(t, hosts[executorSlotIdx], finishMsg)
 		nonce++
-		diff = testutil.SignDiff(t, user, nonce, []*types.SubnetTx{txFinish(finishMsg)})
+		diff = testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{txFinish(finishMsg)})
 		_, err = sm.ApplyDiff(diff)
 		require.NoError(t, err)
 
@@ -692,7 +692,7 @@ func TestApplyDiff_FullLifecycle(t *testing.T) {
 			valMsg := &types.MsgValidation{InferenceId: infID, ValidatorSlot: validatorSlot, Valid: true}
 			valMsg.ProposerSig = testutil.SignProposerTx(t, hosts[validatorSlot], valMsg)
 			nonce++
-			diff = testutil.SignDiff(t, user, nonce, []*types.SubnetTx{txValidation(valMsg)})
+			diff = testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{txValidation(valMsg)})
 			_, err = sm.ApplyDiff(diff)
 			require.NoError(t, err)
 			continue
@@ -703,7 +703,7 @@ func TestApplyDiff_FullLifecycle(t *testing.T) {
 			valMsg := &types.MsgValidation{InferenceId: infID, ValidatorSlot: validatorSlot, Valid: false}
 			valMsg.ProposerSig = testutil.SignProposerTx(t, hosts[validatorSlot], valMsg)
 			nonce++
-			diff = testutil.SignDiff(t, user, nonce, []*types.SubnetTx{txValidation(valMsg)})
+			diff = testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{txValidation(valMsg)})
 			_, err = sm.ApplyDiff(diff)
 			require.NoError(t, err)
 
@@ -722,7 +722,7 @@ func TestApplyDiff_FullLifecycle(t *testing.T) {
 				votedCount++
 			}
 			nonce++
-			diff = testutil.SignDiff(t, user, nonce, voteTxs)
+			diff = testutil.SignDiff(t, user, "escrow-1", nonce, voteTxs)
 			_, err = sm.ApplyDiff(diff)
 			require.NoError(t, err)
 		}
@@ -759,7 +759,7 @@ func TestApplyDiff_InferenceIDMustMatchNonce(t *testing.T) {
 	sm, user := newTestSM(t, hosts, 10000)
 
 	// inference_id=42 at nonce=1 -> rejected.
-	diff := testutil.SignDiff(t, user, 1, []*types.SubnetTx{txStart(&types.MsgStartInference{
+	diff := testutil.SignDiff(t, user, "escrow-1", 1, []*types.SubnetTx{txStart(&types.MsgStartInference{
 		InferenceId: 42, PromptHash: []byte("prompt"), Model: "llama",
 		InputLength: 100, MaxTokens: 50, StartedAt: 1000,
 	})})
@@ -774,7 +774,7 @@ func TestApplyDiff_DuplicateInferenceID(t *testing.T) {
 	sm, user := newTestSM(t, hosts, 10000)
 
 	// First start succeeds.
-	diff := testutil.SignDiff(t, user, 1, []*types.SubnetTx{txStart(&types.MsgStartInference{
+	diff := testutil.SignDiff(t, user, "escrow-1", 1, []*types.SubnetTx{txStart(&types.MsgStartInference{
 		InferenceId: 1, PromptHash: []byte("prompt"), Model: "llama",
 		InputLength: 100, MaxTokens: 50, StartedAt: 1000,
 	})})
@@ -782,7 +782,7 @@ func TestApplyDiff_DuplicateInferenceID(t *testing.T) {
 	require.NoError(t, err)
 
 	// Second start with same ID rejected (inference_id=1 != nonce=2).
-	diff = testutil.SignDiff(t, user, 2, []*types.SubnetTx{txStart(&types.MsgStartInference{
+	diff = testutil.SignDiff(t, user, "escrow-1", 2, []*types.SubnetTx{txStart(&types.MsgStartInference{
 		InferenceId: 1, PromptHash: []byte("prompt2"), Model: "llama",
 		InputLength: 50, MaxTokens: 25, StartedAt: 2000,
 	})})
@@ -797,7 +797,7 @@ func TestApplyDiff_Timeout_DuplicateVoterSlot(t *testing.T) {
 	}
 	sm, user := newTestSM(t, hosts, 10000)
 
-	diff := testutil.SignDiff(t, user, 1, []*types.SubnetTx{txStart(&types.MsgStartInference{
+	diff := testutil.SignDiff(t, user, "escrow-1", 1, []*types.SubnetTx{txStart(&types.MsgStartInference{
 		InferenceId: 1, PromptHash: []byte("prompt"), Model: "llama",
 		InputLength: 100, MaxTokens: 50, StartedAt: 1000,
 	})})
@@ -812,7 +812,7 @@ func TestApplyDiff_Timeout_DuplicateVoterSlot(t *testing.T) {
 	v2 := testutil.SignTimeoutVote(t, hosts[2], "escrow-1", 1, types.TimeoutReason_TIMEOUT_REASON_REFUSED, true)
 	v2.VoterSlot = 2
 
-	diff = testutil.SignDiff(t, user, 2, []*types.SubnetTx{txTimeout(&types.MsgTimeoutInference{
+	diff = testutil.SignDiff(t, user, "escrow-1", 2, []*types.SubnetTx{txTimeout(&types.MsgTimeoutInference{
 		InferenceId: 1, Reason: types.TimeoutReason_TIMEOUT_REASON_REFUSED, Votes: []*types.TimeoutVote{v0a, v0b, v2},
 	})})
 	_, err = sm.ApplyDiff(diff)
@@ -832,7 +832,7 @@ func TestApplyDiff_ValidationVote_AlreadyResolved(t *testing.T) {
 	valMsg := &types.MsgValidation{InferenceId: 1, ValidatorSlot: 0, Valid: false}
 	valMsg.ProposerSig = testutil.SignProposerTx(t, hosts[0], valMsg)
 	nonce := sm.SnapshotState().LatestNonce + 1
-	diff := testutil.SignDiff(t, user, nonce, []*types.SubnetTx{txValidation(valMsg)})
+	diff := testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{txValidation(valMsg)})
 	_, err := sm.ApplyDiff(diff)
 	require.NoError(t, err)
 
@@ -845,7 +845,7 @@ func TestApplyDiff_ValidationVote_AlreadyResolved(t *testing.T) {
 	}
 
 	nonce = sm.SnapshotState().LatestNonce + 1
-	diff = testutil.SignDiff(t, user, nonce, voteTxs)
+	diff = testutil.SignDiff(t, user, "escrow-1", nonce, voteTxs)
 	_, err = sm.ApplyDiff(diff)
 	require.NoError(t, err)
 
@@ -858,7 +858,7 @@ func TestSnapshotState_DeepCopy(t *testing.T) {
 	sm, user := newTestSM(t, hosts, 10000)
 
 	// Start an inference to populate state.
-	diff := testutil.SignDiff(t, user, 1, []*types.SubnetTx{txStart(&types.MsgStartInference{
+	diff := testutil.SignDiff(t, user, "escrow-1", 1, []*types.SubnetTx{txStart(&types.MsgStartInference{
 		InferenceId: 1, PromptHash: []byte("prompt"), Model: "llama",
 		InputLength: 100, MaxTokens: 50, StartedAt: 1000,
 	})})
@@ -889,16 +889,16 @@ func applyStartConfirmFinish(t *testing.T, sm *StateMachine, user *signing.Secp2
 	executorSlotIdx := inferenceID % uint64(len(hosts))
 	nonce := sm.SnapshotState().LatestNonce + 1
 
-	diff := testutil.SignDiff(t, user, nonce, []*types.SubnetTx{txStart(&types.MsgStartInference{
+	diff := testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{txStart(&types.MsgStartInference{
 		InferenceId: inferenceID, PromptHash: []byte("prompt"), Model: "llama",
 		InputLength: 100, MaxTokens: 50, StartedAt: 1000,
 	})})
 	_, err := sm.ApplyDiff(diff)
 	require.NoError(t, err)
 
-	execSig := testutil.SignExecutorReceipt(t, hosts[executorSlotIdx], inferenceID, []byte("prompt"), "llama", 100, 50, 1000)
+	execSig := testutil.SignExecutorReceipt(t, hosts[executorSlotIdx], "escrow-1", inferenceID, []byte("prompt"), "llama", 100, 50, 1000)
 	nonce++
-	diff = testutil.SignDiff(t, user, nonce, []*types.SubnetTx{txConfirm(&types.MsgConfirmStart{
+	diff = testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{txConfirm(&types.MsgConfirmStart{
 		InferenceId: inferenceID, ExecutorSig: execSig,
 	})})
 	_, err = sm.ApplyDiff(diff)
@@ -910,7 +910,7 @@ func applyStartConfirmFinish(t *testing.T, sm *StateMachine, user *signing.Secp2
 	}
 	finishMsg.ProposerSig = testutil.SignProposerTx(t, hosts[executorSlotIdx], finishMsg)
 	nonce++
-	diff = testutil.SignDiff(t, user, nonce, []*types.SubnetTx{txFinish(finishMsg)})
+	diff = testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{txFinish(finishMsg)})
 	_, err = sm.ApplyDiff(diff)
 	require.NoError(t, err)
 }
@@ -937,7 +937,7 @@ func TestApplyDiff_FinishInference_WrongProposer(t *testing.T) {
 	finishMsg.ProposerSig = testutil.SignProposerTx(t, hosts[0], finishMsg)
 
 	nonce := sm.LatestNonce() + 1
-	diff := testutil.SignDiff(t, user, nonce, []*types.SubnetTx{txFinish(finishMsg)})
+	diff := testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{txFinish(finishMsg)})
 	_, err := sm.ApplyDiff(diff)
 	require.ErrorIs(t, err, types.ErrInvalidProposerSig)
 }
@@ -953,7 +953,7 @@ func TestApplyDiff_Validation_WrongProposer(t *testing.T) {
 	valMsg.ProposerSig = testutil.SignProposerTx(t, hosts[2], valMsg)
 
 	nonce := sm.LatestNonce() + 1
-	diff := testutil.SignDiff(t, user, nonce, []*types.SubnetTx{txValidation(valMsg)})
+	diff := testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{txValidation(valMsg)})
 	_, err := sm.ApplyDiff(diff)
 	require.ErrorIs(t, err, types.ErrInvalidProposerSig)
 }
@@ -971,7 +971,7 @@ func TestApplyDiff_ValidationVote_WrongProposer(t *testing.T) {
 	valMsg := &types.MsgValidation{InferenceId: 1, ValidatorSlot: 0, Valid: false}
 	valMsg.ProposerSig = testutil.SignProposerTx(t, hosts[0], valMsg)
 	nonce := sm.LatestNonce() + 1
-	diff := testutil.SignDiff(t, user, nonce, []*types.SubnetTx{txValidation(valMsg)})
+	diff := testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{txValidation(valMsg)})
 	_, err := sm.ApplyDiff(diff)
 	require.NoError(t, err)
 
@@ -980,7 +980,7 @@ func TestApplyDiff_ValidationVote_WrongProposer(t *testing.T) {
 	voteMsg.ProposerSig = testutil.SignProposerTx(t, hosts[3], voteMsg)
 
 	nonce = sm.LatestNonce() + 1
-	diff = testutil.SignDiff(t, user, nonce, []*types.SubnetTx{txVote(voteMsg)})
+	diff = testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{txVote(voteMsg)})
 	_, err = sm.ApplyDiff(diff)
 	require.ErrorIs(t, err, types.ErrInvalidProposerSig)
 }
@@ -993,7 +993,7 @@ func TestApplyDiff_RevealSeed_WrongProposer(t *testing.T) {
 	seedMsg := &types.MsgRevealSeed{SlotId: 0, Signature: []byte("seed")}
 	seedMsg.ProposerSig = testutil.SignProposerTx(t, hosts[1], seedMsg)
 
-	diff := testutil.SignDiff(t, user, 1, []*types.SubnetTx{txRevealSeed(seedMsg)})
+	diff := testutil.SignDiff(t, user, "escrow-1", 1, []*types.SubnetTx{txRevealSeed(seedMsg)})
 	_, err := sm.ApplyDiff(diff)
 	require.ErrorIs(t, err, types.ErrInvalidProposerSig)
 }
@@ -1006,7 +1006,7 @@ func TestApplyDiff_RevealSeed_InvalidSlot(t *testing.T) {
 	seedMsg := &types.MsgRevealSeed{SlotId: 99, Signature: []byte("seed")}
 	seedMsg.ProposerSig = testutil.SignProposerTx(t, hosts[0], seedMsg)
 
-	diff := testutil.SignDiff(t, user, 1, []*types.SubnetTx{txRevealSeed(seedMsg)})
+	diff := testutil.SignDiff(t, user, "escrow-1", 1, []*types.SubnetTx{txRevealSeed(seedMsg)})
 	_, err := sm.ApplyDiff(diff)
 	require.ErrorIs(t, err, types.ErrSlotNotInGroup)
 }
@@ -1016,7 +1016,7 @@ func TestApplyDiff_CostOverflow_StartInference(t *testing.T) {
 	sm, user := newTestSM(t, hosts, math.MaxUint64)
 
 	// InputLength + MaxTokens overflows uint64.
-	diff := testutil.SignDiff(t, user, 1, []*types.SubnetTx{txStart(&types.MsgStartInference{
+	diff := testutil.SignDiff(t, user, "escrow-1", 1, []*types.SubnetTx{txStart(&types.MsgStartInference{
 		InferenceId: 1, PromptHash: []byte("prompt"), Model: "llama",
 		InputLength: math.MaxUint64, MaxTokens: 1, StartedAt: 1000,
 	})})
@@ -1024,7 +1024,7 @@ func TestApplyDiff_CostOverflow_StartInference(t *testing.T) {
 	require.ErrorIs(t, err, types.ErrCostOverflow)
 
 	// Multiplication overflows: large input * price.
-	diff = testutil.SignDiff(t, user, 1, []*types.SubnetTx{txStart(&types.MsgStartInference{
+	diff = testutil.SignDiff(t, user, "escrow-1", 1, []*types.SubnetTx{txStart(&types.MsgStartInference{
 		InferenceId: 1, PromptHash: []byte("prompt"), Model: "llama",
 		InputLength: math.MaxUint64 / 2, MaxTokens: 1, StartedAt: 1000,
 	})})
@@ -1034,7 +1034,7 @@ func TestApplyDiff_CostOverflow_StartInference(t *testing.T) {
 	verifier := signing.NewSecp256k1Verifier()
 	smHigh := NewStateMachine("escrow-1", config, group, math.MaxUint64, user.Address(), verifier)
 
-	diff = testutil.SignDiff(t, user, 1, []*types.SubnetTx{txStart(&types.MsgStartInference{
+	diff = testutil.SignDiff(t, user, "escrow-1", 1, []*types.SubnetTx{txStart(&types.MsgStartInference{
 		InferenceId: 1, PromptHash: []byte("prompt"), Model: "llama",
 		InputLength: math.MaxUint64 / 2, MaxTokens: 1, StartedAt: 1000,
 	})})
@@ -1047,7 +1047,7 @@ func TestApplyDiff_AtomicRollback(t *testing.T) {
 	sm, user := newTestSM(t, hosts, 10000)
 
 	// First: apply a valid start.
-	diff := testutil.SignDiff(t, user, 1, []*types.SubnetTx{txStart(&types.MsgStartInference{
+	diff := testutil.SignDiff(t, user, "escrow-1", 1, []*types.SubnetTx{txStart(&types.MsgStartInference{
 		InferenceId: 1, PromptHash: []byte("prompt"), Model: "llama",
 		InputLength: 100, MaxTokens: 50, StartedAt: 1000,
 	})})
@@ -1059,7 +1059,7 @@ func TestApplyDiff_AtomicRollback(t *testing.T) {
 	// Diff with two txs: a valid confirm, then an invalid finish (wrong executor slot).
 	// The confirm would succeed, modifying state, but the finish fails.
 	// With atomic rollback, the state should be unchanged.
-	execSig := testutil.SignExecutorReceipt(t, hosts[1], 1, []byte("prompt"), "llama", 100, 50, 1000)
+	execSig := testutil.SignExecutorReceipt(t, hosts[1], "escrow-1", 1, []byte("prompt"), "llama", 100, 50, 1000)
 
 	finishMsg := &types.MsgFinishInference{
 		InferenceId: 1, ResponseHash: []byte("response"),
@@ -1067,7 +1067,7 @@ func TestApplyDiff_AtomicRollback(t *testing.T) {
 	}
 	finishMsg.ProposerSig = testutil.SignProposerTx(t, hosts[2], finishMsg)
 
-	diff = testutil.SignDiff(t, user, 2, []*types.SubnetTx{
+	diff = testutil.SignDiff(t, user, "escrow-1", 2, []*types.SubnetTx{
 		txConfirm(&types.MsgConfirmStart{InferenceId: 1, ExecutorSig: execSig}),
 		txFinish(finishMsg),
 	})
@@ -1088,16 +1088,16 @@ func applyStartConfirmFinish_Setup(t *testing.T, sm *StateMachine, user *signing
 	executorSlotIdx := inferenceID % uint64(len(hosts))
 	nonce := sm.LatestNonce() + 1
 
-	diff := testutil.SignDiff(t, user, nonce, []*types.SubnetTx{txStart(&types.MsgStartInference{
+	diff := testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{txStart(&types.MsgStartInference{
 		InferenceId: inferenceID, PromptHash: []byte("prompt"), Model: "llama",
 		InputLength: 100, MaxTokens: 50, StartedAt: 1000,
 	})})
 	_, err := sm.ApplyDiff(diff)
 	require.NoError(t, err)
 
-	execSig := testutil.SignExecutorReceipt(t, hosts[executorSlotIdx], inferenceID, []byte("prompt"), "llama", 100, 50, 1000)
+	execSig := testutil.SignExecutorReceipt(t, hosts[executorSlotIdx], "escrow-1", inferenceID, []byte("prompt"), "llama", 100, 50, 1000)
 	nonce++
-	diff = testutil.SignDiff(t, user, nonce, []*types.SubnetTx{txConfirm(&types.MsgConfirmStart{
+	diff = testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{txConfirm(&types.MsgConfirmStart{
 		InferenceId: inferenceID, ExecutorSig: execSig,
 	})})
 	_, err = sm.ApplyDiff(diff)

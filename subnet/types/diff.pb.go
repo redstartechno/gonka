@@ -26,6 +26,7 @@ type DiffContent struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Nonce         uint64                 `protobuf:"varint,1,opt,name=nonce,proto3" json:"nonce,omitempty"`
 	Txs           []*SubnetTx            `protobuf:"bytes,2,rep,name=txs,proto3" json:"txs,omitempty"`
+	EscrowId      string                 `protobuf:"bytes,3,opt,name=escrow_id,json=escrowId,proto3" json:"escrow_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -72,6 +73,13 @@ func (x *DiffContent) GetTxs() []*SubnetTx {
 		return x.Txs
 	}
 	return nil
+}
+
+func (x *DiffContent) GetEscrowId() string {
+	if x != nil {
+		return x.EscrowId
+	}
+	return ""
 }
 
 // SubnetTx wraps all 8 tx types in a oneof for deterministic serialization.
@@ -262,6 +270,7 @@ type ExecutorReceiptContent struct {
 	InputLength   uint64                 `protobuf:"varint,4,opt,name=input_length,json=inputLength,proto3" json:"input_length,omitempty"`
 	MaxTokens     uint64                 `protobuf:"varint,5,opt,name=max_tokens,json=maxTokens,proto3" json:"max_tokens,omitempty"`
 	StartedAt     int64                  `protobuf:"varint,6,opt,name=started_at,json=startedAt,proto3" json:"started_at,omitempty"`
+	EscrowId      string                 `protobuf:"bytes,7,opt,name=escrow_id,json=escrowId,proto3" json:"escrow_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -336,6 +345,13 @@ func (x *ExecutorReceiptContent) GetStartedAt() int64 {
 		return x.StartedAt
 	}
 	return 0
+}
+
+func (x *ExecutorReceiptContent) GetEscrowId() string {
+	if x != nil {
+		return x.EscrowId
+	}
+	return ""
 }
 
 // TimeoutVoteContent is what a host signs for a TimeoutVote.
@@ -472,10 +488,11 @@ var File_subnet_v1_diff_proto protoreflect.FileDescriptor
 
 const file_subnet_v1_diff_proto_rawDesc = "" +
 	"\n" +
-	"\x14subnet/v1/diff.proto\x12\tsubnet.v1\x1a\x12subnet/v1/tx.proto\"J\n" +
+	"\x14subnet/v1/diff.proto\x12\tsubnet.v1\x1a\x12subnet/v1/tx.proto\"g\n" +
 	"\vDiffContent\x12\x14\n" +
 	"\x05nonce\x18\x01 \x01(\x04R\x05nonce\x12%\n" +
-	"\x03txs\x18\x02 \x03(\v2\x13.subnet.v1.SubnetTxR\x03txs\"\xbf\x04\n" +
+	"\x03txs\x18\x02 \x03(\v2\x13.subnet.v1.SubnetTxR\x03txs\x12\x1b\n" +
+	"\tescrow_id\x18\x03 \x01(\tR\bescrowId\"\xbf\x04\n" +
 	"\bSubnetTx\x12G\n" +
 	"\x0fstart_inference\x18\x01 \x01(\v2\x1c.subnet.v1.MsgStartInferenceH\x00R\x0estartInference\x12A\n" +
 	"\rconfirm_start\x18\x02 \x01(\v2\x1a.subnet.v1.MsgConfirmStartH\x00R\fconfirmStart\x12J\n" +
@@ -488,7 +505,7 @@ const file_subnet_v1_diff_proto_rawDesc = "" +
 	"\vreveal_seed\x18\a \x01(\v2\x18.subnet.v1.MsgRevealSeedH\x00R\n" +
 	"revealSeed\x12D\n" +
 	"\x0efinalize_round\x18\b \x01(\v2\x1b.subnet.v1.MsgFinalizeRoundH\x00R\rfinalizeRoundB\x04\n" +
-	"\x02tx\"\xd3\x01\n" +
+	"\x02tx\"\xf0\x01\n" +
 	"\x16ExecutorReceiptContent\x12!\n" +
 	"\finference_id\x18\x01 \x01(\x04R\vinferenceId\x12\x1f\n" +
 	"\vprompt_hash\x18\x02 \x01(\fR\n" +
@@ -498,7 +515,8 @@ const file_subnet_v1_diff_proto_rawDesc = "" +
 	"\n" +
 	"max_tokens\x18\x05 \x01(\x04R\tmaxTokens\x12\x1d\n" +
 	"\n" +
-	"started_at\x18\x06 \x01(\x03R\tstartedAt\"\x9e\x01\n" +
+	"started_at\x18\x06 \x01(\x03R\tstartedAt\x12\x1b\n" +
+	"\tescrow_id\x18\a \x01(\tR\bescrowId\"\x9e\x01\n" +
 	"\x12TimeoutVoteContent\x12\x1b\n" +
 	"\tescrow_id\x18\x01 \x01(\tR\bescrowId\x12!\n" +
 	"\finference_id\x18\x02 \x01(\x04R\vinferenceId\x120\n" +

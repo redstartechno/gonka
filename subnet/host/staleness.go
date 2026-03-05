@@ -18,7 +18,7 @@ func NewStalenessChecker(mempool *Mempool, grace uint64) *StalenessChecker {
 	return &StalenessChecker{mempool: mempool, grace: grace}
 }
 
-func (s *StalenessChecker) Check(st types.EscrowState) error {
+func (s *StalenessChecker) Check(st types.EscrowState, _ []*types.SubnetTx) error {
 	if s.mempool.HasStaleEntry(st.LatestNonce, s.grace) {
 		return fmt.Errorf("mempool tx pending for >%d nonces", s.grace)
 	}

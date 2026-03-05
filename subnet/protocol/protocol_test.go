@@ -203,7 +203,7 @@ func TestProtocol_SignatureWithholding(t *testing.T) {
 	ctx := context.Background()
 
 	// Nonce 1: start inference 1, executor=slot 1.
-	diff1 := testutil.SignDiff(t, userSigner, 1, []*types.SubnetTx{testutil.StartTx(1)})
+	diff1 := testutil.SignDiff(t, userSigner, "escrow-1", 1, []*types.SubnetTx{testutil.StartTx(1)})
 	resp, err := h.HandleRequest(ctx, host.HostRequest{
 		Diffs: []types.Diff{diff1}, Nonce: 1,
 		Payload: &host.InferencePayload{
@@ -222,7 +222,7 @@ func TestProtocol_SignatureWithholding(t *testing.T) {
 	// Nonce 3: 1+2=3, not < 3 -> OK
 	// Nonce 4: 1+2=3 < 4 -> stale -> withhold
 	for n := uint64(2); n <= 4; n++ {
-		diff := testutil.SignDiff(t, userSigner, n, nil)
+		diff := testutil.SignDiff(t, userSigner, "escrow-1", n, nil)
 		resp, err = h.HandleRequest(ctx, host.HostRequest{Diffs: []types.Diff{diff}, Nonce: n})
 		require.NoError(t, err)
 		if n < 4 {
@@ -254,7 +254,7 @@ func TestProtocol_SignatureResumesAfterInclusion(t *testing.T) {
 	ctx := context.Background()
 
 	// Nonce 1: start inference 1.
-	diff1 := testutil.SignDiff(t, userSigner, 1, []*types.SubnetTx{testutil.StartTx(1)})
+	diff1 := testutil.SignDiff(t, userSigner, "escrow-1", 1, []*types.SubnetTx{testutil.StartTx(1)})
 	resp, err := h.HandleRequest(ctx, host.HostRequest{
 		Diffs: []types.Diff{diff1}, Nonce: 1,
 		Payload: &host.InferencePayload{
@@ -268,25 +268,25 @@ func TestProtocol_SignatureResumesAfterInclusion(t *testing.T) {
 	// Nonce 2: confirm start.
 	receiptContent := &types.ExecutorReceiptContent{
 		InferenceId: 1, PromptHash: testutil.TestPromptHash[:], Model: "llama",
-		InputLength: 100, MaxTokens: 50, StartedAt: 1000,
+		InputLength: 100, MaxTokens: 50, StartedAt: 1000, EscrowId: "escrow-1",
 	}
 	receiptData, _ := proto.Marshal(receiptContent)
 	receiptSig, _ := hostSigners[1].Sign(receiptData)
 	confirmTx := &types.SubnetTx{Tx: &types.SubnetTx_ConfirmStart{ConfirmStart: &types.MsgConfirmStart{
 		InferenceId: 1, ExecutorSig: receiptSig,
 	}}}
-	diff2 := testutil.SignDiff(t, userSigner, 2, []*types.SubnetTx{confirmTx})
+	diff2 := testutil.SignDiff(t, userSigner, "escrow-1", 2, []*types.SubnetTx{confirmTx})
 
 	// Nonces 3,4: empty (push past grace).
-	diff3 := testutil.SignDiff(t, userSigner, 3, nil)
-	diff4 := testutil.SignDiff(t, userSigner, 4, nil)
+	diff3 := testutil.SignDiff(t, userSigner, "escrow-1", 3, nil)
+	diff4 := testutil.SignDiff(t, userSigner, "escrow-1", 4, nil)
 
 	resp, err = h.HandleRequest(ctx, host.HostRequest{Diffs: []types.Diff{diff2, diff3, diff4}, Nonce: 4})
 	require.NoError(t, err)
 	require.Nil(t, resp.StateSig, "should withhold (stale)")
 
 	// Nonce 5: include the finish tx -> mempool cleared.
-	diff5 := testutil.SignDiff(t, userSigner, 5, []*types.SubnetTx{finishTx})
+	diff5 := testutil.SignDiff(t, userSigner, "escrow-1", 5, []*types.SubnetTx{finishTx})
 	resp, err = h.HandleRequest(ctx, host.HostRequest{Diffs: []types.Diff{diff5}, Nonce: 5})
 	require.NoError(t, err)
 	require.NotNil(t, resp.StateSig, "should resume signing after inclusion")
@@ -446,7 +446,7 @@ func TestProtocol_Timeout_UserSide(t *testing.T) {
 	ctx := context.Background()
 
 	// Nonce 1: start inference 1. Executor = slot 1%5 = 1.
-	diff1 := testutil.SignDiff(t, userSigner, 1, []*types.SubnetTx{testutil.StartTx(1)})
+	diff1 := testutil.SignDiff(t, userSigner, "escrow-1", 1, []*types.SubnetTx{testutil.StartTx(1)})
 	// Send to host 1 (round-robin: nonce 1 % 5 = 1).
 	resp, err := hosts[1].HandleRequest(ctx, host.HostRequest{
 		Diffs: []types.Diff{diff1}, Nonce: 1,
@@ -466,7 +466,7 @@ func TestProtocol_Timeout_UserSide(t *testing.T) {
 		votes = append(votes, v)
 	}
 
-	diff2 := testutil.SignDiff(t, userSigner, 2, []*types.SubnetTx{
+	diff2 := testutil.SignDiff(t, userSigner, "escrow-1", 2, []*types.SubnetTx{
 		{Tx: &types.SubnetTx_TimeoutInference{TimeoutInference: &types.MsgTimeoutInference{
 			InferenceId: 1,
 			Reason:      types.TimeoutReason_TIMEOUT_REASON_REFUSED,

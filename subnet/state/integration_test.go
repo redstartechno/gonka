@@ -60,7 +60,7 @@ func TestFullSession_HappyPath(t *testing.T) {
 
 		// Include accumulated ConfirmStart txs.
 		for _, pc := range pendingConfirms {
-			execSig := testutil.SignExecutorReceipt(t, hosts[pc.executorIdx],
+			execSig := testutil.SignExecutorReceipt(t, hosts[pc.executorIdx], escrowID,
 				pc.inferenceID, []byte("prompt"), "llama", 100, 50, int64(pc.inferenceID)*1000)
 			txs = append(txs, txConfirm(&types.MsgConfirmStart{
 				InferenceId: pc.inferenceID,
@@ -95,7 +95,7 @@ func TestFullSession_HappyPath(t *testing.T) {
 		}))
 
 		nonce++
-		diff := testutil.SignDiff(t, user, nonce, txs)
+		diff := testutil.SignDiff(t, user, escrowID, nonce, txs)
 		stateRoot, err := sm.ApplyDiff(diff)
 		require.NoError(t, err, "diff %d", nonce)
 
@@ -130,7 +130,7 @@ func TestFullSession_HappyPath(t *testing.T) {
 	// Apply remaining confirms and finishes.
 	var finalTxs []*types.SubnetTx
 	for _, pc := range pendingConfirms {
-		execSig := testutil.SignExecutorReceipt(t, hosts[pc.executorIdx],
+		execSig := testutil.SignExecutorReceipt(t, hosts[pc.executorIdx], escrowID,
 			pc.inferenceID, []byte("prompt"), "llama", 100, 50, int64(pc.inferenceID)*1000)
 		finalTxs = append(finalTxs, txConfirm(&types.MsgConfirmStart{
 			InferenceId: pc.inferenceID,
@@ -151,7 +151,7 @@ func TestFullSession_HappyPath(t *testing.T) {
 	}
 
 	nonce++
-	diff := testutil.SignDiff(t, user, nonce, finalTxs)
+	diff := testutil.SignDiff(t, user, escrowID, nonce, finalTxs)
 	finalStateRoot, err := sm.ApplyDiff(diff)
 	require.NoError(t, err)
 

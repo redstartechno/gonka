@@ -8,6 +8,7 @@ import "subnet/v1/tx.proto";
 message DiffContent {
   uint64 nonce = 1;
   repeated SubnetTx txs = 2;
+  string escrow_id = 3;
 }
 
 // SubnetTx wraps all 8 tx types in a oneof for deterministic serialization.
@@ -32,6 +33,7 @@ message ExecutorReceiptContent {
   uint64 input_length = 4;
   uint64 max_tokens = 5;
   int64  started_at = 6;
+  string escrow_id = 7;
 }
 
 // TimeoutVoteContent is what a host signs for a TimeoutVote.

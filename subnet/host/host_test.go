@@ -55,7 +55,7 @@ func TestHost_AppliesDiffs(t *testing.T) {
 	user := testutil.MustGenerateKey(t)
 	h := newTestHost(t, 0, hosts, user, 10000, 10)
 
-	diff := testutil.SignDiff(t, user, 1, []*types.SubnetTx{testutil.StartTx(1)})
+	diff := testutil.SignDiff(t, user, "escrow-1", 1, []*types.SubnetTx{testutil.StartTx(1)})
 	resp, err := h.HandleRequest(context.Background(), HostRequest{Diffs: []types.Diff{diff}})
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), resp.Nonce)
@@ -66,7 +66,7 @@ func TestHost_SignsState(t *testing.T) {
 	user := testutil.MustGenerateKey(t)
 	h := newTestHost(t, 0, hosts, user, 10000, 10)
 
-	diff := testutil.SignDiff(t, user, 1, []*types.SubnetTx{testutil.StartTx(1)})
+	diff := testutil.SignDiff(t, user, "escrow-1", 1, []*types.SubnetTx{testutil.StartTx(1)})
 	resp, err := h.HandleRequest(context.Background(), HostRequest{Diffs: []types.Diff{diff}})
 	require.NoError(t, err)
 	require.NotNil(t, resp.StateSig)
@@ -100,7 +100,7 @@ func TestHost_ExecutorReceipt(t *testing.T) {
 	user := testutil.MustGenerateKey(t)
 	h := newTestHost(t, 1, hosts, user, 10000, 10) // host at slot 1
 
-	diff := testutil.SignDiff(t, user, 1, []*types.SubnetTx{testutil.StartTx(1)})
+	diff := testutil.SignDiff(t, user, "escrow-1", 1, []*types.SubnetTx{testutil.StartTx(1)})
 	resp, err := h.HandleRequest(context.Background(), HostRequest{
 		Diffs: []types.Diff{diff}, Nonce: 1, Payload: defaultPayload(),
 	})
@@ -116,6 +116,7 @@ func TestHost_ExecutorReceipt(t *testing.T) {
 		InputLength: 100,
 		MaxTokens:   50,
 		StartedAt:   1000,
+		EscrowId:    "escrow-1",
 	}
 	data, err := proto.Marshal(receiptContent)
 	require.NoError(t, err)
@@ -130,7 +131,7 @@ func TestHost_NonExecutorNoReceipt(t *testing.T) {
 	user := testutil.MustGenerateKey(t)
 	h := newTestHost(t, 0, hosts, user, 10000, 10) // host at slot 0
 
-	diff := testutil.SignDiff(t, user, 1, []*types.SubnetTx{testutil.StartTx(1)})
+	diff := testutil.SignDiff(t, user, "escrow-1", 1, []*types.SubnetTx{testutil.StartTx(1)})
 	resp, err := h.HandleRequest(context.Background(), HostRequest{
 		Diffs: []types.Diff{diff}, Nonce: 1, Payload: defaultPayload(),
 	})
@@ -143,7 +144,7 @@ func TestHost_ProducesMsgFinish(t *testing.T) {
 	user := testutil.MustGenerateKey(t)
 	h := newTestHost(t, 1, hosts, user, 10000, 10) // executor for inference 1
 
-	diff := testutil.SignDiff(t, user, 1, []*types.SubnetTx{testutil.StartTx(1)})
+	diff := testutil.SignDiff(t, user, "escrow-1", 1, []*types.SubnetTx{testutil.StartTx(1)})
 	resp, err := h.HandleRequest(context.Background(), HostRequest{
 		Diffs: []types.Diff{diff}, Nonce: 1, Payload: defaultPayload(),
 	})
@@ -165,7 +166,7 @@ func TestHost_WithholdsOnStaleTx(t *testing.T) {
 	h := newTestHost(t, 1, hosts, user, 100000, 2) // grace=2
 
 	// Nonce 1: start inference 1, executor=slot 1 -> produces mempool entry at nonce 1.
-	diff := testutil.SignDiff(t, user, 1, []*types.SubnetTx{testutil.StartTx(1)})
+	diff := testutil.SignDiff(t, user, "escrow-1", 1, []*types.SubnetTx{testutil.StartTx(1)})
 	resp, err := h.HandleRequest(context.Background(), HostRequest{
 		Diffs: []types.Diff{diff}, Nonce: 1, Payload: defaultPayload(),
 	})
@@ -174,19 +175,19 @@ func TestHost_WithholdsOnStaleTx(t *testing.T) {
 
 	// Nonces 2,3: empty diffs, mempool entry proposed at 1, grace=2.
 	// At nonce 3: 1+2=3, not < 3 -> still OK.
-	diff2 := testutil.SignDiff(t, user, 2, nil)
-	diff3 := testutil.SignDiff(t, user, 3, nil)
+	diff2 := testutil.SignDiff(t, user, "escrow-1", 2, nil)
+	diff3 := testutil.SignDiff(t, user, "escrow-1", 3, nil)
 	resp, err = h.HandleRequest(context.Background(), HostRequest{Diffs: []types.Diff{diff2, diff3}})
 	require.NoError(t, err)
 	require.NotNil(t, resp.StateSig, "should sign at nonce 3 (1+2=3, not < 3)")
 
 	// Nonce 4: 1+2=3 < 4 -> stale -> withhold.
-	diff4 := testutil.SignDiff(t, user, 4, nil)
+	diff4 := testutil.SignDiff(t, user, "escrow-1", 4, nil)
 	resp, err = h.HandleRequest(context.Background(), HostRequest{Diffs: []types.Diff{diff4}})
 	require.NoError(t, err)
 	require.Nil(t, resp.StateSig, "should withhold at nonce 4 (stale)")
 	require.Equal(t, uint64(4), resp.Nonce)
-	require.Len(t, resp.Mempool, 1, "mempool should still have the entry")
+	require.Equal(t, 1, h.mempool.Len(), "mempool should still have the entry")
 }
 
 func TestHost_SignsAfterIncluded(t *testing.T) {
@@ -195,12 +196,11 @@ func TestHost_SignsAfterIncluded(t *testing.T) {
 	h := newTestHost(t, 1, hosts, user, 100000, 2) // grace=2
 
 	// Nonce 1: start inference 1 -> executor, mempool entry.
-	diff1 := testutil.SignDiff(t, user, 1, []*types.SubnetTx{testutil.StartTx(1)})
+	diff1 := testutil.SignDiff(t, user, "escrow-1", 1, []*types.SubnetTx{testutil.StartTx(1)})
 	resp, err := h.HandleRequest(context.Background(), HostRequest{
 		Diffs: []types.Diff{diff1}, Nonce: 1, Payload: defaultPayload(),
 	})
 	require.NoError(t, err)
-	require.Len(t, resp.Mempool, 1)
 
 	// Get the finish tx from mempool to include in a later diff.
 	finishTx := resp.Mempool[0]
@@ -208,30 +208,30 @@ func TestHost_SignsAfterIncluded(t *testing.T) {
 	// Nonce 2: confirm start (needed for state machine to accept finish).
 	receiptContent := &types.ExecutorReceiptContent{
 		InferenceId: 1, PromptHash: testutil.TestPromptHash[:], Model: "llama",
-		InputLength: 100, MaxTokens: 50, StartedAt: 1000,
+		InputLength: 100, MaxTokens: 50, StartedAt: 1000, EscrowId: "escrow-1",
 	}
 	receiptData, _ := proto.Marshal(receiptContent)
 	receiptSig, _ := hosts[1].Sign(receiptData)
 	confirmTx := &types.SubnetTx{Tx: &types.SubnetTx_ConfirmStart{ConfirmStart: &types.MsgConfirmStart{
 		InferenceId: 1, ExecutorSig: receiptSig,
 	}}}
-	diff2 := testutil.SignDiff(t, user, 2, []*types.SubnetTx{confirmTx})
+	diff2 := testutil.SignDiff(t, user, "escrow-1", 2, []*types.SubnetTx{confirmTx})
 
 	// Nonce 3: empty (to push past grace).
-	diff3 := testutil.SignDiff(t, user, 3, nil)
+	diff3 := testutil.SignDiff(t, user, "escrow-1", 3, nil)
 	// Nonce 4: empty (stale at this point).
-	diff4 := testutil.SignDiff(t, user, 4, nil)
+	diff4 := testutil.SignDiff(t, user, "escrow-1", 4, nil)
 
 	resp, err = h.HandleRequest(context.Background(), HostRequest{Diffs: []types.Diff{diff2, diff3, diff4}})
 	require.NoError(t, err)
 	require.Nil(t, resp.StateSig, "should withhold (stale)")
 
 	// Nonce 5: include the finish tx -> mempool cleared -> should sign.
-	diff5 := testutil.SignDiff(t, user, 5, []*types.SubnetTx{finishTx})
+	diff5 := testutil.SignDiff(t, user, "escrow-1", 5, []*types.SubnetTx{finishTx})
 	resp, err = h.HandleRequest(context.Background(), HostRequest{Diffs: []types.Diff{diff5}})
 	require.NoError(t, err)
 	require.NotNil(t, resp.StateSig, "should sign after inclusion")
-	require.Equal(t, 0, h.mempool.Len())
+	require.Empty(t, resp.Mempool)
 }
 
 func TestHost_NotInGroup(t *testing.T) {
@@ -288,10 +288,10 @@ func TestHost_MultiSlotExecutor(t *testing.T) {
 
 	// inference_id must equal nonce. Pick nonces that map to the right executor slots.
 	// nonce 4: executor = group[4%4]=group[0] -> slot 0 -> hosts[0] executes.
-	diff1 := testutil.SignDiff(t, user, 1, nil) // empty diff to advance nonce
-	diff2 := testutil.SignDiff(t, user, 2, nil)
-	diff3 := testutil.SignDiff(t, user, 3, nil)
-	diff4 := testutil.SignDiff(t, user, 4, []*types.SubnetTx{testutil.StartTx(4)})
+	diff1 := testutil.SignDiff(t, user, "escrow-1", 1, nil) // empty diff to advance nonce
+	diff2 := testutil.SignDiff(t, user, "escrow-1", 2, nil)
+	diff3 := testutil.SignDiff(t, user, "escrow-1", 3, nil)
+	diff4 := testutil.SignDiff(t, user, "escrow-1", 4, []*types.SubnetTx{testutil.StartTx(4)})
 	resp, err := h.HandleRequest(context.Background(), HostRequest{
 		Diffs: []types.Diff{diff1, diff2, diff3, diff4},
 		Nonce: 4, Payload: defaultPayload(),
@@ -303,8 +303,8 @@ func TestHost_MultiSlotExecutor(t *testing.T) {
 	require.Equal(t, uint32(0), fin4.ExecutorSlot)
 
 	// nonce 6: executor = group[6%4]=group[2] -> slot 2 -> hosts[2], NOT hosts[0].
-	diff5 := testutil.SignDiff(t, user, 5, nil)
-	diff6 := testutil.SignDiff(t, user, 6, []*types.SubnetTx{testutil.StartTx(6)})
+	diff5 := testutil.SignDiff(t, user, "escrow-1", 5, nil)
+	diff6 := testutil.SignDiff(t, user, "escrow-1", 6, []*types.SubnetTx{testutil.StartTx(6)})
 	resp, err = h.HandleRequest(context.Background(), HostRequest{
 		Diffs: []types.Diff{diff5, diff6}, Nonce: 6, Payload: defaultPayload(),
 	})
@@ -312,12 +312,13 @@ func TestHost_MultiSlotExecutor(t *testing.T) {
 	require.Nil(t, resp.Receipt, "host should NOT execute for slot 2")
 
 	// nonce 7: executor = group[7%4]=group[3] -> slot 3 -> hosts[0] again.
-	diff7 := testutil.SignDiff(t, user, 7, []*types.SubnetTx{testutil.StartTx(7)})
+	diff7 := testutil.SignDiff(t, user, "escrow-1", 7, []*types.SubnetTx{testutil.StartTx(7)})
 	resp, err = h.HandleRequest(context.Background(), HostRequest{
 		Diffs: []types.Diff{diff7}, Nonce: 7, Payload: defaultPayload(),
 	})
 	require.NoError(t, err)
 	require.NotNil(t, resp.Receipt, "host should execute for slot 3 (nonce 7)")
+	require.Len(t, resp.Mempool, 2)
 	var fin7 *types.MsgFinishInference
 	for _, tx := range resp.Mempool {
 		if f := tx.GetFinishInference(); f != nil && f.InferenceId == 7 {
@@ -334,7 +335,7 @@ type mockAcceptanceChecker struct {
 	blockFn func(types.EscrowState) bool
 }
 
-func (m *mockAcceptanceChecker) Check(st types.EscrowState) error {
+func (m *mockAcceptanceChecker) Check(st types.EscrowState, _ []*types.SubnetTx) error {
 	if m.blockFn(st) {
 		return fmt.Errorf("acceptance check failed")
 	}
@@ -354,13 +355,13 @@ func TestHost_WithholdsOnAcceptanceBlock(t *testing.T) {
 	h := newTestHostWithChecker(t, 0, hosts, user, 10000, 100, checker)
 
 	// Empty diff: no inferences -> should sign.
-	diff1 := testutil.SignDiff(t, user, 1, nil)
+	diff1 := testutil.SignDiff(t, user, "escrow-1", 1, nil)
 	resp, err := h.HandleRequest(context.Background(), HostRequest{Diffs: []types.Diff{diff1}})
 	require.NoError(t, err)
 	require.NotNil(t, resp.StateSig, "should sign with no inferences")
 
 	// Diff with start inference: checker blocks.
-	diff2 := testutil.SignDiff(t, user, 2, []*types.SubnetTx{testutil.StartTx(2)})
+	diff2 := testutil.SignDiff(t, user, "escrow-1", 2, []*types.SubnetTx{testutil.StartTx(2)})
 	resp, err = h.HandleRequest(context.Background(), HostRequest{Diffs: []types.Diff{diff2}})
 	require.NoError(t, err)
 	require.Nil(t, resp.StateSig, "should withhold due to acceptance check")
@@ -381,19 +382,19 @@ func TestHost_AcceptanceBlockPersistsAcrossRounds(t *testing.T) {
 	h := newTestHostWithChecker(t, 0, hosts, user, 100000, 100, checker)
 
 	// Round 1: blocked.
-	diff1 := testutil.SignDiff(t, user, 1, []*types.SubnetTx{testutil.StartTx(1)})
+	diff1 := testutil.SignDiff(t, user, "escrow-1", 1, []*types.SubnetTx{testutil.StartTx(1)})
 	resp, err := h.HandleRequest(context.Background(), HostRequest{Diffs: []types.Diff{diff1}})
 	require.NoError(t, err)
 	require.Nil(t, resp.StateSig, "round 1: blocked")
 
 	// Round 2: still blocked.
-	diff2 := testutil.SignDiff(t, user, 2, nil)
+	diff2 := testutil.SignDiff(t, user, "escrow-1", 2, nil)
 	resp, err = h.HandleRequest(context.Background(), HostRequest{Diffs: []types.Diff{diff2}})
 	require.NoError(t, err)
 	require.Nil(t, resp.StateSig, "round 2: still blocked")
 
 	// Round 3: checker allows.
-	diff3 := testutil.SignDiff(t, user, 3, nil)
+	diff3 := testutil.SignDiff(t, user, "escrow-1", 3, nil)
 	resp, err = h.HandleRequest(context.Background(), HostRequest{Diffs: []types.Diff{diff3}})
 	require.NoError(t, err)
 	require.NotNil(t, resp.StateSig, "round 3: checker allows signing")
@@ -404,7 +405,7 @@ func TestHost_PayloadMismatch_PromptHash(t *testing.T) {
 	user := testutil.MustGenerateKey(t)
 	h := newTestHost(t, 1, hosts, user, 10000, 10)
 
-	diff := testutil.SignDiff(t, user, 1, []*types.SubnetTx{testutil.StartTx(1)})
+	diff := testutil.SignDiff(t, user, "escrow-1", 1, []*types.SubnetTx{testutil.StartTx(1)})
 	badPayload := defaultPayload()
 	badPayload.Prompt = []byte("wrong prompt")
 	_, err := h.HandleRequest(context.Background(), HostRequest{
@@ -418,7 +419,7 @@ func TestHost_PayloadMismatch_Params(t *testing.T) {
 	user := testutil.MustGenerateKey(t)
 	h := newTestHost(t, 1, hosts, user, 10000, 10)
 
-	diff := testutil.SignDiff(t, user, 1, []*types.SubnetTx{testutil.StartTx(1)})
+	diff := testutil.SignDiff(t, user, "escrow-1", 1, []*types.SubnetTx{testutil.StartTx(1)})
 	badPayload := defaultPayload()
 	badPayload.MaxTokens = 999
 	_, err := h.HandleRequest(context.Background(), HostRequest{
@@ -442,7 +443,7 @@ func TestHost_StoresOwnSignature(t *testing.T) {
 		WithGrace(10), WithStorage(store), WithVerifier(verifier))
 	require.NoError(t, err)
 
-	diff := testutil.SignDiff(t, user, 1, []*types.SubnetTx{testutil.StartTx(1)})
+	diff := testutil.SignDiff(t, user, "escrow-1", 1, []*types.SubnetTx{testutil.StartTx(1)})
 	resp, err := h.HandleRequest(context.Background(), HostRequest{Diffs: []types.Diff{diff}})
 	require.NoError(t, err)
 	require.NotNil(t, resp.StateSig)
@@ -469,7 +470,7 @@ func TestHost_AccumulateGossipSig(t *testing.T) {
 	require.NoError(t, err)
 
 	// Apply a diff to create a backed nonce.
-	diff := testutil.SignDiff(t, user, 1, []*types.SubnetTx{testutil.StartTx(1)})
+	diff := testutil.SignDiff(t, user, "escrow-1", 1, []*types.SubnetTx{testutil.StartTx(1)})
 	resp, err := h.HandleRequest(context.Background(), HostRequest{Diffs: []types.Diff{diff}})
 	require.NoError(t, err)
 	require.NotNil(t, resp.StateHash)
@@ -509,7 +510,7 @@ func TestHost_AccumulateGossipSig_WrongSigner(t *testing.T) {
 		WithGrace(10), WithStorage(store), WithVerifier(verifier))
 	require.NoError(t, err)
 
-	diff := testutil.SignDiff(t, user, 1, []*types.SubnetTx{testutil.StartTx(1)})
+	diff := testutil.SignDiff(t, user, "escrow-1", 1, []*types.SubnetTx{testutil.StartTx(1)})
 	resp, err := h.HandleRequest(context.Background(), HostRequest{Diffs: []types.Diff{diff}})
 	require.NoError(t, err)
 
@@ -544,7 +545,7 @@ func TestHost_GetSignatures(t *testing.T) {
 		WithGrace(10), WithStorage(store), WithVerifier(verifier))
 	require.NoError(t, err)
 
-	diff := testutil.SignDiff(t, user, 1, []*types.SubnetTx{testutil.StartTx(1)})
+	diff := testutil.SignDiff(t, user, "escrow-1", 1, []*types.SubnetTx{testutil.StartTx(1)})
 	_, err = h.HandleRequest(context.Background(), HostRequest{Diffs: []types.Diff{diff}})
 	require.NoError(t, err)
 
@@ -579,7 +580,7 @@ func TestHost_FinalizationThreshold(t *testing.T) {
 	require.NoError(t, err)
 
 	// Apply a diff so nonce 1 exists.
-	diff := testutil.SignDiff(t, user, 1, []*types.SubnetTx{testutil.StartTx(1)})
+	diff := testutil.SignDiff(t, user, "escrow-1", 1, []*types.SubnetTx{testutil.StartTx(1)})
 	resp, err := h.HandleRequest(context.Background(), HostRequest{Diffs: []types.Diff{diff}})
 	require.NoError(t, err)
 	require.NotNil(t, resp.StateHash)
@@ -625,7 +626,7 @@ func TestHost_LatestNonce(t *testing.T) {
 
 	require.Equal(t, uint64(0), h.LatestNonce())
 
-	diff := testutil.SignDiff(t, user, 1, []*types.SubnetTx{testutil.StartTx(1)})
+	diff := testutil.SignDiff(t, user, "escrow-1", 1, []*types.SubnetTx{testutil.StartTx(1)})
 	_, err := h.HandleRequest(context.Background(), HostRequest{Diffs: []types.Diff{diff}})
 	require.NoError(t, err)
 
@@ -645,7 +646,7 @@ func TestHost_ExecuteFailure_ReturnsReceiptNoMempool(t *testing.T) {
 	h, err := NewHost(sm, hosts[1], engine, "escrow-1", group, nil, WithGrace(10))
 	require.NoError(t, err)
 
-	diff := testutil.SignDiff(t, user, 1, []*types.SubnetTx{testutil.StartTx(1)})
+	diff := testutil.SignDiff(t, user, "escrow-1", 1, []*types.SubnetTx{testutil.StartTx(1)})
 	resp, err := h.HandleRequest(context.Background(), HostRequest{
 		Diffs: []types.Diff{diff}, Nonce: 1, Payload: defaultPayload(),
 	})
