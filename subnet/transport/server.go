@@ -139,6 +139,17 @@ func (s *Server) isAllowedSender(addr string) bool {
 	return false
 }
 
+// isGroupMember returns true if addr is a group member (excludes the user).
+// Gossip is host-to-host; the user has no business gossiping.
+func (s *Server) isGroupMember(addr string) bool {
+	for _, slot := range s.group {
+		if slot.ValidatorAddress == addr {
+			return true
+		}
+	}
+	return false
+}
+
 // authMiddleware reads the body, verifies the signature, checks group membership,
 // and stores the sender address in the echo context.
 // GET requests skip auth intentionally for now.
@@ -349,6 +360,12 @@ func (s *Server) handleChallengeReceipt(c echo.Context) error {
 }
 
 func (s *Server) handleGossipNonce(c echo.Context) error {
+	// Gossip is host-to-host only. Reject user-signed requests.
+	sender := c.Get(contextKeySender).(string)
+	if !s.isGroupMember(sender) {
+		return errJSON(c, http.StatusForbidden, "gossip restricted to group members")
+	}
+
 	body := c.Get("body").([]byte)
 
 	var req GossipNonceRequest
@@ -356,9 +373,33 @@ func (s *Server) handleGossipNonce(c echo.Context) error {
 		return errJSON(c, http.StatusBadRequest, "invalid json")
 	}
 
-	// req.SlotID is self-reported by the sender but not exploitable:
-	// AccumulateGossipSig verifies the signature against the claimed slot's
-	// address, so a forged SlotID will fail sig recovery.
+	// Verify stateSig before storing in seen map. Without this, an attacker
+	// can poison the seen map with a fake (nonce, hash) and cause false
+	// equivocation detection against an honest host.
+	if len(req.StateSig) > 0 && req.SlotID < uint32(len(s.group)) {
+		expectedAddr := ""
+		for _, slot := range s.group {
+			if slot.SlotID == req.SlotID {
+				expectedAddr = slot.ValidatorAddress
+				break
+			}
+		}
+		if expectedAddr != "" {
+			sigContent := &types.StateSignatureContent{
+				StateRoot: req.StateHash,
+				EscrowId:  s.escrowID,
+				Nonce:     req.Nonce,
+			}
+			sigData, err := proto.Marshal(sigContent)
+			if err == nil {
+				addr, err := s.verifier.RecoverAddress(sigData, req.StateSig)
+				if err != nil || addr != expectedAddr {
+					return errJSON(c, http.StatusBadRequest, "invalid gossip state signature")
+				}
+			}
+		}
+	}
+
 	if s.gossip != nil {
 		if err := s.gossip.OnNonceReceived(req.Nonce, req.StateHash, req.StateSig, req.SlotID); err != nil {
 			return errJSON(c, http.StatusConflict, err.Error())
@@ -366,10 +407,7 @@ func (s *Server) handleGossipNonce(c echo.Context) error {
 	}
 
 	// Accumulate sig directly if the host has this nonce backed.
-	// This is independent of gossip -- even without gossip wired, we
-	// can accumulate sigs from incoming gossip messages.
 	if err := s.host.AccumulateGossipSig(req.Nonce, req.StateHash, req.StateSig, req.SlotID); err != nil {
-		// Not an error for the caller -- just log it.
 		logging.Debug("accumulate gossip sig skipped", "subsystem", "server", "nonce", req.Nonce, "error", err)
 	}
 
@@ -377,6 +415,12 @@ func (s *Server) handleGossipNonce(c echo.Context) error {
 }
 
 func (s *Server) handleGossipTxs(c echo.Context) error {
+	// Gossip is host-to-host only.
+	sender := c.Get(contextKeySender).(string)
+	if !s.isGroupMember(sender) {
+		return errJSON(c, http.StatusForbidden, "gossip restricted to group members")
+	}
+
 	body := c.Get("body").([]byte)
 
 	var req GossipTxsRequest

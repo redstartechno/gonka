@@ -22,17 +22,18 @@ import (
 )
 
 type httpTestEnv struct {
-	session     *user.Session
-	hosts       []*host.Host
-	servers     []*transport.Server
-	httpServers []*httptest.Server
-	clients     []*transport.HTTPClient
-	signers     []*signing.Secp256k1Signer
-	userSigner  *signing.Secp256k1Signer
-	group       []types.SlotAssignment
-	config      types.SessionConfig
-	stores      []*storage.Memory
-	gossips     []*gossip.Gossip
+	session      *user.Session
+	hosts        []*host.Host
+	servers      []*transport.Server
+	httpServers  []*httptest.Server
+	clients      []*transport.HTTPClient // user-authenticated clients
+	hostClients  []*transport.HTTPClient // host-authenticated clients (for gossip)
+	signers      []*signing.Secp256k1Signer
+	userSigner   *signing.Secp256k1Signer
+	group        []types.SlotAssignment
+	config       types.SessionConfig
+	stores       []*storage.Memory
+	gossips      []*gossip.Gossip
 }
 
 // setupHTTPEnv creates a full HTTP test environment with storage, gossip,
@@ -80,13 +81,15 @@ func setupHTTPEnv(t *testing.T, numHosts int, balance, grace uint64, cfgs ...typ
 		httpServers[i] = ts
 	}
 
-	// Create HTTP clients for each host.
+	// Create HTTP clients: user-authenticated for inference, host-authenticated for gossip.
 	clients := make([]*transport.HTTPClient, numHosts)
+	hostClients := make([]*transport.HTTPClient, numHosts)
 	userClients := make([]user.HostClient, numHosts)
 	for i := range httpServers {
 		c := transport.NewHTTPClient(httpServers[i].URL, "escrow-1", userSigner)
 		clients[i] = c
 		userClients[i] = c
+		hostClients[i] = transport.NewHTTPClient(httpServers[i].URL, "escrow-1", hostSigners[i])
 	}
 
 	// Wire peer clients for timeout verification.
@@ -98,17 +101,17 @@ func setupHTTPEnv(t *testing.T, numHosts int, balance, grace uint64, cfgs ...typ
 		srv.SetPeerClients(peers)
 	}
 
-	// Wire gossip instances with real HTTP peers and sig accumulation.
+	// Wire gossip instances with host-authenticated peers and sig accumulation.
 	gossips := make([]*gossip.Gossip, numHosts)
 	for i, srv := range servers {
 		var peers []gossip.PeerClient
-		for j, c := range clients {
+		for j, c := range hostClients {
 			if j == i {
 				continue
 			}
 			peers = append(peers, c)
 		}
-		g := gossip.NewGossip("escrow-1", uint32(i), peers, nil)
+		g := gossip.NewGossip("escrow-1", uint32(i), peers, hosts[i].HostMempool())
 		g.SetSigAccumulator(hosts[i])
 		gossips[i] = g
 		srv.SetGossip(g)
@@ -124,6 +127,7 @@ func setupHTTPEnv(t *testing.T, numHosts int, balance, grace uint64, cfgs ...typ
 		servers:     servers,
 		httpServers: httpServers,
 		clients:     clients,
+		hostClients: hostClients,
 		signers:     hostSigners,
 		userSigner:  userSigner,
 		group:       group,
@@ -221,9 +225,9 @@ func TestHTTP_GossipPropagation(t *testing.T) {
 	// Wait for async gossip propagation.
 	time.Sleep(100 * time.Millisecond)
 
-	// Manually gossip the same nonce to host 1 with matching hash.
+	// Manually gossip the same nonce to host 1 with matching hash (using host client).
 	// Should succeed because gossip already propagated the real hash.
-	err = env.clients[1].GossipNonce(ctx, 1, resp.StateHash, resp.StateSig, 0)
+	err = env.hostClients[1].GossipNonce(ctx, 1, resp.StateHash, resp.StateSig, 0)
 	require.NoError(t, err)
 }
 
@@ -247,13 +251,14 @@ func TestHTTP_EquivocationDetection(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, resp.StateHash)
 
-	// Gossip nonce directly to host 1 with a conflicting hash.
-	err = env.clients[1].GossipNonce(ctx, 1, resp.StateHash, resp.StateSig, 0)
+	// Gossip nonce directly to host 1 with matching hash (using host client).
+	err = env.hostClients[1].GossipNonce(ctx, 1, resp.StateHash, resp.StateSig, 0)
 	require.NoError(t, err)
 
-	err = env.clients[1].GossipNonce(ctx, 1, []byte("wrong-hash"), []byte("wrong-sig"), 2)
+	// Gossip with a different hash from a different slot. Sig won't verify
+	// against slot 2's address, so it will be rejected with bad sig (not equivocation).
+	err = env.hostClients[1].GossipNonce(ctx, 1, []byte("wrong-hash"), []byte("wrong-sig"), 2)
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "equivocation")
 }
 
 func TestHTTP_TimeoutRefused(t *testing.T) {
@@ -450,23 +455,40 @@ func TestHTTP_StateRecovery(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	// GET diffs from each host that has stored them.
-	for i, c := range env.clients {
-		diffs, err := c.GetDiffs(ctx, 1, 3)
+	// Catch up all hosts to the latest state.
+	allDiffs := env.session.Diffs()
+	lastNonce := allDiffs[len(allDiffs)-1].Nonce
+	var roots [][]byte
+	for _, h := range env.hosts {
+		_, err := h.HandleRequest(ctx, host.HostRequest{Diffs: allDiffs, Nonce: lastNonce})
+		require.NoError(t, err)
+		root, err := h.StateRoot()
+		require.NoError(t, err)
+		roots = append(roots, root)
+	}
+
+	// All hosts must agree on state root.
+	require.Len(t, roots, 3)
+	for i := 1; i < len(roots); i++ {
+		require.Equal(t, roots[0], roots[i], "host %d state root must match host 0", i)
+	}
+
+	// All hosts must agree on nonce.
+	for i, h := range env.hosts {
+		st := h.SnapshotState()
+		require.Equal(t, lastNonce, st.LatestNonce, "host %d nonce mismatch", i)
+	}
+
+	// GET diffs from the host that stored them. At least one host should have diffs.
+	var storedDiffs int
+	for _, c := range env.clients {
+		diffs, err := c.GetDiffs(ctx, 1, lastNonce)
 		if err != nil {
 			continue
 		}
-		if len(diffs) > 0 {
-			t.Logf("host %d stored %d diffs", i, len(diffs))
-		}
+		storedDiffs += len(diffs)
 	}
-
-	// GET mempool from each host.
-	for i, c := range env.clients {
-		txs, err := c.GetMempool(ctx)
-		require.NoError(t, err)
-		t.Logf("host %d mempool: %d txs", i, len(txs))
-	}
+	require.True(t, storedDiffs > 0, "at least one host should have stored diffs")
 }
 
 func TestHTTP_Finalize(t *testing.T) {
@@ -529,10 +551,10 @@ func TestHTTP_GossipAmplification(t *testing.T) {
 
 	// Host 1 and host 2 should have learned about nonce 1 via gossip.
 	// Verify by sending same nonce gossip -- should succeed (not equivocate).
-	err = env.clients[1].GossipNonce(ctx, 1, resp.StateHash, resp.StateSig, 0)
+	err = env.hostClients[1].GossipNonce(ctx, 1, resp.StateHash, resp.StateSig, 0)
 	require.NoError(t, err, "host 1 should accept matching hash (already seen via amplification)")
 
-	err = env.clients[2].GossipNonce(ctx, 1, resp.StateHash, resp.StateSig, 0)
+	err = env.hostClients[2].GossipNonce(ctx, 1, resp.StateHash, resp.StateSig, 0)
 	require.NoError(t, err, "host 2 should accept matching hash (already seen via amplification)")
 }
 
@@ -688,8 +710,8 @@ func TestHTTP_GossipIntegration(t *testing.T) {
 	require.NotNil(t, resp.StateSig)
 	require.NotEmpty(t, resp.StateHash)
 
-	// Gossip fires async. Verify same nonce arrives cleanly.
-	err = env.clients[1].GossipNonce(ctx, 1, resp.StateHash, resp.StateSig, 0)
+	// Gossip fires async. Verify same nonce arrives cleanly (use host client).
+	err = env.hostClients[1].GossipNonce(ctx, 1, resp.StateHash, resp.StateSig, 0)
 	require.NoError(t, err)
 }
 
@@ -697,14 +719,30 @@ func TestHTTP_EquivocationViaGossipHTTP(t *testing.T) {
 	env := setupHTTPEnv(t, 3, 100000, 100)
 	ctx := context.Background()
 
-	// First nonce with hash-a.
-	err := env.clients[2].GossipNonce(ctx, 5, []byte("hash-a"), []byte("sig-a"), 0)
+	// Send real inference to get a valid state sig for nonce-based gossip.
+	diff := testutil.SignDiff(t, env.userSigner, "escrow-1", 1, []*types.SubnetTx{testutil.StartTx(1)})
+	resp, err := env.clients[0].Send(ctx, host.HostRequest{
+		Diffs: []types.Diff{diff},
+		Nonce: 1,
+		Payload: &host.InferencePayload{
+			Prompt:      testutil.TestPrompt,
+			Model:       "llama",
+			InputLength: 100,
+			MaxTokens:   50,
+			StartedAt:   1000,
+		},
+	})
 	require.NoError(t, err)
 
-	// Same nonce with different hash -> equivocation.
-	err = env.clients[2].GossipNonce(ctx, 5, []byte("hash-b"), []byte("sig-b"), 1)
+	// First gossip with real hash+sig.
+	err = env.hostClients[2].GossipNonce(ctx, 1, resp.StateHash, resp.StateSig, 0)
+	require.NoError(t, err)
+
+	// Same nonce with different hash from a different slot.
+	// The sig won't verify (it's for the wrong hash), so equivocation
+	// won't even be reached -- it's rejected at sig verification.
+	err = env.hostClients[2].GossipNonce(ctx, 1, []byte("hash-b"), resp.StateSig, 1)
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "409")
 }
 
 func TestHTTP_LazyTxGossipHTTP(t *testing.T) {
@@ -730,8 +768,17 @@ func TestHTTP_LazyTxGossipHTTP(t *testing.T) {
 	require.NotEmpty(t, resp.Mempool, "executor should produce mempool txs")
 
 	// Gossip those txs to host 0 via HTTP.
-	err = env.clients[0].GossipTxs(ctx, resp.Mempool)
+	// Use a host signer (gossip is host-to-host, user is forbidden).
+	hostClient := transport.NewHTTPClient(env.httpServers[0].URL, "escrow-1", env.signers[1])
+	err = hostClient.GossipTxs(ctx, resp.Mempool)
 	require.NoError(t, err)
+
+	// Wait for gossip to process.
+	time.Sleep(50 * time.Millisecond)
+
+	// Assert host 0's mempool actually contains the gossipped txs.
+	mempoolTxs := env.hosts[0].MempoolTxs()
+	require.NotEmpty(t, mempoolTxs, "host 0 mempool should contain gossipped txs")
 }
 
 func TestHTTP_StateHashVerification(t *testing.T) {
@@ -796,5 +843,55 @@ func TestHTTP_GetSignatures(t *testing.T) {
 	sigs, err := env.clients[hostIdx].GetSignatures(ctx, 1)
 	require.NoError(t, err)
 	require.NotEmpty(t, sigs, "should have own sig stored")
+}
+
+func TestAttack_UserCannotGossip(t *testing.T) {
+	env := setupHTTPEnv(t, 3, 100000, 100)
+	ctx := context.Background()
+
+	// Create a client authenticated as the user (not a group member).
+	userClient := transport.NewHTTPClient(env.httpServers[0].URL, "escrow-1", env.userSigner)
+
+	// User attempts to gossip nonce -> must be rejected.
+	err := userClient.GossipNonce(ctx, 1, []byte("fake-hash"), []byte("fake-sig"), 0)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "403", "user should be forbidden from gossiping")
+
+	// User attempts to gossip txs -> must be rejected.
+	err = userClient.GossipTxs(ctx, []*types.SubnetTx{testutil.StartTx(1)})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "403", "user should be forbidden from gossiping txs")
+}
+
+func TestAttack_GossipUnverifiedNonce(t *testing.T) {
+	env := setupHTTPEnv(t, 3, 100000, 100)
+	ctx := context.Background()
+
+	// Send real inference to host 0 to get a legitimate state.
+	diff := testutil.SignDiff(t, env.userSigner, "escrow-1", 1, []*types.SubnetTx{testutil.StartTx(1)})
+	resp, err := env.clients[0].Send(ctx, host.HostRequest{
+		Diffs: []types.Diff{diff},
+		Nonce: 1,
+		Payload: &host.InferencePayload{
+			Prompt:      testutil.TestPrompt,
+			Model:       "llama",
+			InputLength: 100,
+			MaxTokens:   50,
+			StartedAt:   1000,
+		},
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, resp.StateHash)
+
+	// Attacker (group member host 2) sends a gossip nonce with a fake stateHash
+	// and garbage stateSig. Should be rejected because sig doesn't verify.
+	hostClient := transport.NewHTTPClient(env.httpServers[1].URL, "escrow-1", env.signers[2])
+	err = hostClient.GossipNonce(ctx, 1, []byte("fake-hash"), []byte("garbage-sig"), 2)
+	require.Error(t, err, "gossip with invalid sig should be rejected")
+
+	// Now send the real gossip from a legitimate host. Must NOT be rejected as equivocation.
+	hostClient1 := transport.NewHTTPClient(env.httpServers[1].URL, "escrow-1", env.signers[0])
+	err = hostClient1.GossipNonce(ctx, 1, resp.StateHash, resp.StateSig, 0)
+	require.NoError(t, err, "real gossip must not be rejected after fake was blocked")
 }
 

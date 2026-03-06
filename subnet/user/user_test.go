@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 
 	"subnet"
 	"subnet/host"
@@ -291,4 +292,119 @@ func TestUser_PendingTxDedup(t *testing.T) {
 	// Dedup should prevent growth.
 	require.Equal(t, countBefore, len(session.PendingTxs()),
 		"duplicate mempool txs should be deduplicated")
+}
+
+func TestCollectTimeoutVotes_WeightEarlyExit(t *testing.T) {
+	// 4 signers with slots [1, 1, 3, 1] (total 6 slots).
+	// VoteThreshold = 6/2 = 3. Need >3 weighted accept votes.
+	// Signer[2] (weight=3) + any other (weight=1) = 4 > 3. Should early-exit with 2 votes.
+	signers := make([]*signing.Secp256k1Signer, 4)
+	for i := range signers {
+		signers[i] = testutil.MustGenerateKey(t)
+	}
+	userKey := testutil.MustGenerateKey(t)
+	group := testutil.MakeMultiSlotGroup(signers, []int{1, 1, 3, 1})
+	numSlots := len(group)
+	config := types.SessionConfig{
+		RefusalTimeout:   60,
+		ExecutionTimeout: 1200,
+		TokenPrice:       1,
+		VoteThreshold:    uint32(numSlots) / 2, // 6/2 = 3
+	}
+	verifier := signing.NewSecp256k1Verifier()
+
+	// Build per-slot hosts. Each slot gets a host with the correct signer.
+	clients := make([]HostClient, numSlots)
+	for i, slot := range group {
+		var slotSigner *signing.Secp256k1Signer
+		for _, s := range signers {
+			if s.Address() == slot.ValidatorAddress {
+				slotSigner = s
+				break
+			}
+		}
+		sm := state.NewStateMachine("escrow-1", config, group, 100000, userKey.Address(), verifier)
+		engine := stub.NewInferenceEngine()
+		h, err := host.NewHost(sm, slotSigner, engine, "escrow-1", group, nil, host.WithGrace(100))
+		require.NoError(t, err)
+		clients[i] = &InProcessClient{Host: h}
+	}
+
+	userSM := state.NewStateMachine("escrow-1", config, group, 100000, userKey.Address(), verifier)
+	session, err := NewSession(userSM, userKey, "escrow-1", group, clients)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	params := InferenceParams{
+		Model: "llama", Prompt: []byte("prompt"),
+		InputLength: 100, MaxTokens: 50, StartedAt: 1000,
+	}
+
+	_, err = session.SendInference(ctx, params)
+	require.NoError(t, err)
+
+	// Executor = group[1%6].SlotID = 1 (signer[1]).
+	// Build mock verifiers for non-executor slots. Each mock signs with its slot's signer.
+	executorIdx := int(1 % uint64(numSlots))
+	verifiers := make(map[int]TimeoutVerifier)
+	for i, slot := range group {
+		if i == executorIdx {
+			continue
+		}
+		var slotSigner *signing.Secp256k1Signer
+		for _, s := range signers {
+			if s.Address() == slot.ValidatorAddress {
+				slotSigner = s
+				break
+			}
+		}
+		verifiers[i] = &mockTimeoutVerifier{accept: true, signer: slotSigner, group: group, slotIdx: i}
+	}
+
+	votes, err := session.CollectTimeoutVotes(ctx, 1, types.TimeoutReason_TIMEOUT_REASON_REFUSED, &host.InferencePayload{
+		Prompt:      testutil.TestPrompt,
+		Model:       "llama",
+		InputLength: 100,
+		MaxTokens:   50,
+		StartedAt:   1000,
+	}, verifiers)
+	require.NoError(t, err)
+
+	// Compute total weight of returned votes.
+	var totalWeight uint32
+	for _, v := range votes {
+		addr := userSM.SlotAddress(v.VoterSlot)
+		totalWeight += userSM.AddressSlotCount(addr)
+	}
+	require.True(t, totalWeight > config.VoteThreshold,
+		"accumulated weight %d should exceed threshold %d", totalWeight, config.VoteThreshold)
+}
+
+type mockTimeoutVerifier struct {
+	accept  bool
+	signer  *signing.Secp256k1Signer
+	group   []types.SlotAssignment
+	slotIdx int
+}
+
+func (m *mockTimeoutVerifier) VerifyTimeout(_ context.Context, inferenceID uint64, reason types.TimeoutReason, _ *host.InferencePayload) (bool, []byte, uint32, error) {
+	if !m.accept {
+		return false, nil, 0, nil
+	}
+	voterSlot := m.group[m.slotIdx].SlotID
+	content := &types.TimeoutVoteContent{
+		EscrowId:    "escrow-1",
+		InferenceId: inferenceID,
+		Reason:      reason,
+		Accept:      true,
+	}
+	data, err := proto.Marshal(content)
+	if err != nil {
+		return false, nil, 0, err
+	}
+	sig, err := m.signer.Sign(data)
+	if err != nil {
+		return false, nil, 0, err
+	}
+	return true, sig, voterSlot, nil
 }

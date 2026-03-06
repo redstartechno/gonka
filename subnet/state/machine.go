@@ -427,6 +427,12 @@ func (sm *StateMachine) applyValidation(msg *types.MsgValidation) error {
 	if !ok {
 		return fmt.Errorf("%w: inference %d", types.ErrInferenceNotFound, msg.InferenceId)
 	}
+
+	// No-op for already-resolved inferences (prevents mempool stall on redundant validations).
+	if rec.Status == types.StatusChallenged || rec.Status == types.StatusValidated || rec.Status == types.StatusInvalidated {
+		return nil
+	}
+
 	if rec.Status != types.StatusFinished {
 		return fmt.Errorf("%w: expected finished, got %d", types.ErrInvalidTransition, rec.Status)
 	}
@@ -444,11 +450,12 @@ func (sm *StateMachine) applyValidation(msg *types.MsgValidation) error {
 		return err
 	}
 
-	if msg.Valid {
-		rec.Status = types.StatusValidated
-	} else {
-		rec.Status = types.StatusChallenged
-	}
+	// Always transition to Challenged. Terminal states (Validated/Invalidated) are
+	// only reached through vote threshold in applyValidationVote.
+	// Store the initial validator's judgment for later seed-reveal verification.
+	rec.Status = types.StatusChallenged
+	rec.ValidatorSlot = msg.ValidatorSlot
+	rec.ValidatorValid = msg.Valid
 
 	return nil
 }
@@ -471,9 +478,12 @@ func (sm *StateMachine) applyValidationVote(msg *types.MsgValidationVote) error 
 		return fmt.Errorf("%w: expected challenged, got %d", types.ErrInvalidTransition, rec.Status)
 	}
 
-	// Check duplicate vote.
-	if rec.VotedSlots[msg.VoterSlot] {
-		return fmt.Errorf("%w: slot %d", types.ErrDuplicateVote, msg.VoterSlot)
+	// Dedup by address: a multi-slot validator votes once for all its slots.
+	voterAddr := sm.slotToAddress[msg.VoterSlot]
+	for slot, voted := range rec.VotedSlots {
+		if voted && sm.slotToAddress[slot] == voterAddr {
+			return fmt.Errorf("%w: slot %d (address %s already voted via slot %d)", types.ErrDuplicateVote, msg.VoterSlot, voterAddr, slot)
+		}
 	}
 
 	// Verify proposer signature from voter.
@@ -483,11 +493,17 @@ func (sm *StateMachine) applyValidationVote(msg *types.MsgValidationVote) error 
 		return err
 	}
 
-	rec.VotedSlots[msg.VoterSlot] = true
+	// Mark ALL slots owned by this address as voted (deterministic dedup + hash).
+	weight := sm.addressToSlotCount[voterAddr]
+	for slot, addr := range sm.slotToAddress {
+		if addr == voterAddr {
+			rec.VotedSlots[slot] = true
+		}
+	}
 	if msg.VoteValid {
-		rec.VotesValid++
+		rec.VotesValid += weight
 	} else {
-		rec.VotesInvalid++
+		rec.VotesInvalid += weight
 	}
 
 	// Check majority using VoteThreshold from config.
@@ -644,6 +660,10 @@ func (sm *StateMachine) TotalSlots() uint32 {
 
 func (sm *StateMachine) SlotAddress(slotID uint32) string {
 	return sm.slotToAddress[slotID]
+}
+
+func (sm *StateMachine) AddressSlotCount(addr string) uint32 {
+	return sm.addressToSlotCount[addr]
 }
 
 func SortedSlotIDs(group []types.SlotAssignment) []uint32 {

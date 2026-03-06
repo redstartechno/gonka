@@ -28,9 +28,11 @@ type InferenceRecord struct {
 	ActualCost   uint64
 	StartedAt    int64
 	ConfirmedAt  int64
-	VotesValid   uint32
-	VotesInvalid uint32
-	VotedSlots   map[uint32]bool
+	VotesValid     uint32
+	VotesInvalid   uint32
+	VotedSlots     map[uint32]bool
+	ValidatorSlot  uint32
+	ValidatorValid bool
 }
 
 // HostStats tracks per-host performance metrics within a session.

@@ -150,25 +150,27 @@ func (x *HostStatsMapProto) GetEntries() []*HostStatsProto {
 }
 
 type InferenceRecordProto struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	InferenceId   uint64                 `protobuf:"varint,1,opt,name=inference_id,json=inferenceId,proto3" json:"inference_id,omitempty"`
-	Status        uint32                 `protobuf:"varint,2,opt,name=status,proto3" json:"status,omitempty"`
-	ExecutorSlot  uint32                 `protobuf:"varint,3,opt,name=executor_slot,json=executorSlot,proto3" json:"executor_slot,omitempty"`
-	Model         string                 `protobuf:"bytes,4,opt,name=model,proto3" json:"model,omitempty"`
-	PromptHash    []byte                 `protobuf:"bytes,5,opt,name=prompt_hash,json=promptHash,proto3" json:"prompt_hash,omitempty"`
-	ResponseHash  []byte                 `protobuf:"bytes,6,opt,name=response_hash,json=responseHash,proto3" json:"response_hash,omitempty"`
-	InputLength   uint64                 `protobuf:"varint,7,opt,name=input_length,json=inputLength,proto3" json:"input_length,omitempty"`
-	MaxTokens     uint64                 `protobuf:"varint,8,opt,name=max_tokens,json=maxTokens,proto3" json:"max_tokens,omitempty"`
-	InputTokens   uint64                 `protobuf:"varint,9,opt,name=input_tokens,json=inputTokens,proto3" json:"input_tokens,omitempty"`
-	OutputTokens  uint64                 `protobuf:"varint,10,opt,name=output_tokens,json=outputTokens,proto3" json:"output_tokens,omitempty"`
-	ReservedCost  uint64                 `protobuf:"varint,11,opt,name=reserved_cost,json=reservedCost,proto3" json:"reserved_cost,omitempty"`
-	ActualCost    uint64                 `protobuf:"varint,12,opt,name=actual_cost,json=actualCost,proto3" json:"actual_cost,omitempty"`
-	StartedAt     int64                  `protobuf:"varint,13,opt,name=started_at,json=startedAt,proto3" json:"started_at,omitempty"`
-	VotesValid    uint32                 `protobuf:"varint,14,opt,name=votes_valid,json=votesValid,proto3" json:"votes_valid,omitempty"`
-	VotesInvalid  uint32                 `protobuf:"varint,15,opt,name=votes_invalid,json=votesInvalid,proto3" json:"votes_invalid,omitempty"`
-	VotedSlots    []uint32               `protobuf:"varint,16,rep,packed,name=voted_slots,json=votedSlots,proto3" json:"voted_slots,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	InferenceId    uint64                 `protobuf:"varint,1,opt,name=inference_id,json=inferenceId,proto3" json:"inference_id,omitempty"`
+	Status         uint32                 `protobuf:"varint,2,opt,name=status,proto3" json:"status,omitempty"`
+	ExecutorSlot   uint32                 `protobuf:"varint,3,opt,name=executor_slot,json=executorSlot,proto3" json:"executor_slot,omitempty"`
+	Model          string                 `protobuf:"bytes,4,opt,name=model,proto3" json:"model,omitempty"`
+	PromptHash     []byte                 `protobuf:"bytes,5,opt,name=prompt_hash,json=promptHash,proto3" json:"prompt_hash,omitempty"`
+	ResponseHash   []byte                 `protobuf:"bytes,6,opt,name=response_hash,json=responseHash,proto3" json:"response_hash,omitempty"`
+	InputLength    uint64                 `protobuf:"varint,7,opt,name=input_length,json=inputLength,proto3" json:"input_length,omitempty"`
+	MaxTokens      uint64                 `protobuf:"varint,8,opt,name=max_tokens,json=maxTokens,proto3" json:"max_tokens,omitempty"`
+	InputTokens    uint64                 `protobuf:"varint,9,opt,name=input_tokens,json=inputTokens,proto3" json:"input_tokens,omitempty"`
+	OutputTokens   uint64                 `protobuf:"varint,10,opt,name=output_tokens,json=outputTokens,proto3" json:"output_tokens,omitempty"`
+	ReservedCost   uint64                 `protobuf:"varint,11,opt,name=reserved_cost,json=reservedCost,proto3" json:"reserved_cost,omitempty"`
+	ActualCost     uint64                 `protobuf:"varint,12,opt,name=actual_cost,json=actualCost,proto3" json:"actual_cost,omitempty"`
+	StartedAt      int64                  `protobuf:"varint,13,opt,name=started_at,json=startedAt,proto3" json:"started_at,omitempty"`
+	VotesValid     uint32                 `protobuf:"varint,14,opt,name=votes_valid,json=votesValid,proto3" json:"votes_valid,omitempty"`
+	VotesInvalid   uint32                 `protobuf:"varint,15,opt,name=votes_invalid,json=votesInvalid,proto3" json:"votes_invalid,omitempty"`
+	VotedSlots     []uint32               `protobuf:"varint,16,rep,packed,name=voted_slots,json=votedSlots,proto3" json:"voted_slots,omitempty"`
+	ValidatorSlot  uint32                 `protobuf:"varint,17,opt,name=validator_slot,json=validatorSlot,proto3" json:"validator_slot,omitempty"`
+	ValidatorValid bool                   `protobuf:"varint,18,opt,name=validator_valid,json=validatorValid,proto3" json:"validator_valid,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *InferenceRecordProto) Reset() {
@@ -313,6 +315,20 @@ func (x *InferenceRecordProto) GetVotedSlots() []uint32 {
 	return nil
 }
 
+func (x *InferenceRecordProto) GetValidatorSlot() uint32 {
+	if x != nil {
+		return x.ValidatorSlot
+	}
+	return 0
+}
+
+func (x *InferenceRecordProto) GetValidatorValid() bool {
+	if x != nil {
+		return x.ValidatorValid
+	}
+	return false
+}
+
 type InferencesMapProto struct {
 	state         protoimpl.MessageState  `protogen:"open.v1"`
 	Entries       []*InferenceRecordProto `protobuf:"bytes,1,rep,name=entries,proto3" json:"entries,omitempty"`
@@ -370,7 +386,7 @@ const file_proto_subnet_v1_state_proto_rawDesc = "" +
 	"\x14required_validations\x18\x05 \x01(\rR\x13requiredValidations\x123\n" +
 	"\x15completed_validations\x18\x06 \x01(\rR\x14completedValidations\"H\n" +
 	"\x11HostStatsMapProto\x123\n" +
-	"\aentries\x18\x01 \x03(\v2\x19.subnet.v1.HostStatsProtoR\aentries\"\xa8\x04\n" +
+	"\aentries\x18\x01 \x03(\v2\x19.subnet.v1.HostStatsProtoR\aentries\"\xf8\x04\n" +
 	"\x14InferenceRecordProto\x12!\n" +
 	"\finference_id\x18\x01 \x01(\x04R\vinferenceId\x12\x16\n" +
 	"\x06status\x18\x02 \x01(\rR\x06status\x12#\n" +
@@ -394,7 +410,9 @@ const file_proto_subnet_v1_state_proto_rawDesc = "" +
 	"votesValid\x12#\n" +
 	"\rvotes_invalid\x18\x0f \x01(\rR\fvotesInvalid\x12\x1f\n" +
 	"\vvoted_slots\x18\x10 \x03(\rR\n" +
-	"votedSlots\"O\n" +
+	"votedSlots\x12%\n" +
+	"\x0evalidator_slot\x18\x11 \x01(\rR\rvalidatorSlot\x12'\n" +
+	"\x0fvalidator_valid\x18\x12 \x01(\bR\x0evalidatorValid\"O\n" +
 	"\x12InferencesMapProto\x129\n" +
 	"\aentries\x18\x01 \x03(\v2\x1f.subnet.v1.InferenceRecordProtoR\aentriesB\x0eZ\fsubnet/typesb\x06proto3"
 

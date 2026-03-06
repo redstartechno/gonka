@@ -524,6 +524,7 @@ func (s *Session) CollectTimeoutVotes(
 	expected := len(deduped)
 
 	voteThreshold := s.sm.SnapshotState().Config.VoteThreshold
+	var accWeight uint32
 	for i := 0; i < expected; i++ {
 		res := <-results
 		if res.err != nil {
@@ -531,9 +532,10 @@ func (s *Session) CollectTimeoutVotes(
 		}
 		if res.vote != nil {
 			votes = append(votes, res.vote)
+			voterAddr := s.sm.SlotAddress(res.vote.VoterSlot)
+			accWeight += s.sm.AddressSlotCount(voterAddr)
 		}
-		// Check if we have enough.
-		if uint32(len(votes)) > voteThreshold {
+		if accWeight > voteThreshold {
 			break
 		}
 	}

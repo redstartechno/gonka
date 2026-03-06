@@ -70,3 +70,9 @@ func (m *Mempool) Len() int {
 	return len(m.entries)
 }
 
+// AddTx wraps Add with a zero ProposedAt. Satisfies gossip.MempoolSink.
+func (m *Mempool) AddTx(tx *types.SubnetTx) {
+	m.Add(MempoolEntry{Tx: tx, ProposedAt: 0})
+}
+
+
