@@ -262,10 +262,10 @@ func TestUser_Finalize_DiffCount(t *testing.T) {
 	err := session.Finalize(ctx)
 	require.NoError(t, err)
 
-	// Finalize adds N (Phase A) + 1 (drain) + N (Phase B) = 2*N + 1.
-	expected := preFinalize + 2*numHosts + 1
+	// Finalize adds N (Phase A) + 1 (drain) = N + 1. Phase B sends catch-up only.
+	expected := preFinalize + numHosts + 1
 	require.Equal(t, expected, len(session.Diffs()),
-		"total diffs = pre-finalize(%d) + 2*N+1(%d)", preFinalize, 2*numHosts+1)
+		"total diffs = pre-finalize(%d) + N+1(%d)", preFinalize, numHosts+1)
 }
 
 func TestUser_PendingTxDedup(t *testing.T) {
@@ -382,19 +382,24 @@ func TestCollectTimeoutVotes_WeightEarlyExit(t *testing.T) {
 }
 
 type mockTimeoutVerifier struct {
-	accept  bool
-	signer  *signing.Secp256k1Signer
-	group   []types.SlotAssignment
-	slotIdx int
+	accept   bool
+	signer   *signing.Secp256k1Signer
+	group    []types.SlotAssignment
+	slotIdx  int
+	escrowID string // defaults to "escrow-1" when empty
 }
 
 func (m *mockTimeoutVerifier) VerifyTimeout(_ context.Context, inferenceID uint64, reason types.TimeoutReason, _ *host.InferencePayload) (bool, []byte, uint32, error) {
 	if !m.accept {
 		return false, nil, 0, nil
 	}
+	eid := m.escrowID
+	if eid == "" {
+		eid = "escrow-1"
+	}
 	voterSlot := m.group[m.slotIdx].SlotID
 	content := &types.TimeoutVoteContent{
-		EscrowId:    "escrow-1",
+		EscrowId:    eid,
 		InferenceId: inferenceID,
 		Reason:      reason,
 		Accept:      true,
