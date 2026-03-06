@@ -14,7 +14,6 @@ type RateLimitConfig struct {
 	BurstSize         int     // token bucket burst, default 200
 }
 
-// DefaultRateLimitConfig returns production defaults.
 func DefaultRateLimitConfig() RateLimitConfig {
 	return RateLimitConfig{
 		RequestsPerSecond: 100,
@@ -36,8 +35,13 @@ func newRateLimiter(cfg RateLimitConfig) *rateLimiter {
 	}
 }
 
+const maxLimiterEntries = 1000
+
 func (rl *rateLimiter) allow(sender string) bool {
 	rl.mu.Lock()
+	if len(rl.limiters) > maxLimiterEntries {
+		clear(rl.limiters)
+	}
 	lim, ok := rl.limiters[sender]
 	if !ok {
 		lim = rate.NewLimiter(rate.Limit(rl.config.RequestsPerSecond), rl.config.BurstSize)
@@ -47,7 +51,6 @@ func (rl *rateLimiter) allow(sender string) bool {
 	return lim.Allow()
 }
 
-// rateLimitMiddleware rejects requests that exceed the per-sender rate.
 // Must run after auth middleware so contextKeySender is set.
 func rateLimitMiddleware(rl *rateLimiter) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {

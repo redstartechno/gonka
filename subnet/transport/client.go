@@ -25,7 +25,6 @@ type ClientConfig struct {
 	QueryTimeout     time.Duration // diffs, mempool GETs, default 30s
 }
 
-// DefaultClientConfig returns production defaults.
 func DefaultClientConfig() ClientConfig {
 	return ClientConfig{
 		InferenceTimeout: 20 * time.Minute,
@@ -131,8 +130,8 @@ func (c *HTTPClient) GossipTxs(ctx context.Context, txs []*types.SubnetTx) error
 	return err
 }
 
-// VerifyTimeout asks a peer to verify a timeout.
-func (c *HTTPClient) VerifyTimeout(ctx context.Context, req VerifyTimeoutRequest) (*VerifyTimeoutResponse, error) {
+// SendVerifyTimeout asks a peer to verify a timeout (raw transport).
+func (c *HTTPClient) SendVerifyTimeout(ctx context.Context, req VerifyTimeoutRequest) (*VerifyTimeoutResponse, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.config.VerifyTimeout)
 	defer cancel()
 
@@ -165,20 +164,9 @@ func (c *HTTPClient) ChallengeReceipt(ctx context.Context, inferenceID uint64, p
 		djList[i] = dj
 	}
 
-	var pj *PayloadJSON
-	if payload != nil {
-		pj = &PayloadJSON{
-			Prompt:      payload.Prompt,
-			Model:       payload.Model,
-			InputLength: payload.InputLength,
-			MaxTokens:   payload.MaxTokens,
-			StartedAt:   payload.StartedAt,
-		}
-	}
-
 	req := ChallengeReceiptRequest{
 		InferenceID: inferenceID,
-		Payload:     pj,
+		Payload:     PayloadToJSON(payload),
 		Diffs:       djList,
 	}
 	body, err := json.Marshal(req)
@@ -194,6 +182,19 @@ func (c *HTTPClient) ChallengeReceipt(ctx context.Context, inferenceID uint64, p
 		return nil, fmt.Errorf("unmarshal: %w", err)
 	}
 	return resp.Receipt, nil
+}
+
+// VerifyTimeout implements user.TimeoutVerifier over HTTP.
+func (c *HTTPClient) VerifyTimeout(ctx context.Context, inferenceID uint64, reason types.TimeoutReason, payload *host.InferencePayload) (bool, []byte, uint32, error) {
+	resp, err := c.SendVerifyTimeout(ctx, VerifyTimeoutRequest{
+		InferenceID: inferenceID,
+		Reason:      TimeoutReasonToString(reason),
+		Payload:     PayloadToJSON(payload),
+	})
+	if err != nil {
+		return false, nil, 0, err
+	}
+	return resp.Accept, resp.Signature, resp.VoterSlot, nil
 }
 
 // GetDiffs fetches stored diffs from a peer.

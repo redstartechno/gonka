@@ -22,7 +22,6 @@ import (
 	"subnet/types"
 )
 
-// contextKey is the echo context key for the recovered sender address.
 const contextKeySender = "subnet_sender"
 
 // Server wraps a host.Host and exposes it over HTTP via Echo.
@@ -54,6 +53,16 @@ func WithMaxBodySize(n int64) ServerOption {
 	return func(s *Server) {
 		s.maxBodySize = n
 	}
+}
+
+// WithServerGossip attaches a gossip instance for nonce/tx propagation.
+func WithServerGossip(g *gossip.Gossip) ServerOption {
+	return func(s *Server) { s.gossip = g }
+}
+
+// WithServerPeerClients sets executor clients for timeout verification.
+func WithServerPeerClients(peers map[int]*HTTPClient) ServerOption {
+	return func(s *Server) { s.peerClients = peers }
 }
 
 // NewServer creates an HTTP server wrapping the given host.
@@ -267,17 +276,7 @@ func (s *Server) handleVerifyTimeout(c echo.Context) error {
 				}
 			}
 		}
-		var payload *host.InferencePayload
-		if req.Payload != nil {
-			payload = &host.InferencePayload{
-				Prompt:      req.Payload.Prompt,
-				Model:       req.Payload.Model,
-				InputLength: req.Payload.InputLength,
-				MaxTokens:   req.Payload.MaxTokens,
-				StartedAt:   req.Payload.StartedAt,
-			}
-		}
-		accept, err = host.VerifyRefusedTimeout(c.Request().Context(), st, req.InferenceID, payload, storedDiffs, localMempool, executorClient, st.Config, nowUnix)
+		accept, err = host.VerifyRefusedTimeout(c.Request().Context(), st, req.InferenceID, PayloadFromJSON(req.Payload), storedDiffs, localMempool, executorClient, st.Config, nowUnix)
 	case types.TimeoutReason_TIMEOUT_REASON_EXECUTION:
 		accept, err = host.VerifyExecutionTimeout(c.Request().Context(), st, req.InferenceID, localMempool, executorClient, st.Config, nowUnix)
 	default:
@@ -288,35 +287,40 @@ func (s *Server) handleVerifyTimeout(c echo.Context) error {
 	}
 
 	resp := VerifyTimeoutResponse{Accept: accept}
-
-	// If accepted, sign a timeout vote.
 	if accept {
-		// Pick the first slot this host owns.
-		var voterSlot uint32
-		for slot := range s.host.SlotIDs() {
-			voterSlot = slot
-			break
-		}
-
-		voteContent := &types.TimeoutVoteContent{
-			EscrowId:    s.escrowID,
-			InferenceId: req.InferenceID,
-			Reason:      reason,
-			Accept:      true,
-		}
-		voteData, err := proto.Marshal(voteContent)
-		if err != nil {
-			return errJSON(c, http.StatusInternalServerError, "marshal vote")
-		}
-		sig, err := s.host.Signer().Sign(voteData)
-		if err != nil {
-			return errJSON(c, http.StatusInternalServerError, "sign vote")
+		sig, voterSlot, sErr := signTimeoutVote(s.escrowID, req.InferenceID, reason, s.host.Signer(), s.host.SlotIDs())
+		if sErr != nil {
+			return errJSON(c, http.StatusInternalServerError, sErr.Error())
 		}
 		resp.Signature = sig
 		resp.VoterSlot = voterSlot
 	}
-
 	return writeJSON(c, http.StatusOK, resp)
+}
+
+// signTimeoutVote marshals and signs a TimeoutVoteContent, returning the
+// signature and the first slot ID from the host's owned slots.
+func signTimeoutVote(escrowID string, inferenceID uint64, reason types.TimeoutReason, signer signing.Signer, slotIDs map[uint32]bool) ([]byte, uint32, error) {
+	var voterSlot uint32
+	for slot := range slotIDs {
+		voterSlot = slot
+		break
+	}
+	voteContent := &types.TimeoutVoteContent{
+		EscrowId:    escrowID,
+		InferenceId: inferenceID,
+		Reason:      reason,
+		Accept:      true,
+	}
+	voteData, err := proto.Marshal(voteContent)
+	if err != nil {
+		return nil, 0, fmt.Errorf("marshal vote: %w", err)
+	}
+	sig, err := signer.Sign(voteData)
+	if err != nil {
+		return nil, 0, fmt.Errorf("sign vote: %w", err)
+	}
+	return sig, voterSlot, nil
 }
 
 func (s *Server) handleChallengeReceipt(c echo.Context) error {
@@ -336,18 +340,7 @@ func (s *Server) handleChallengeReceipt(c echo.Context) error {
 		diffs[i] = d
 	}
 
-	var payload *host.InferencePayload
-	if req.Payload != nil {
-		payload = &host.InferencePayload{
-			Prompt:      req.Payload.Prompt,
-			Model:       req.Payload.Model,
-			InputLength: req.Payload.InputLength,
-			MaxTokens:   req.Payload.MaxTokens,
-			StartedAt:   req.Payload.StartedAt,
-		}
-	}
-
-	receipt, _, err := s.host.ChallengeReceipt(c.Request().Context(), req.InferenceID, payload, diffs)
+	receipt, _, err := s.host.ChallengeReceipt(c.Request().Context(), req.InferenceID, PayloadFromJSON(req.Payload), diffs)
 	if err != nil {
 		return errJSON(c, http.StatusInternalServerError, err.Error())
 	}

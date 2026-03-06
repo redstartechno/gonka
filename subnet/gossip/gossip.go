@@ -3,13 +3,10 @@ package gossip
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"fmt"
 	"math/rand"
 	"sync"
 	"time"
-
-	"google.golang.org/protobuf/proto"
 
 	"subnet/logging"
 	"subnet/types"
@@ -52,9 +49,8 @@ type Gossip struct {
 	closeOnce sync.Once
 }
 
-// NewGossip creates a new gossip instance.
-func NewGossip(escrowID string, slotID uint32, peers []PeerClient, mempool MempoolSink) *Gossip {
-	return &Gossip{
+func NewGossip(escrowID string, slotID uint32, peers []PeerClient, mempool MempoolSink, opts ...GossipOption) *Gossip {
+	g := &Gossip{
 		escrowID:       escrowID,
 		slotID:         slotID,
 		peers:          peers,
@@ -67,6 +63,26 @@ func NewGossip(escrowID string, slotID uint32, peers []PeerClient, mempool Mempo
 		broadcastedTxs: make(map[uint64]bool),
 		stopCh:         make(chan struct{}),
 		stopped:        make(chan struct{}),
+	}
+	for _, o := range opts {
+		o(g)
+	}
+	return g
+}
+
+// GossipOption configures optional Gossip behavior.
+type GossipOption func(*Gossip)
+
+// WithSigAccumulator sets the callback for accumulating gossip signatures.
+func WithSigAccumulator(acc SigAccumulator) GossipOption {
+	return func(g *Gossip) { g.sigAccumulator = acc }
+}
+
+// WithRecovery configures the recovery dependencies.
+func WithRecovery(fetcher DiffFetcher, updater StateUpdater) GossipOption {
+	return func(g *Gossip) {
+		g.diffFetcher = fetcher
+		g.stateUpdater = updater
 	}
 }
 
@@ -202,7 +218,7 @@ func (g *Gossip) BroadcastTxs(ctx context.Context, txs []*types.SubnetTx) {
 	g.mu.Lock()
 	var newTxs []*types.SubnetTx
 	for _, tx := range txs {
-		h := txHash(tx)
+		h := types.TxHash(tx)
 		if !g.broadcastedTxs[h] {
 			g.broadcastedTxs[h] = true
 			newTxs = append(newTxs, tx)
@@ -229,21 +245,6 @@ func (g *Gossip) BroadcastTxs(ctx context.Context, txs []*types.SubnetTx) {
 		}(p)
 	}
 	wg.Wait()
-}
-
-// txHash returns a deterministic hash for dedup. Uses sha256 of proto bytes.
-func txHash(tx *types.SubnetTx) uint64 {
-	data, err := proto.Marshal(tx)
-	if err != nil {
-		return 0
-	}
-	h := sha256.Sum256(data)
-	// Use first 8 bytes as uint64.
-	var v uint64
-	for i := 0; i < 8; i++ {
-		v = (v << 8) | uint64(h[i])
-	}
-	return v
 }
 
 // Start begins the background re-propagation and recovery loops.

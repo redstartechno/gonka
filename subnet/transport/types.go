@@ -131,15 +131,7 @@ func HostRequestToJSON(req host.HostRequest) (InferenceRequest, error) {
 		Diffs: diffs,
 		Nonce: req.Nonce,
 	}
-	if req.Payload != nil {
-		ir.Payload = &PayloadJSON{
-			Prompt:      req.Payload.Prompt,
-			Model:       req.Payload.Model,
-			InputLength: req.Payload.InputLength,
-			MaxTokens:   req.Payload.MaxTokens,
-			StartedAt:   req.Payload.StartedAt,
-		}
-	}
+	ir.Payload = PayloadToJSON(req.Payload)
 	return ir, nil
 }
 
@@ -158,15 +150,7 @@ func HostRequestFromJSON(ir InferenceRequest) (host.HostRequest, error) {
 		Diffs: diffs,
 		Nonce: ir.Nonce,
 	}
-	if ir.Payload != nil {
-		req.Payload = &host.InferencePayload{
-			Prompt:      ir.Payload.Prompt,
-			Model:       ir.Payload.Model,
-			InputLength: ir.Payload.InputLength,
-			MaxTokens:   ir.Payload.MaxTokens,
-			StartedAt:   ir.Payload.StartedAt,
-		}
-	}
+	req.Payload = PayloadFromJSON(ir.Payload)
 	return req, nil
 }
 
@@ -245,6 +229,34 @@ func TimeoutReasonToString(r types.TimeoutReason) string {
 		return "execution"
 	default:
 		return "unknown"
+	}
+}
+
+// PayloadToJSON converts a domain InferencePayload to its JSON wire format.
+func PayloadToJSON(p *host.InferencePayload) *PayloadJSON {
+	if p == nil {
+		return nil
+	}
+	return &PayloadJSON{
+		Prompt:      p.Prompt,
+		Model:       p.Model,
+		InputLength: p.InputLength,
+		MaxTokens:   p.MaxTokens,
+		StartedAt:   p.StartedAt,
+	}
+}
+
+// PayloadFromJSON converts a JSON wire payload back to the domain type.
+func PayloadFromJSON(pj *PayloadJSON) *host.InferencePayload {
+	if pj == nil {
+		return nil
+	}
+	return &host.InferencePayload{
+		Prompt:      pj.Prompt,
+		Model:       pj.Model,
+		InputLength: pj.InputLength,
+		MaxTokens:   pj.MaxTokens,
+		StartedAt:   pj.StartedAt,
 	}
 }
 

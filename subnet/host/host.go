@@ -158,21 +158,15 @@ func (h *Host) StateRoot() ([]byte, error) {
 	return h.sm.ComputeStateRoot()
 }
 
-// MempoolTxs returns a copy of the current mempool transactions.
 func (h *Host) MempoolTxs() []*types.SubnetTx {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return h.mempool.Txs()
 }
 
-// EscrowID returns the escrow ID this host is configured for.
-func (h *Host) EscrowID() string { return h.escrowID }
-
-// Group returns the slot assignments for this session.
+func (h *Host) EscrowID() string            { return h.escrowID }
 func (h *Host) Group() []types.SlotAssignment { return h.group }
-
-// SlotIDs returns the set of slot IDs owned by this host.
-func (h *Host) SlotIDs() map[uint32]bool { return h.slotIDs }
+func (h *Host) SlotIDs() map[uint32]bool     { return h.slotIDs }
 
 // SnapshotState returns a deep copy of the current state.
 func (h *Host) SnapshotState() types.EscrowState {
@@ -181,7 +175,6 @@ func (h *Host) SnapshotState() types.EscrowState {
 	return h.sm.SnapshotState()
 }
 
-// Signer returns the host's signer (for timeout vote signing).
 func (h *Host) Signer() signing.Signer { return h.signer }
 
 func (h *Host) HandleRequest(ctx context.Context, req HostRequest) (*HostResponse, error) {
@@ -507,49 +500,47 @@ func (h *Host) ApplyRecoveredDiffs(ctx context.Context, diffs []types.Diff) ([]g
 // executor IS reachable. The verifier should already have caught bad payloads
 // before forwarding (defense-in-depth).
 func (h *Host) ChallengeReceipt(ctx context.Context, inferenceID uint64, payload *InferencePayload, diffs []types.Diff) ([]byte, int64, error) {
-	h.mu.Lock()
+	receipt, confirmedAt, job, err := h.challengeReceiptLocked(inferenceID, payload, diffs)
+	if err != nil || job == nil {
+		return receipt, confirmedAt, err
+	}
+	h.executeAsync(ctx, job)
+	return receipt, confirmedAt, nil
+}
 
-	// Apply any missing diffs.
+// challengeReceiptLocked applies diffs, checks executor eligibility, and signs
+// the receipt under the mutex. Returns a non-nil job when async execution is needed.
+func (h *Host) challengeReceiptLocked(inferenceID uint64, payload *InferencePayload, diffs []types.Diff) ([]byte, int64, *executeJob, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
 	for _, diff := range diffs {
 		if err := h.applyAndPersist(diff); err != nil {
-			h.mu.Unlock()
-			return nil, 0, fmt.Errorf("apply challenge diff nonce %d: %w", diff.Nonce, err)
+			return nil, 0, nil, fmt.Errorf("apply challenge diff nonce %d: %w", diff.Nonce, err)
 		}
 	}
 
-	// Check mempool for existing receipt (MsgConfirmStart).
 	for _, tx := range h.mempool.Txs() {
 		if cs := tx.GetConfirmStart(); cs != nil && cs.InferenceId == inferenceID {
-			h.mu.Unlock()
-			return cs.ExecutorSig, cs.ConfirmedAt, nil
+			return cs.ExecutorSig, cs.ConfirmedAt, nil, nil
 		}
 	}
 
-	// Look up the inference record.
 	st := h.sm.SnapshotState()
 	rec, ok := st.Inferences[inferenceID]
 	if !ok || rec.Status != types.StatusPending {
-		h.mu.Unlock()
-		return nil, 0, nil
+		return nil, 0, nil, nil
 	}
-
-	// Check if this host is the executor.
 	if !h.slotIDs[rec.ExecutorSlot] {
-		h.mu.Unlock()
-		return nil, 0, nil
+		return nil, 0, nil, nil
 	}
-
-	// Verify payload against on-chain record.
 	if payload == nil {
-		h.mu.Unlock()
-		return nil, 0, nil
+		return nil, 0, nil, nil
 	}
 	if err := VerifyPayload(payload, rec.PromptHash, rec.Model, rec.InputLength, rec.MaxTokens, rec.StartedAt); err != nil {
-		h.mu.Unlock()
-		return nil, 0, nil
+		return nil, 0, nil, nil
 	}
 
-	// Sign executor receipt with wall-clock confirmed_at.
 	confirmedAt := time.Now().Unix()
 	receiptContent := &types.ExecutorReceiptContent{
 		InferenceId: inferenceID,
@@ -563,13 +554,11 @@ func (h *Host) ChallengeReceipt(ctx context.Context, inferenceID uint64, payload
 	}
 	receiptData, err := proto.Marshal(receiptContent)
 	if err != nil {
-		h.mu.Unlock()
-		return nil, 0, fmt.Errorf("marshal executor receipt: %w", err)
+		return nil, 0, nil, fmt.Errorf("marshal executor receipt: %w", err)
 	}
 	sig, err := h.signer.Sign(receiptData)
 	if err != nil {
-		h.mu.Unlock()
-		return nil, 0, fmt.Errorf("sign executor receipt: %w", err)
+		return nil, 0, nil, fmt.Errorf("sign executor receipt: %w", err)
 	}
 
 	job := &executeJob{
@@ -582,16 +571,9 @@ func (h *Host) ChallengeReceipt(ctx context.Context, inferenceID uint64, payload
 		executorSlot: rec.ExecutorSlot,
 		diffNonce:    h.sm.LatestNonce(),
 	}
-
-	h.mu.Unlock()
-
-	// Execute outside mutex.
-	h.executeAsync(ctx, job)
-
-	return sig, confirmedAt, nil
+	return sig, confirmedAt, job, nil
 }
 
-// LatestNonce returns the latest applied nonce from the state machine.
 func (h *Host) LatestNonce() uint64 {
 	h.mu.Lock()
 	defer h.mu.Unlock()

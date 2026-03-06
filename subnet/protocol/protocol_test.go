@@ -29,7 +29,7 @@ type testEnv struct {
 	config  types.SessionConfig
 }
 
-func setupEnv(t *testing.T, numHosts int, balance, grace uint64) *testEnv {
+func setupEnv(t *testing.T, numHosts int, balance, grace uint64, engines ...subnet.InferenceEngine) *testEnv {
 	t.Helper()
 	hostSigners := make([]*signing.Secp256k1Signer, numHosts)
 	for i := range hostSigners {
@@ -44,7 +44,12 @@ func setupEnv(t *testing.T, numHosts int, balance, grace uint64) *testEnv {
 	clients := make([]user.HostClient, numHosts)
 	for i := range hostSigners {
 		sm := state.NewStateMachine("escrow-1", config, group, balance, userSigner.Address(), verifier)
-		engine := stub.NewInferenceEngine()
+		var engine subnet.InferenceEngine
+		if len(engines) > 0 {
+			engine = engines[i]
+		} else {
+			engine = stub.NewInferenceEngine()
+		}
 		h, err := host.NewHost(sm, hostSigners[i], engine, "escrow-1", group, nil, host.WithGrace(grace))
 		require.NoError(t, err)
 		hosts[i] = h
@@ -314,41 +319,6 @@ func TestProtocol_ExecutorAssignment(t *testing.T) {
 	}
 }
 
-func setupEnvWithEngines(t *testing.T, numHosts int, balance, grace uint64, engines []subnet.InferenceEngine) *testEnv {
-	t.Helper()
-	hostSigners := make([]*signing.Secp256k1Signer, numHosts)
-	for i := range hostSigners {
-		hostSigners[i] = testutil.MustGenerateKey(t)
-	}
-	userSigner := testutil.MustGenerateKey(t)
-	group := testutil.MakeGroup(hostSigners)
-	config := testutil.DefaultConfig(numHosts)
-	verifier := signing.NewSecp256k1Verifier()
-
-	hosts := make([]*host.Host, numHosts)
-	clients := make([]user.HostClient, numHosts)
-	for i := range hostSigners {
-		sm := state.NewStateMachine("escrow-1", config, group, balance, userSigner.Address(), verifier)
-		h, err := host.NewHost(sm, hostSigners[i], engines[i], "escrow-1", group, nil, host.WithGrace(grace))
-		require.NoError(t, err)
-		hosts[i] = h
-		clients[i] = &user.InProcessClient{Host: h}
-	}
-
-	userSM := state.NewStateMachine("escrow-1", config, group, balance, userSigner.Address(), verifier)
-	session, err := user.NewSession(userSM, userSigner, "escrow-1", group, clients)
-	require.NoError(t, err)
-
-	return &testEnv{
-		session: session,
-		hosts:   hosts,
-		signers: hostSigners,
-		user:    userSigner,
-		group:   group,
-		config:  config,
-	}
-}
-
 // --- New tests ---
 
 func TestProtocol_StateSignatureContent(t *testing.T) {
@@ -540,7 +510,7 @@ func TestProtocol_VaryingInferenceCosts(t *testing.T) {
 		}
 	}
 
-	env := setupEnvWithEngines(t, 3, 1000000, 100, engines)
+	env := setupEnv(t, 3, 1000000, 100, engines...)
 	ctx := context.Background()
 
 	// Send 6 inferences with different params.

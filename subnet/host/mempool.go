@@ -1,10 +1,7 @@
 package host
 
 import (
-	"crypto/sha256"
 	"sync"
-
-	"google.golang.org/protobuf/proto"
 
 	"subnet/types"
 )
@@ -29,7 +26,7 @@ func NewMempool() *Mempool {
 func (m *Mempool) Add(entry MempoolEntry) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.entries[txHash(entry.Tx)] = entry
+	m.entries[types.TxHash(entry.Tx)] = entry
 }
 
 // RemoveIncluded removes entries whose tx matches any tx in the diff (by hash).
@@ -37,7 +34,7 @@ func (m *Mempool) RemoveIncluded(txs []*types.SubnetTx) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, tx := range txs {
-		delete(m.entries, txHash(tx))
+		delete(m.entries, types.TxHash(tx))
 	}
 }
 
@@ -73,16 +70,3 @@ func (m *Mempool) Len() int {
 	return len(m.entries)
 }
 
-// txHash computes a uint64 hash from the proto-serialized tx.
-func txHash(tx *types.SubnetTx) uint64 {
-	data, err := proto.Marshal(tx)
-	if err != nil {
-		return 0
-	}
-	h := sha256.Sum256(data)
-	var v uint64
-	for i := 0; i < 8; i++ {
-		v = (v << 8) | uint64(h[i])
-	}
-	return v
-}

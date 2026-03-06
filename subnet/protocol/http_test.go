@@ -275,7 +275,7 @@ func TestHTTP_TimeoutRefused(t *testing.T) {
 		if i == 1 { // skip executor
 			continue
 		}
-		verifiers[i] = &httpTimeoutVerifier{client: env.clients[i]}
+		verifiers[i] = env.clients[i]
 	}
 
 	// Catch up all non-executor hosts so they have the inference state.
@@ -360,7 +360,7 @@ func TestHTTP_TimeoutExecution(t *testing.T) {
 		if i == 1 {
 			continue
 		}
-		verifiers[i] = &httpTimeoutVerifier{client: env.clients[i]}
+		verifiers[i] = env.clients[i]
 	}
 
 	votes, err := env.session.CollectTimeoutVotes(ctx, 1, types.TimeoutReason_TIMEOUT_REASON_EXECUTION, nil, verifiers) // nil payload for execution timeout
@@ -392,8 +392,7 @@ func TestHTTP_TimeoutRejected(t *testing.T) {
 	require.NoError(t, err)
 
 	// Try timeout verification -- should fail because inference is finished.
-	verifier := &httpTimeoutVerifier{client: env.clients[2]}
-	accept, _, _, err := verifier.VerifyTimeout(ctx, 1, types.TimeoutReason_TIMEOUT_REASON_REFUSED, nil) // nil payload, inference already finished
+	accept, _, _, err := env.clients[2].VerifyTimeout(ctx, 1, types.TimeoutReason_TIMEOUT_REASON_REFUSED, nil)
 	require.Error(t, err)
 	require.False(t, accept)
 }
@@ -426,7 +425,7 @@ func TestHTTP_ChallengeReceipt_RejectsTimeout(t *testing.T) {
 		if i == 1 {
 			continue
 		}
-		verifiers[i] = &httpTimeoutVerifier{client: env.clients[i]}
+		verifiers[i] = env.clients[i]
 	}
 
 	votes, err := env.session.CollectTimeoutVotes(ctx, 1, types.TimeoutReason_TIMEOUT_REASON_REFUSED, &host.InferencePayload{
@@ -799,31 +798,3 @@ func TestHTTP_GetSignatures(t *testing.T) {
 	require.NotEmpty(t, sigs, "should have own sig stored")
 }
 
-// --- helpers ---
-
-// httpTimeoutVerifier wraps HTTPClient for timeout verification.
-type httpTimeoutVerifier struct {
-	client *transport.HTTPClient
-}
-
-func (v *httpTimeoutVerifier) VerifyTimeout(ctx context.Context, inferenceID uint64, reason types.TimeoutReason, payload *host.InferencePayload) (bool, []byte, uint32, error) {
-	var pj *transport.PayloadJSON
-	if payload != nil {
-		pj = &transport.PayloadJSON{
-			Prompt:      payload.Prompt,
-			Model:       payload.Model,
-			InputLength: payload.InputLength,
-			MaxTokens:   payload.MaxTokens,
-			StartedAt:   payload.StartedAt,
-		}
-	}
-	resp, err := v.client.VerifyTimeout(ctx, transport.VerifyTimeoutRequest{
-		InferenceID: inferenceID,
-		Reason:      transport.TimeoutReasonToString(reason),
-		Payload:     pj,
-	})
-	if err != nil {
-		return false, nil, 0, err
-	}
-	return resp.Accept, resp.Signature, resp.VoterSlot, nil
-}
