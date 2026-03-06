@@ -33,6 +33,7 @@ type InferenceRecord struct {
 	VotedSlots     map[uint32]bool
 	ValidatorSlot  uint32
 	ValidatorValid bool
+	ValidatedBy    uint64
 }
 
 // HostStats tracks per-host performance metrics within a session.

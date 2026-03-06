@@ -170,6 +170,7 @@ type InferenceRecordProto struct {
 	VotedSlots     []uint32               `protobuf:"varint,16,rep,packed,name=voted_slots,json=votedSlots,proto3" json:"voted_slots,omitempty"`
 	ValidatorSlot  uint32                 `protobuf:"varint,17,opt,name=validator_slot,json=validatorSlot,proto3" json:"validator_slot,omitempty"`
 	ValidatorValid bool                   `protobuf:"varint,18,opt,name=validator_valid,json=validatorValid,proto3" json:"validator_valid,omitempty"`
+	ValidatedBy    uint64                 `protobuf:"varint,20,opt,name=validated_by,json=validatedBy,proto3" json:"validated_by,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -337,6 +338,13 @@ func (x *InferenceRecordProto) GetValidatorValid() bool {
 	return false
 }
 
+func (x *InferenceRecordProto) GetValidatedBy() uint64 {
+	if x != nil {
+		return x.ValidatedBy
+	}
+	return 0
+}
+
 type InferencesMapProto struct {
 	state         protoimpl.MessageState  `protogen:"open.v1"`
 	Entries       []*InferenceRecordProto `protobuf:"bytes,1,rep,name=entries,proto3" json:"entries,omitempty"`
@@ -394,7 +402,7 @@ const file_subnet_v1_state_proto_rawDesc = "" +
 	"\x14required_validations\x18\x05 \x01(\rR\x13requiredValidations\x123\n" +
 	"\x15completed_validations\x18\x06 \x01(\rR\x14completedValidations\"H\n" +
 	"\x11HostStatsMapProto\x123\n" +
-	"\aentries\x18\x01 \x03(\v2\x19.subnet.v1.HostStatsProtoR\aentries\"\x9b\x05\n" +
+	"\aentries\x18\x01 \x03(\v2\x19.subnet.v1.HostStatsProtoR\aentries\"\xbe\x05\n" +
 	"\x14InferenceRecordProto\x12!\n" +
 	"\finference_id\x18\x01 \x01(\x04R\vinferenceId\x12\x16\n" +
 	"\x06status\x18\x02 \x01(\rR\x06status\x12#\n" +
@@ -421,7 +429,8 @@ const file_subnet_v1_state_proto_rawDesc = "" +
 	"\vvoted_slots\x18\x10 \x03(\rR\n" +
 	"votedSlots\x12%\n" +
 	"\x0evalidator_slot\x18\x11 \x01(\rR\rvalidatorSlot\x12'\n" +
-	"\x0fvalidator_valid\x18\x12 \x01(\bR\x0evalidatorValid\"O\n" +
+	"\x0fvalidator_valid\x18\x12 \x01(\bR\x0evalidatorValid\x12!\n" +
+	"\fvalidated_by\x18\x14 \x01(\x04R\vvalidatedBy\"O\n" +
 	"\x12InferencesMapProto\x129\n" +
 	"\aentries\x18\x01 \x03(\v2\x1f.subnet.v1.InferenceRecordProtoR\aentriesB\x0eZ\fsubnet/typesb\x06proto3"
 

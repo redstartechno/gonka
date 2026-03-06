@@ -883,6 +883,11 @@ Add new entries there when identifying new vectors.
 `make stress-test` runs a stress test: 16 hosts, 1 user, 1000 rounds (16,000 inferences), full pipeline through finalization and settlement. Measures per-diff timing (percentiles), seed reveal cost, state/diff memory footprint, and signature collection completeness. Build tag `stress` isolates it from normal test runs.
 
 
+## Future Work
+
+- Compliance ordering: if MsgFinishInference arrives after seed reveal, the inference is not counted in RequiredValidations for that validator.
+- Seed grinding: validator could try different keys to minimize RequiredValidations via ShouldValidate. Enforce key pinning at escrow creation.
+
 ## Open Questions
 
 1. Re-propagation timeout: 120s is a starting point. Should it scale with model latency or be fixed?

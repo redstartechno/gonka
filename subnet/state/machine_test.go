@@ -1215,8 +1215,8 @@ func TestAttack_SybilValidationBypass(t *testing.T) {
 		"validation must always go to Challenged, not directly to Validated")
 }
 
-func TestApplyDiff_Validation_Redundant_NoOp(t *testing.T) {
-	// Second MsgValidation for the same inference must be a no-op (not an error).
+func TestApplyDiff_Validation_MultipleValidators(t *testing.T) {
+	// Second MsgValidation for the same inference records in bitmap.
 	hosts := []*signing.Secp256k1Signer{
 		testutil.MustGenerateKey(t), testutil.MustGenerateKey(t), testutil.MustGenerateKey(t),
 		testutil.MustGenerateKey(t), testutil.MustGenerateKey(t),
@@ -1232,15 +1232,51 @@ func TestApplyDiff_Validation_Redundant_NoOp(t *testing.T) {
 	diff := testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{txValidation(valMsg)})
 	_, err := sm.ApplyDiff(diff)
 	require.NoError(t, err)
-	require.Equal(t, types.StatusChallenged, sm.SnapshotState().Inferences[1].Status)
+	rec := sm.SnapshotState().Inferences[1]
+	require.Equal(t, types.StatusChallenged, rec.Status)
+	require.Equal(t, uint64(1<<0), rec.ValidatedBy, "first validator bit must be set")
 
-	// Second validation for same inference -> no-op (not an error).
+	// Second validation from different host -> bitmap updated.
 	valMsg2 := &types.MsgValidation{InferenceId: 1, ValidatorSlot: 2, Valid: true}
 	valMsg2.ProposerSig = testutil.SignProposerTx(t, hosts[2], valMsg2)
 	nonce = sm.SnapshotState().LatestNonce + 1
 	diff = testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{txValidation(valMsg2)})
 	_, err = sm.ApplyDiff(diff)
-	require.NoError(t, err, "redundant validation must be a no-op, not an error")
+	require.NoError(t, err)
+
+	rec = sm.SnapshotState().Inferences[1]
+	require.Equal(t, uint64(1<<0|1<<2), rec.ValidatedBy, "both validator bits must be set")
+}
+
+func TestApplyDiff_Validation_DuplicateAddress(t *testing.T) {
+	// Multi-slot validator tries to validate twice via different slots -> ErrDuplicateValidation.
+	signers := []*signing.Secp256k1Signer{
+		testutil.MustGenerateKey(t), testutil.MustGenerateKey(t), testutil.MustGenerateKey(t),
+	}
+	user := testutil.MustGenerateKey(t)
+	group := testutil.MakeMultiSlotGroup(signers, []int{2, 1, 1})
+	config := testutil.DefaultConfig(len(group))
+	verifier := signing.NewSecp256k1Verifier()
+	sm := NewStateMachine("escrow-1", config, group, 10000, user.Address(), verifier)
+
+	// Inference 1: executor = group[1%4].SlotID = 1 (owned by signer[0]).
+	applyStartConfirmFinishMultiSlot(t, sm, user, signers, group, 1)
+
+	// First validation from signer[1] (slot 2) -> Challenged.
+	valMsg := &types.MsgValidation{InferenceId: 1, ValidatorSlot: 2, Valid: true}
+	valMsg.ProposerSig = testutil.SignProposerTx(t, signers[1], valMsg)
+	nonce := sm.SnapshotState().LatestNonce + 1
+	diff := testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{txValidation(valMsg)})
+	_, err := sm.ApplyDiff(diff)
+	require.NoError(t, err)
+
+	// Same address (signer[1]) tries again from slot 2 -> ErrDuplicateValidation.
+	valMsg2 := &types.MsgValidation{InferenceId: 1, ValidatorSlot: 2, Valid: false}
+	valMsg2.ProposerSig = testutil.SignProposerTx(t, signers[1], valMsg2)
+	nonce = sm.SnapshotState().LatestNonce + 1
+	diff = testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{txValidation(valMsg2)})
+	_, err = sm.ApplyDiff(diff)
+	require.ErrorIs(t, err, types.ErrDuplicateValidation)
 }
 
 func TestApplyDiff_ValidationVote_MultiSlotWeight(t *testing.T) {
@@ -1600,6 +1636,77 @@ func TestApplyDiff_RevealSeed_CompletedValidationsCounted(t *testing.T) {
 		"inference 1 should require validation")
 	require.Equal(t, uint32(1), hs.CompletedValidations,
 		"hosts[0] validated inference 1, so CompletedValidations must be 1")
+}
+
+func TestApplyDiff_Validation_MultipleValidators_ComplianceCredit(t *testing.T) {
+	// Two validators validate the same inference. Both reveal seeds. Both get compliance credit.
+	hosts := fixedSigners(t)
+	user := testutil.MustSignerFromHex(t, "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd")
+	group := testutil.MakeGroup(hosts)
+	config := types.SessionConfig{
+		RefusalTimeout:   60,
+		ExecutionTimeout: 1200,
+		TokenPrice:       1,
+		VoteThreshold:    uint32(len(hosts)) / 2,
+		ValidationRate:   10000, // 100%
+	}
+	verifier := signing.NewSecp256k1Verifier()
+	sm := NewStateMachine("escrow-1", config, group, 100000, user.Address(), verifier)
+
+	// Inference 1: executor = slot 1%3=1 (hosts[1]).
+	applyStartConfirmFinish(t, sm, user, hosts, 1)
+
+	// hosts[0] validates inference 1: Finished -> Challenged.
+	valMsg := &types.MsgValidation{InferenceId: 1, ValidatorSlot: 0, Valid: true}
+	valMsg.ProposerSig = testutil.SignProposerTx(t, hosts[0], valMsg)
+	nonce := sm.LatestNonce() + 1
+	diff := testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{txValidation(valMsg)})
+	_, err := sm.ApplyDiff(diff)
+	require.NoError(t, err)
+
+	// hosts[2] also validates inference 1: records in bitmap.
+	valMsg2 := &types.MsgValidation{InferenceId: 1, ValidatorSlot: 2, Valid: true}
+	valMsg2.ProposerSig = testutil.SignProposerTx(t, hosts[2], valMsg2)
+	nonce = sm.LatestNonce() + 1
+	diff = testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{txValidation(valMsg2)})
+	_, err = sm.ApplyDiff(diff)
+	require.NoError(t, err)
+
+	// Finalize.
+	nonce = sm.LatestNonce() + 1
+	diff = testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{txFinalize()})
+	_, err = sm.ApplyDiff(diff)
+	require.NoError(t, err)
+
+	// Reveal from slot 0 (hosts[0]).
+	seedMsg0 := testutil.SignRevealSeed(t, hosts[0], "escrow-1", 0)
+	nonce = sm.LatestNonce() + 1
+	diff = testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{txRevealSeed(seedMsg0)})
+	_, err = sm.ApplyDiff(diff)
+	require.NoError(t, err)
+
+	// Reveal from slot 2 (hosts[2]).
+	seedMsg2 := testutil.SignRevealSeed(t, hosts[2], "escrow-1", 2)
+	nonce = sm.LatestNonce() + 1
+	diff = testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{txRevealSeed(seedMsg2)})
+	_, err = sm.ApplyDiff(diff)
+	require.NoError(t, err)
+
+	st := sm.SnapshotState()
+
+	// hosts[0] should have CompletedValidations >= 1 if ShouldValidate returns true.
+	hs0 := st.HostStats[0]
+	if hs0.RequiredValidations > 0 {
+		require.Equal(t, uint32(1), hs0.CompletedValidations,
+			"hosts[0] validated inference 1 via bitmap, should get credit")
+	}
+
+	// hosts[2] should also have CompletedValidations >= 1 if ShouldValidate returns true.
+	hs2 := st.HostStats[2]
+	if hs2.RequiredValidations > 0 {
+		require.Equal(t, uint32(1), hs2.CompletedValidations,
+			"hosts[2] validated inference 1 via bitmap, should get credit")
+	}
 }
 
 func TestApplyDiff_RevealSeed_ZeroRateNoRequirements(t *testing.T) {

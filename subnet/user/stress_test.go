@@ -149,6 +149,7 @@ func measureStateSize(st types.EscrowState) (hostStatsMB, inferencesMB, totalMB 
 			VotedSlots:     votedSlots,
 			ValidatorSlot:  r.ValidatorSlot,
 			ValidatorValid: r.ValidatorValid,
+			ValidatedBy:    r.ValidatedBy,
 		})
 	}
 	infData, _ := proto.Marshal(&types.InferencesMapProto{Entries: infEntries})

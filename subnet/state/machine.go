@@ -460,8 +460,33 @@ func (sm *StateMachine) applyValidation(msg *types.MsgValidation) error {
 		return fmt.Errorf("%w: inference %d", types.ErrInferenceNotFound, msg.InferenceId)
 	}
 
-	// No-op for already-resolved inferences (prevents mempool stall on redundant validations).
-	if rec.Status == types.StatusChallenged || rec.Status == types.StatusValidated || rec.Status == types.StatusInvalidated {
+	// No-op for terminal states (prevents mempool stall on redundant validations).
+	if rec.Status == types.StatusValidated || rec.Status == types.StatusInvalidated {
+		return nil
+	}
+
+	// Additional validator for already-challenged inference: record in bitmap.
+	if rec.Status == types.StatusChallenged {
+		if _, ok := sm.slotToAddress[msg.ValidatorSlot]; !ok {
+			return fmt.Errorf("%w: slot %d", types.ErrSlotNotInGroup, msg.ValidatorSlot)
+		}
+		if msg.ValidatorSlot == rec.ExecutorSlot {
+			return types.ErrSelfValidation
+		}
+		// Dedup by address: check if any slot with same address already has bit set.
+		validatorAddr := sm.slotToAddress[msg.ValidatorSlot]
+		for _, slot := range slices.Sorted(maps.Keys(sm.slotToAddress)) {
+			if sm.slotToAddress[slot] == validatorAddr && (rec.ValidatedBy>>slot)&1 == 1 {
+				return fmt.Errorf("%w: address %s already validated via slot %d", types.ErrDuplicateValidation, validatorAddr, slot)
+			}
+		}
+		// Verify proposer signature from validator.
+		clonedV := proto.Clone(msg).(*types.MsgValidation)
+		clonedV.ProposerSig = nil
+		if err := sm.verifyProposerSig(clonedV, msg.ProposerSig, sm.slotToAddress[msg.ValidatorSlot]); err != nil {
+			return err
+		}
+		rec.ValidatedBy |= 1 << msg.ValidatorSlot
 		return nil
 	}
 
@@ -488,6 +513,7 @@ func (sm *StateMachine) applyValidation(msg *types.MsgValidation) error {
 	rec.Status = types.StatusChallenged
 	rec.ValidatorSlot = msg.ValidatorSlot
 	rec.ValidatorValid = msg.Valid
+	rec.ValidatedBy |= 1 << msg.ValidatorSlot
 
 	return nil
 }
@@ -700,11 +726,14 @@ func (sm *StateMachine) applyRevealSeed(msg *types.MsgRevealSeed) error {
 
 		if ShouldValidate(seed, infID, validatorSlotCount, executorSlotCount, sm.totalSlots, sm.state.Config.ValidationRate) {
 			requiredValidations++
-			// Check if this validator actually validated this inference.
+			// Check if this validator actually validated this inference (bitmap check).
+			// NOTE: if MsgFinishInference arrives after seed reveal, the inference is not counted in compliance.
 			if rec.Status == types.StatusChallenged || rec.Status == types.StatusValidated || rec.Status == types.StatusInvalidated {
-				validatorAddr := sm.slotToAddress[rec.ValidatorSlot]
-				if validatorAddr == revealerAddr {
-					completedValidations++
+				for _, vSlot := range slices.Sorted(maps.Keys(sm.slotToAddress)) {
+					if sm.slotToAddress[vSlot] == revealerAddr && (rec.ValidatedBy>>vSlot)&1 == 1 {
+						completedValidations++
+						break
+					}
 				}
 			}
 		}

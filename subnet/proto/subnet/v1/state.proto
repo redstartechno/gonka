@@ -38,6 +38,7 @@ message InferenceRecordProto {
   repeated uint32 voted_slots = 16;
   uint32 validator_slot = 17;
   bool   validator_valid = 18;
+  uint64 validated_by = 20;
 }
 
 message InferencesMapProto {

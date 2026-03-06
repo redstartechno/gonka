@@ -134,6 +134,7 @@ func computeInferencesHash(inferences map[uint64]*types.InferenceRecord) ([]byte
 			VotedSlots:     votedSlots,
 			ValidatorSlot:  r.ValidatorSlot,
 			ValidatorValid: r.ValidatorValid,
+			ValidatedBy:    r.ValidatedBy,
 		})
 	}
 

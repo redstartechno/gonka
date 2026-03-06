@@ -35,4 +35,5 @@ var (
 	ErrSeedTooShort          = errors.New("seed signature too short (need >= 8 bytes)")
 	ErrSessionNotFinalizing  = errors.New("session is not finalizing")
 	ErrInvalidSeedSig        = errors.New("seed signature does not recover to slot owner")
+	ErrDuplicateValidation   = errors.New("duplicate validation: address already validated this inference")
 )
