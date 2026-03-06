@@ -234,6 +234,7 @@ func runFault(t *testing.T, failPct int) {
 	preFinNonce := session.Nonce()
 	err = session.Finalize(ctx)
 	require.Error(t, err, "finalize should fail with dead hosts")
+	session.StateMachine().PenalizeUnrevealedSeeds()
 	postFinNonce := session.Nonce()
 
 	// --- Post-finalize state snapshot ---
@@ -314,6 +315,22 @@ func runFault(t *testing.T, failPct int) {
 	require.Greater(t, aliveWithReqVal, 0,
 		"at least one alive host should have RequiredValidations > 0")
 
+	// Dead hosts that didn't reveal seeds should be penalized:
+	// RequiredValidations > 0 and CompletedValidations == 0.
+	for slot := uint32(0); slot < faultNumHosts; slot++ {
+		if !deadSlots[slot] {
+			continue
+		}
+		hs := st.HostStats[slot]
+		if st.RevealedSeeds[slot] != 0 {
+			continue // revealed before dying (shouldn't happen, but guard)
+		}
+		require.Greater(t, hs.RequiredValidations, uint32(0),
+			"dead slot %d should have RequiredValidations > 0 from penalty", slot)
+		require.Equal(t, uint32(0), hs.CompletedValidations,
+			"dead slot %d should have CompletedValidations == 0", slot)
+	}
+
 	// --- Report ---
 	t.Logf("")
 	t.Logf("--- fault test report (%d%% failure) ---", failPct)
@@ -341,6 +358,7 @@ func runFault(t *testing.T, failPct int) {
 		expectedBalance, st.Balance, timedOutRefund)
 	t.Logf("  finalize: failed as expected (dead hosts in iteration)")
 	t.Logf("  alive hosts with req_val>0: %d", aliveWithReqVal)
+	t.Logf("  dead hosts penalized (req_val>0, comp_val=0): %d", numDead)
 	t.Logf("")
 	t.Logf("signatures: %d/%d alive hosts signed", len(signedAlive), faultNumHosts-numDead)
 	t.Logf("")

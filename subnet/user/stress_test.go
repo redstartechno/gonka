@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
+	"fmt"
 	"runtime"
 	"slices"
 	"sync"
@@ -25,7 +26,6 @@ import (
 )
 
 const (
-	stressNumHosts    = 16
 	stressBalance     = 10_000_000
 	stressModel       = "llama-3.1-70b"
 	stressInputLength = 200
@@ -170,18 +170,18 @@ func measureDiffHistorySize(diffs []types.Diff) float64 {
 	return float64(total) / (1024.0 * 1024.0)
 }
 
-func runStress(t *testing.T, rounds int) {
+func runStress(t *testing.T, numHosts, rounds int) {
 	numCPU := runtime.NumCPU()
 	prev := runtime.GOMAXPROCS(numCPU)
 	defer runtime.GOMAXPROCS(prev)
 
-	totalInf := stressNumHosts * rounds
+	totalInf := numHosts * rounds
 	grace := uint64(totalInf + 100)
 
 	totalStart := time.Now()
 
 	// --- Setup ---
-	hostSigners := make([]*signing.Secp256k1Signer, stressNumHosts)
+	hostSigners := make([]*signing.Secp256k1Signer, numHosts)
 	for i := range hostSigners {
 		hostSigners[i] = testutil.MustGenerateKey(t)
 	}
@@ -191,12 +191,12 @@ func runStress(t *testing.T, rounds int) {
 		RefusalTimeout:   60,
 		ExecutionTimeout: 1200,
 		TokenPrice:       1,
-		VoteThreshold:    uint32(stressNumHosts) / 2,
+		VoteThreshold:    uint32(numHosts) / 2,
 		ValidationRate:   5000, // 50%
 	}
 	verifier := signing.NewSecp256k1Verifier()
 
-	clients := make([]HostClient, stressNumHosts)
+	clients := make([]HostClient, numHosts)
 	for i := range hostSigners {
 		sm := state.NewStateMachine("escrow-stress", config, group, stressBalance, userKey.Address(), verifier)
 		engine := stub.NewInferenceEngine()
@@ -273,11 +273,11 @@ func runStress(t *testing.T, rounds int) {
 	}
 
 	// 3. All 16 seeds revealed.
-	require.Len(t, st.RevealedSeeds, stressNumHosts, "expected %d revealed seeds", stressNumHosts)
+	require.Len(t, st.RevealedSeeds, numHosts, "expected %d revealed seeds", numHosts)
 
 	// 4. All hosts signed at the final nonce.
-	require.Equal(t, stressNumHosts, len(latestSigs),
-		"expected %d signatures at final nonce, got %d", stressNumHosts, len(latestSigs))
+	require.Equal(t, numHosts, len(latestSigs),
+		"expected %d signatures at final nonce, got %d", numHosts, len(latestSigs))
 	finalSignedCount := len(latestSigs)
 
 	// 5. Settlement Merkle: sha256(hostStatsHash || restHash) == stateRoot.
@@ -296,17 +296,17 @@ func runStress(t *testing.T, rounds int) {
 
 	// --- Report ---
 	numDiffs := len(session.Diffs())
-	expectedDiffs := totalInf + stressNumHosts + 1
+	expectedDiffs := totalInf + numHosts + 1
 
 	t.Logf("")
 	t.Logf("--- stress test report ---")
 	t.Logf("config: hosts=%d rounds=%d inferences=%d GOMAXPROCS=%d NumCPU=%d",
-		stressNumHosts, rounds, totalInf, numCPU, numCPU)
+		numHosts, rounds, totalInf, numCPU, numCPU)
 	t.Logf("")
 	t.Logf("timing:")
 	infTiming.report(t)
 	t.Logf("  state_root_at_N=%d: %v", totalInf, srDuration)
-	t.Logf("  finalize_phase: %v (%d diffs, %d seed reveals)", finDuration, stressNumHosts+1, stressNumHosts)
+	t.Logf("  finalize_phase: %v (%d diffs, %d seed reveals)", finDuration, numHosts+1, numHosts)
 	t.Logf("  settlement: %v", settleDuration)
 	t.Logf("  total: %v", totalDuration)
 	t.Logf("")
@@ -317,14 +317,14 @@ func runStress(t *testing.T, rounds int) {
 	t.Logf("")
 	t.Logf("signatures:")
 	t.Logf("  final_state: %d/%d signatures collected (nonce=%d)",
-		finalSignedCount, stressNumHosts, finalNonce)
+		finalSignedCount, numHosts, finalNonce)
 	t.Logf("")
 	t.Logf("correctness:")
 	t.Logf("  final_balance: %d (expected %d)", st.Balance, expectedBalance)
-	t.Logf("  revealed_seeds: %d/%d", len(st.RevealedSeeds), stressNumHosts)
+	t.Logf("  revealed_seeds: %d/%d", len(st.RevealedSeeds), numHosts)
 	t.Logf("  diffs: %d (expected %d)", numDiffs, expectedDiffs)
 	t.Logf("  host_stats:")
-	for slot := uint32(0); slot < stressNumHosts; slot++ {
+	for slot := uint32(0); slot < uint32(numHosts); slot++ {
 		hs := st.HostStats[slot]
 		t.Logf("    slot %d: cost=%d missed=%d invalid=%d req_val=%d comp_val=%d",
 			slot, hs.Cost, hs.Missed, hs.Invalid, hs.RequiredValidations, hs.CompletedValidations)
@@ -334,7 +334,10 @@ func runStress(t *testing.T, rounds int) {
 }
 
 func TestStress(t *testing.T) {
-	t.Run("3_rounds", func(t *testing.T) { runStress(t, 3) })
-	t.Run("10_rounds", func(t *testing.T) { runStress(t, 10) })
-	t.Run("30_rounds", func(t *testing.T) { runStress(t, 30) })
+	for _, hosts := range []int{16, 32} {
+		for _, rounds := range []int{10, 50} {
+			name := fmt.Sprintf("%dhosts_%drounds", hosts, rounds)
+			t.Run(name, func(t *testing.T) { runStress(t, hosts, rounds) })
+		}
+	}
 }

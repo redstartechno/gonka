@@ -743,6 +743,30 @@ func (sm *StateMachine) applyRevealSeed(msg *types.MsgRevealSeed) error {
 	return nil
 }
 
+// PenalizeUnrevealedSeeds sets RequiredValidations for hosts that didn't reveal
+// their seed during finalization. Without a seed we can't call ShouldValidate,
+// so we use a proportional estimate: len(inferences) * ValidationRate / 10000.
+// CompletedValidations stays 0, producing 0% compliance.
+func (sm *StateMachine) PenalizeUnrevealedSeeds() {
+	revealedAddrs := make(map[string]bool, len(sm.state.RevealedSeeds))
+	for slot := range sm.state.RevealedSeeds {
+		revealedAddrs[sm.slotToAddress[slot]] = true
+	}
+
+	numInf := uint32(len(sm.state.Inferences))
+	required := numInf * sm.state.Config.ValidationRate / 10000
+
+	for _, slot := range slices.Sorted(maps.Keys(sm.slotToAddress)) {
+		addr := sm.slotToAddress[slot]
+		if revealedAddrs[addr] {
+			continue
+		}
+		if hs, ok := sm.state.HostStats[slot]; ok {
+			hs.RequiredValidations = required
+		}
+	}
+}
+
 func (sm *StateMachine) applyFinalizeRound() error {
 	if sm.state.Finalizing {
 		return types.ErrAlreadyFinalizing

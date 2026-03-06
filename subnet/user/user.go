@@ -406,6 +406,8 @@ func (s *Session) Finalize(ctx context.Context) error {
 		s.mu.Unlock()
 	}
 
+	s.sm.PenalizeUnrevealedSeeds()
+
 	return nil
 }
 
