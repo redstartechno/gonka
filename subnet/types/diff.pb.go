@@ -271,6 +271,7 @@ type ExecutorReceiptContent struct {
 	MaxTokens     uint64                 `protobuf:"varint,5,opt,name=max_tokens,json=maxTokens,proto3" json:"max_tokens,omitempty"`
 	StartedAt     int64                  `protobuf:"varint,6,opt,name=started_at,json=startedAt,proto3" json:"started_at,omitempty"`
 	EscrowId      string                 `protobuf:"bytes,7,opt,name=escrow_id,json=escrowId,proto3" json:"escrow_id,omitempty"`
+	ConfirmedAt   int64                  `protobuf:"varint,8,opt,name=confirmed_at,json=confirmedAt,proto3" json:"confirmed_at,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -352,6 +353,13 @@ func (x *ExecutorReceiptContent) GetEscrowId() string {
 		return x.EscrowId
 	}
 	return ""
+}
+
+func (x *ExecutorReceiptContent) GetConfirmedAt() int64 {
+	if x != nil {
+		return x.ConfirmedAt
+	}
+	return 0
 }
 
 // TimeoutVoteContent is what a host signs for a TimeoutVote.
@@ -505,7 +513,7 @@ const file_subnet_v1_diff_proto_rawDesc = "" +
 	"\vreveal_seed\x18\a \x01(\v2\x18.subnet.v1.MsgRevealSeedH\x00R\n" +
 	"revealSeed\x12D\n" +
 	"\x0efinalize_round\x18\b \x01(\v2\x1b.subnet.v1.MsgFinalizeRoundH\x00R\rfinalizeRoundB\x04\n" +
-	"\x02tx\"\xf0\x01\n" +
+	"\x02tx\"\x93\x02\n" +
 	"\x16ExecutorReceiptContent\x12!\n" +
 	"\finference_id\x18\x01 \x01(\x04R\vinferenceId\x12\x1f\n" +
 	"\vprompt_hash\x18\x02 \x01(\fR\n" +
@@ -516,7 +524,8 @@ const file_subnet_v1_diff_proto_rawDesc = "" +
 	"max_tokens\x18\x05 \x01(\x04R\tmaxTokens\x12\x1d\n" +
 	"\n" +
 	"started_at\x18\x06 \x01(\x03R\tstartedAt\x12\x1b\n" +
-	"\tescrow_id\x18\a \x01(\tR\bescrowId\"\x9e\x01\n" +
+	"\tescrow_id\x18\a \x01(\tR\bescrowId\x12!\n" +
+	"\fconfirmed_at\x18\b \x01(\x03R\vconfirmedAt\"\x9e\x01\n" +
 	"\x12TimeoutVoteContent\x12\x1b\n" +
 	"\tescrow_id\x18\x01 \x01(\tR\bescrowId\x12!\n" +
 	"\finference_id\x18\x02 \x01(\x04R\vinferenceId\x120\n" +

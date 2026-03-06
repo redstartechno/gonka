@@ -158,6 +158,7 @@ type MsgConfirmStart struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	InferenceId   uint64                 `protobuf:"varint,1,opt,name=inference_id,json=inferenceId,proto3" json:"inference_id,omitempty"`
 	ExecutorSig   []byte                 `protobuf:"bytes,2,opt,name=executor_sig,json=executorSig,proto3" json:"executor_sig,omitempty"`
+	ConfirmedAt   int64                  `protobuf:"varint,3,opt,name=confirmed_at,json=confirmedAt,proto3" json:"confirmed_at,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -204,6 +205,13 @@ func (x *MsgConfirmStart) GetExecutorSig() []byte {
 		return x.ExecutorSig
 	}
 	return nil
+}
+
+func (x *MsgConfirmStart) GetConfirmedAt() int64 {
+	if x != nil {
+		return x.ConfirmedAt
+	}
+	return 0
 }
 
 type MsgFinishInference struct {
@@ -656,10 +664,11 @@ const file_subnet_v1_tx_proto_rawDesc = "" +
 	"\n" +
 	"max_tokens\x18\x05 \x01(\x04R\tmaxTokens\x12\x1d\n" +
 	"\n" +
-	"started_at\x18\x06 \x01(\x03R\tstartedAt\"W\n" +
+	"started_at\x18\x06 \x01(\x03R\tstartedAt\"z\n" +
 	"\x0fMsgConfirmStart\x12!\n" +
 	"\finference_id\x18\x01 \x01(\x04R\vinferenceId\x12!\n" +
-	"\fexecutor_sig\x18\x02 \x01(\fR\vexecutorSig\"\xec\x01\n" +
+	"\fexecutor_sig\x18\x02 \x01(\fR\vexecutorSig\x12!\n" +
+	"\fconfirmed_at\x18\x03 \x01(\x03R\vconfirmedAt\"\xec\x01\n" +
 	"\x12MsgFinishInference\x12!\n" +
 	"\finference_id\x18\x01 \x01(\x04R\vinferenceId\x12#\n" +
 	"\rresponse_hash\x18\x02 \x01(\fR\fresponseHash\x12!\n" +

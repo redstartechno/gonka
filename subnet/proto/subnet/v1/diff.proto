@@ -34,6 +34,7 @@ message ExecutorReceiptContent {
   uint64 max_tokens = 5;
   int64  started_at = 6;
   string escrow_id = 7;
+  int64  confirmed_at = 8;
 }
 
 // TimeoutVoteContent is what a host signs for a TimeoutVote.

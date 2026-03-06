@@ -40,8 +40,9 @@ type InferenceParams struct {
 type InferenceResult struct {
 	InferenceID uint64
 	Nonce       uint64
-	Receipt     []byte          // executor receipt, nil if not received
-	StateSig    []byte          // state signature from the contacted host
+	Receipt     []byte // executor receipt, nil if not received
+	ConfirmedAt int64  // executor wall-clock timestamp, 0 if not executor
+	StateSig    []byte // state signature from the contacted host
 	Mempool     []*types.SubnetTx
 }
 
@@ -171,6 +172,7 @@ func (s *Session) processResponse(hostIdx int, resp *host.HostResponse) error {
 			Tx: &types.SubnetTx_ConfirmStart{ConfirmStart: &types.MsgConfirmStart{
 				InferenceId: resp.Nonce,
 				ExecutorSig: resp.Receipt,
+				ConfirmedAt: resp.ConfirmedAt,
 			}},
 		})
 	}
@@ -270,6 +272,7 @@ func (s *Session) SendPrepared(ctx context.Context, p *preparedInference) (*Infe
 		InferenceID: p.diff.Nonce,
 		Nonce:       resp.Nonce,
 		Receipt:     resp.Receipt,
+		ConfirmedAt: resp.ConfirmedAt,
 		StateSig:    resp.StateSig,
 		Mempool:     resp.Mempool,
 	}, nil

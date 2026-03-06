@@ -340,7 +340,7 @@ func (sm *StateMachine) applyConfirmStart(msg *types.MsgConfirmStart) error {
 		return fmt.Errorf("%w: expected pending, got %d", types.ErrInvalidTransition, rec.Status)
 	}
 
-	// Verify executor receipt.
+	// Verify executor receipt (includes confirmed_at from the executor's wall clock).
 	receiptContent := &types.ExecutorReceiptContent{
 		InferenceId: msg.InferenceId,
 		PromptHash:  rec.PromptHash,
@@ -349,6 +349,7 @@ func (sm *StateMachine) applyConfirmStart(msg *types.MsgConfirmStart) error {
 		MaxTokens:   rec.MaxTokens,
 		StartedAt:   rec.StartedAt,
 		EscrowId:    sm.state.EscrowID,
+		ConfirmedAt: msg.ConfirmedAt,
 	}
 	receiptData, err := proto.Marshal(receiptContent)
 	if err != nil {
@@ -367,6 +368,7 @@ func (sm *StateMachine) applyConfirmStart(msg *types.MsgConfirmStart) error {
 	}
 
 	rec.Status = types.StatusStarted
+	rec.ConfirmedAt = msg.ConfirmedAt
 	return nil
 }
 

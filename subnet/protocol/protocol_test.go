@@ -269,11 +269,12 @@ func TestProtocol_SignatureResumesAfterInclusion(t *testing.T) {
 	receiptContent := &types.ExecutorReceiptContent{
 		InferenceId: 1, PromptHash: testutil.TestPromptHash[:], Model: "llama",
 		InputLength: 100, MaxTokens: 50, StartedAt: 1000, EscrowId: "escrow-1",
+		ConfirmedAt: resp.ConfirmedAt,
 	}
 	receiptData, _ := proto.Marshal(receiptContent)
 	receiptSig, _ := hostSigners[1].Sign(receiptData)
 	confirmTx := &types.SubnetTx{Tx: &types.SubnetTx_ConfirmStart{ConfirmStart: &types.MsgConfirmStart{
-		InferenceId: 1, ExecutorSig: receiptSig,
+		InferenceId: 1, ExecutorSig: receiptSig, ConfirmedAt: resp.ConfirmedAt,
 	}}}
 	diff2 := testutil.SignDiff(t, userSigner, "escrow-1", 2, []*types.SubnetTx{confirmTx})
 

@@ -347,7 +347,7 @@ func (s *Server) handleChallengeReceipt(c echo.Context) error {
 		}
 	}
 
-	receipt, err := s.host.ChallengeReceipt(c.Request().Context(), req.InferenceID, payload, diffs)
+	receipt, _, err := s.host.ChallengeReceipt(c.Request().Context(), req.InferenceID, payload, diffs)
 	if err != nil {
 		return errJSON(c, http.StatusInternalServerError, err.Error())
 	}

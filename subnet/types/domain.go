@@ -27,6 +27,7 @@ type InferenceRecord struct {
 	ReservedCost uint64
 	ActualCost   uint64
 	StartedAt    int64
+	ConfirmedAt  int64
 	VotesValid   uint32
 	VotesInvalid uint32
 	VotedSlots   map[uint32]bool

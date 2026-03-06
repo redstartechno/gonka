@@ -114,7 +114,8 @@ func VerifyExecutionTimeout(
 	}
 
 	// Reject if execution timeout deadline has not passed.
-	if nowUnix-rec.StartedAt < config.ExecutionTimeout {
+	// Anchored to ConfirmedAt (executor-signed wall clock), not StartedAt (user-controlled).
+	if nowUnix-rec.ConfirmedAt < config.ExecutionTimeout {
 		return false, nil
 	}
 

@@ -35,11 +35,12 @@ type InferenceRequest struct {
 
 // InferenceResponse is the JSON body returned by the inference endpoint.
 type InferenceResponse struct {
-	StateSig  []byte   `json:"state_sig,omitempty"`
-	StateHash []byte   `json:"state_hash,omitempty"`
-	Nonce     uint64   `json:"nonce"`
-	Receipt   []byte   `json:"receipt,omitempty"`
-	Mempool   [][]byte `json:"mempool,omitempty"` // each: proto bytes of SubnetTx
+	StateSig    []byte   `json:"state_sig,omitempty"`
+	StateHash   []byte   `json:"state_hash,omitempty"`
+	Nonce       uint64   `json:"nonce"`
+	Receipt     []byte   `json:"receipt,omitempty"`
+	ConfirmedAt int64    `json:"confirmed_at,omitempty"`
+	Mempool     [][]byte `json:"mempool,omitempty"` // each: proto bytes of SubnetTx
 }
 
 // VerifyTimeoutRequest is the JSON body for POST /sessions/:id/verify-timeout.
@@ -180,11 +181,12 @@ func HostResponseToJSON(resp *host.HostResponse) (InferenceResponse, error) {
 		mempool = append(mempool, b)
 	}
 	return InferenceResponse{
-		StateSig:  resp.StateSig,
-		StateHash: resp.StateHash,
-		Nonce:     resp.Nonce,
-		Receipt:   resp.Receipt,
-		Mempool:   mempool,
+		StateSig:    resp.StateSig,
+		StateHash:   resp.StateHash,
+		Nonce:       resp.Nonce,
+		Receipt:     resp.Receipt,
+		ConfirmedAt: resp.ConfirmedAt,
+		Mempool:     mempool,
 	}, nil
 }
 
@@ -199,11 +201,12 @@ func HostResponseFromJSON(ir InferenceResponse) (*host.HostResponse, error) {
 		mempool = append(mempool, tx)
 	}
 	return &host.HostResponse{
-		StateSig:  ir.StateSig,
-		StateHash: ir.StateHash,
-		Nonce:     ir.Nonce,
-		Receipt:   ir.Receipt,
-		Mempool:   mempool,
+		StateSig:    ir.StateSig,
+		StateHash:   ir.StateHash,
+		Nonce:       ir.Nonce,
+		Receipt:     ir.Receipt,
+		ConfirmedAt: ir.ConfirmedAt,
+		Mempool:     mempool,
 	}, nil
 }
 

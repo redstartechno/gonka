@@ -108,6 +108,7 @@ func TestHost_ExecutorReceipt(t *testing.T) {
 	require.NotNil(t, resp.Receipt, "executor should return receipt")
 
 	// Verify receipt is a valid executor signature.
+	require.NotZero(t, resp.ConfirmedAt, "executor should set confirmed_at")
 	verifier := signing.NewSecp256k1Verifier()
 	receiptContent := &types.ExecutorReceiptContent{
 		InferenceId: 1,
@@ -117,6 +118,7 @@ func TestHost_ExecutorReceipt(t *testing.T) {
 		MaxTokens:   50,
 		StartedAt:   1000,
 		EscrowId:    "escrow-1",
+		ConfirmedAt: resp.ConfirmedAt,
 	}
 	data, err := proto.Marshal(receiptContent)
 	require.NoError(t, err)
@@ -206,14 +208,16 @@ func TestHost_SignsAfterIncluded(t *testing.T) {
 	finishTx := resp.Mempool[0]
 
 	// Nonce 2: confirm start (needed for state machine to accept finish).
+	// Use resp.ConfirmedAt from the executor receipt to match the signature.
 	receiptContent := &types.ExecutorReceiptContent{
 		InferenceId: 1, PromptHash: testutil.TestPromptHash[:], Model: "llama",
 		InputLength: 100, MaxTokens: 50, StartedAt: 1000, EscrowId: "escrow-1",
+		ConfirmedAt: resp.ConfirmedAt,
 	}
 	receiptData, _ := proto.Marshal(receiptContent)
 	receiptSig, _ := hosts[1].Sign(receiptData)
 	confirmTx := &types.SubnetTx{Tx: &types.SubnetTx_ConfirmStart{ConfirmStart: &types.MsgConfirmStart{
-		InferenceId: 1, ExecutorSig: receiptSig,
+		InferenceId: 1, ExecutorSig: receiptSig, ConfirmedAt: resp.ConfirmedAt,
 	}}}
 	diff2 := testutil.SignDiff(t, user, "escrow-1", 2, []*types.SubnetTx{confirmTx})
 

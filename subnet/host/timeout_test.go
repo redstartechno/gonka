@@ -98,6 +98,7 @@ func stateWithStartedAt(inferenceID uint64, executorSlot uint32, startedAt int64
 				ExecutorSlot: executorSlot,
 				ReservedCost: 150,
 				StartedAt:    startedAt,
+				ConfirmedAt:  startedAt, // executor confirmation anchors execution timeout
 			},
 		},
 		HostStats: map[uint32]*types.HostStats{0: {}, 1: {}},
@@ -112,7 +113,7 @@ func deadlinePassedRefused(st types.EscrowState, inferenceID uint64) int64 {
 
 // deadlinePassedExecution returns a nowUnix that is past the execution timeout.
 func deadlinePassedExecution(st types.EscrowState, inferenceID uint64) int64 {
-	return st.Inferences[inferenceID].StartedAt + st.Config.ExecutionTimeout + 1
+	return st.Inferences[inferenceID].ConfirmedAt + st.Config.ExecutionTimeout + 1
 }
 
 // --- Refused timeout tests ---

@@ -114,9 +114,9 @@ func TestApplyDiff_ConfirmStart(t *testing.T) {
 	require.NoError(t, err)
 
 	// Confirm start with valid executor receipt.
-	execSig := testutil.SignExecutorReceipt(t, hosts[1], "escrow-1", 1, []byte("prompt"), "llama", 100, 50, 1000)
+	execSig := testutil.SignExecutorReceipt(t, hosts[1], "escrow-1", 1, []byte("prompt"), "llama", 100, 50, 1000, 1000)
 	diff = testutil.SignDiff(t, user, "escrow-1", 2, []*types.SubnetTx{txConfirm(&types.MsgConfirmStart{
-		InferenceId: 1, ExecutorSig: execSig,
+		InferenceId: 1, ExecutorSig: execSig, ConfirmedAt: 1000,
 	})})
 	_, err = sm.ApplyDiff(diff)
 	require.NoError(t, err)
@@ -137,9 +137,9 @@ func TestApplyDiff_ConfirmStart_InvalidReceipt(t *testing.T) {
 	require.NoError(t, err)
 
 	// ConfirmStart with wrong signer (host[0] instead of host[1]).
-	execSig := testutil.SignExecutorReceipt(t, hosts[0], "escrow-1", 1, []byte("prompt"), "llama", 100, 50, 1000)
+	execSig := testutil.SignExecutorReceipt(t, hosts[0], "escrow-1", 1, []byte("prompt"), "llama", 100, 50, 1000, 1000)
 	diff = testutil.SignDiff(t, user, "escrow-1", 2, []*types.SubnetTx{txConfirm(&types.MsgConfirmStart{
-		InferenceId: 1, ExecutorSig: execSig,
+		InferenceId: 1, ExecutorSig: execSig, ConfirmedAt: 1000,
 	})})
 	_, err = sm.ApplyDiff(diff)
 	require.ErrorIs(t, err, types.ErrInvalidExecutorSig)
@@ -157,9 +157,9 @@ func TestApplyDiff_FinishInference(t *testing.T) {
 	_, err := sm.ApplyDiff(diff)
 	require.NoError(t, err)
 
-	execSig := testutil.SignExecutorReceipt(t, hosts[1], "escrow-1", 1, []byte("prompt"), "llama", 100, 50, 1000)
+	execSig := testutil.SignExecutorReceipt(t, hosts[1], "escrow-1", 1, []byte("prompt"), "llama", 100, 50, 1000, 1000)
 	diff = testutil.SignDiff(t, user, "escrow-1", 2, []*types.SubnetTx{txConfirm(&types.MsgConfirmStart{
-		InferenceId: 1, ExecutorSig: execSig,
+		InferenceId: 1, ExecutorSig: execSig, ConfirmedAt: 1000,
 	})})
 	_, err = sm.ApplyDiff(diff)
 	require.NoError(t, err)
@@ -195,9 +195,9 @@ func TestApplyDiff_FinishInference_WrongExecutorSlot(t *testing.T) {
 	_, err := sm.ApplyDiff(diff)
 	require.NoError(t, err)
 
-	execSig := testutil.SignExecutorReceipt(t, hosts[1], "escrow-1", 1, []byte("prompt"), "llama", 100, 50, 1000)
+	execSig := testutil.SignExecutorReceipt(t, hosts[1], "escrow-1", 1, []byte("prompt"), "llama", 100, 50, 1000, 1000)
 	diff = testutil.SignDiff(t, user, "escrow-1", 2, []*types.SubnetTx{txConfirm(&types.MsgConfirmStart{
-		InferenceId: 1, ExecutorSig: execSig,
+		InferenceId: 1, ExecutorSig: execSig, ConfirmedAt: 1000,
 	})})
 	_, err = sm.ApplyDiff(diff)
 	require.NoError(t, err)
@@ -224,9 +224,9 @@ func TestApplyDiff_FinishInference_InvalidProposerSig(t *testing.T) {
 	_, err := sm.ApplyDiff(diff)
 	require.NoError(t, err)
 
-	execSig := testutil.SignExecutorReceipt(t, hosts[1], "escrow-1", 1, []byte("prompt"), "llama", 100, 50, 1000)
+	execSig := testutil.SignExecutorReceipt(t, hosts[1], "escrow-1", 1, []byte("prompt"), "llama", 100, 50, 1000, 1000)
 	diff = testutil.SignDiff(t, user, "escrow-1", 2, []*types.SubnetTx{txConfirm(&types.MsgConfirmStart{
-		InferenceId: 1, ExecutorSig: execSig,
+		InferenceId: 1, ExecutorSig: execSig, ConfirmedAt: 1000,
 	})})
 	_, err = sm.ApplyDiff(diff)
 	require.NoError(t, err)
@@ -362,9 +362,9 @@ func TestApplyDiff_Timeout_Execution(t *testing.T) {
 	_, err := sm.ApplyDiff(diff)
 	require.NoError(t, err)
 
-	execSig := testutil.SignExecutorReceipt(t, hosts[1], "escrow-1", 1, []byte("prompt"), "llama", 100, 50, 1000)
+	execSig := testutil.SignExecutorReceipt(t, hosts[1], "escrow-1", 1, []byte("prompt"), "llama", 100, 50, 1000, 1000)
 	diff = testutil.SignDiff(t, user, "escrow-1", 2, []*types.SubnetTx{txConfirm(&types.MsgConfirmStart{
-		InferenceId: 1, ExecutorSig: execSig,
+		InferenceId: 1, ExecutorSig: execSig, ConfirmedAt: 1000,
 	})})
 	_, err = sm.ApplyDiff(diff)
 	require.NoError(t, err)
@@ -416,9 +416,9 @@ func TestApplyDiff_Timeout_WrongReason(t *testing.T) {
 	require.ErrorIs(t, err, types.ErrInvalidTimeoutReason)
 
 	// Confirm start, then reason=refused on started -> fail.
-	execSig := testutil.SignExecutorReceipt(t, hosts[1], "escrow-1", 1, []byte("prompt"), "llama", 100, 50, 1000)
+	execSig := testutil.SignExecutorReceipt(t, hosts[1], "escrow-1", 1, []byte("prompt"), "llama", 100, 50, 1000, 1000)
 	diff = testutil.SignDiff(t, user, "escrow-1", 2, []*types.SubnetTx{txConfirm(&types.MsgConfirmStart{
-		InferenceId: 1, ExecutorSig: execSig,
+		InferenceId: 1, ExecutorSig: execSig, ConfirmedAt: 1000,
 	})})
 	_, err = sm.ApplyDiff(diff)
 	require.NoError(t, err)
@@ -593,9 +593,9 @@ func TestApplyDiff_FinalizeRound_HostTxsStillAccepted(t *testing.T) {
 	_, err := sm.ApplyDiff(diff)
 	require.NoError(t, err)
 
-	execSig := testutil.SignExecutorReceipt(t, hosts[1], "escrow-1", 1, []byte("prompt"), "llama", 100, 50, 1000)
+	execSig := testutil.SignExecutorReceipt(t, hosts[1], "escrow-1", 1, []byte("prompt"), "llama", 100, 50, 1000, 1000)
 	diff = testutil.SignDiff(t, user, "escrow-1", 2, []*types.SubnetTx{txConfirm(&types.MsgConfirmStart{
-		InferenceId: 1, ExecutorSig: execSig,
+		InferenceId: 1, ExecutorSig: execSig, ConfirmedAt: 1000,
 	})})
 	_, err = sm.ApplyDiff(diff)
 	require.NoError(t, err)
@@ -715,10 +715,10 @@ func TestApplyDiff_FullLifecycle(t *testing.T) {
 			continue
 		}
 
-		execSig := testutil.SignExecutorReceipt(t, hosts[executorSlotIdx], "escrow-1", infID, []byte("prompt"), "llama", 100, 50, int64(infID)*1000)
+		execSig := testutil.SignExecutorReceipt(t, hosts[executorSlotIdx], "escrow-1", infID, []byte("prompt"), "llama", 100, 50, int64(infID)*1000, int64(infID)*1000)
 		nonce++
 		diff = testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{txConfirm(&types.MsgConfirmStart{
-			InferenceId: infID, ExecutorSig: execSig,
+			InferenceId: infID, ExecutorSig: execSig, ConfirmedAt: int64(infID) * 1000,
 		})})
 		_, err = sm.ApplyDiff(diff)
 		require.NoError(t, err)
@@ -946,10 +946,10 @@ func applyStartConfirmFinish(t *testing.T, sm *StateMachine, user *signing.Secp2
 	_, err := sm.ApplyDiff(diff)
 	require.NoError(t, err)
 
-	execSig := testutil.SignExecutorReceipt(t, hosts[executorSlotIdx], "escrow-1", inferenceID, []byte("prompt"), "llama", 100, 50, 1000)
+	execSig := testutil.SignExecutorReceipt(t, hosts[executorSlotIdx], "escrow-1", inferenceID, []byte("prompt"), "llama", 100, 50, 1000, 1000)
 	nonce++
 	diff = testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{txConfirm(&types.MsgConfirmStart{
-		InferenceId: inferenceID, ExecutorSig: execSig,
+		InferenceId: inferenceID, ExecutorSig: execSig, ConfirmedAt: 1000,
 	})})
 	_, err = sm.ApplyDiff(diff)
 	require.NoError(t, err)
@@ -1109,7 +1109,7 @@ func TestApplyDiff_AtomicRollback(t *testing.T) {
 	// Diff with two txs: a valid confirm, then an invalid finish (wrong executor slot).
 	// The confirm would succeed, modifying state, but the finish fails.
 	// With atomic rollback, the state should be unchanged.
-	execSig := testutil.SignExecutorReceipt(t, hosts[1], "escrow-1", 1, []byte("prompt"), "llama", 100, 50, 1000)
+	execSig := testutil.SignExecutorReceipt(t, hosts[1], "escrow-1", 1, []byte("prompt"), "llama", 100, 50, 1000, 1000)
 
 	finishMsg := &types.MsgFinishInference{
 		InferenceId: 1, ResponseHash: []byte("response"),
@@ -1118,7 +1118,7 @@ func TestApplyDiff_AtomicRollback(t *testing.T) {
 	finishMsg.ProposerSig = testutil.SignProposerTx(t, hosts[2], finishMsg)
 
 	diff = testutil.SignDiff(t, user, "escrow-1", 2, []*types.SubnetTx{
-		txConfirm(&types.MsgConfirmStart{InferenceId: 1, ExecutorSig: execSig}),
+		txConfirm(&types.MsgConfirmStart{InferenceId: 1, ExecutorSig: execSig, ConfirmedAt: 1000}),
 		txFinish(finishMsg),
 	})
 	_, err = sm.ApplyDiff(diff)
@@ -1145,10 +1145,10 @@ func applyStartConfirmFinish_Setup(t *testing.T, sm *StateMachine, user *signing
 	_, err := sm.ApplyDiff(diff)
 	require.NoError(t, err)
 
-	execSig := testutil.SignExecutorReceipt(t, hosts[executorSlotIdx], "escrow-1", inferenceID, []byte("prompt"), "llama", 100, 50, 1000)
+	execSig := testutil.SignExecutorReceipt(t, hosts[executorSlotIdx], "escrow-1", inferenceID, []byte("prompt"), "llama", 100, 50, 1000, 1000)
 	nonce++
 	diff = testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{txConfirm(&types.MsgConfirmStart{
-		InferenceId: inferenceID, ExecutorSig: execSig,
+		InferenceId: inferenceID, ExecutorSig: execSig, ConfirmedAt: 1000,
 	})})
 	_, err = sm.ApplyDiff(diff)
 	require.NoError(t, err)

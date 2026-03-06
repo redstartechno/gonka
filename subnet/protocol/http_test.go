@@ -37,7 +37,8 @@ type httpTestEnv struct {
 
 // setupHTTPEnv creates a full HTTP test environment with storage, gossip,
 // sig accumulation, and mempool sink wired together.
-func setupHTTPEnv(t *testing.T, numHosts int, balance, grace uint64) *httpTestEnv {
+// Optional cfgs override the default SessionConfig.
+func setupHTTPEnv(t *testing.T, numHosts int, balance, grace uint64, cfgs ...types.SessionConfig) *httpTestEnv {
 	t.Helper()
 	hostSigners := make([]*signing.Secp256k1Signer, numHosts)
 	for i := range hostSigners {
@@ -46,6 +47,9 @@ func setupHTTPEnv(t *testing.T, numHosts int, balance, grace uint64) *httpTestEn
 	userSigner := testutil.MustGenerateKey(t)
 	group := testutil.MakeGroup(hostSigners)
 	config := testutil.DefaultConfig(numHosts)
+	if len(cfgs) > 0 {
+		config = cfgs[0]
+	}
 	verifier := signing.NewSecp256k1Verifier()
 
 	hosts := make([]*host.Host, numHosts)
@@ -312,7 +316,11 @@ func TestHTTP_TimeoutRefused(t *testing.T) {
 }
 
 func TestHTTP_TimeoutExecution(t *testing.T) {
-	env := setupHTTPEnv(t, 5, 1000000, 100)
+	// ExecutionTimeout=0 because the deadline is anchored to ConfirmedAt (real wall clock).
+	// With any positive timeout, the deadline hasn't passed yet since confirmation just happened.
+	config := testutil.DefaultConfig(5)
+	config.ExecutionTimeout = 0
+	env := setupHTTPEnv(t, 5, 1000000, 100, config)
 	ctx := context.Background()
 	params := defaultParams()
 
@@ -326,6 +334,7 @@ func TestHTTP_TimeoutExecution(t *testing.T) {
 		ConfirmStart: &types.MsgConfirmStart{
 			InferenceId: 1,
 			ExecutorSig: result.Receipt,
+			ConfirmedAt: result.ConfirmedAt,
 		},
 	}}
 	nonce := env.session.Nonce() + 1

@@ -63,7 +63,7 @@ func SignProposerTx(t *testing.T, signer signing.Signer, msg proto.Message) []by
 	return sig
 }
 
-func SignExecutorReceipt(t *testing.T, signer signing.Signer, escrowID string, inferenceID uint64, promptHash []byte, model string, inputLength, maxTokens uint64, startedAt int64) []byte {
+func SignExecutorReceipt(t *testing.T, signer signing.Signer, escrowID string, inferenceID uint64, promptHash []byte, model string, inputLength, maxTokens uint64, startedAt, confirmedAt int64) []byte {
 	t.Helper()
 	content := &types.ExecutorReceiptContent{
 		InferenceId: inferenceID,
@@ -73,6 +73,7 @@ func SignExecutorReceipt(t *testing.T, signer signing.Signer, escrowID string, i
 		MaxTokens:   maxTokens,
 		StartedAt:   startedAt,
 		EscrowId:    escrowID,
+		ConfirmedAt: confirmedAt,
 	}
 	data, err := proto.Marshal(content)
 	require.NoError(t, err)

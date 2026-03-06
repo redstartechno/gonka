@@ -20,6 +20,7 @@ message MsgStartInference {
 message MsgConfirmStart {
   uint64 inference_id = 1;
   bytes  executor_sig = 2;
+  int64  confirmed_at = 3;
 }
 
 message MsgFinishInference {
