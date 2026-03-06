@@ -1081,12 +1081,20 @@ func TestApplyDiff_RevealSeed_WrongProposer(t *testing.T) {
 	hosts := []*signing.Secp256k1Signer{testutil.MustGenerateKey(t), testutil.MustGenerateKey(t), testutil.MustGenerateKey(t)}
 	sm, user := newTestSM(t, hosts, 10000)
 
+	// Finalize first.
+	diff := testutil.SignDiff(t, user, "escrow-1", 1, []*types.SubnetTx{
+		{Tx: &types.SubnetTx_FinalizeRound{FinalizeRound: &types.MsgFinalizeRound{}}},
+	})
+	_, err := sm.ApplyDiff(diff)
+	require.NoError(t, err)
+
 	// RevealSeed from slot 0, signed by hosts[1] (in group, wrong slot).
-	seedMsg := &types.MsgRevealSeed{SlotId: 0, Signature: []byte("seed")}
+	seedSig, _ := hosts[0].Sign([]byte("escrow-1"))
+	seedMsg := &types.MsgRevealSeed{SlotId: 0, Signature: seedSig}
 	seedMsg.ProposerSig = testutil.SignProposerTx(t, hosts[1], seedMsg)
 
-	diff := testutil.SignDiff(t, user, "escrow-1", 1, []*types.SubnetTx{txRevealSeed(seedMsg)})
-	_, err := sm.ApplyDiff(diff)
+	diff = testutil.SignDiff(t, user, "escrow-1", 2, []*types.SubnetTx{txRevealSeed(seedMsg)})
+	_, err = sm.ApplyDiff(diff)
 	require.ErrorIs(t, err, types.ErrInvalidProposerSig)
 }
 
@@ -1094,12 +1102,19 @@ func TestApplyDiff_RevealSeed_InvalidSlot(t *testing.T) {
 	hosts := []*signing.Secp256k1Signer{testutil.MustGenerateKey(t), testutil.MustGenerateKey(t), testutil.MustGenerateKey(t)}
 	sm, user := newTestSM(t, hosts, 10000)
 
+	// Finalize first.
+	diff := testutil.SignDiff(t, user, "escrow-1", 1, []*types.SubnetTx{
+		{Tx: &types.SubnetTx_FinalizeRound{FinalizeRound: &types.MsgFinalizeRound{}}},
+	})
+	_, err := sm.ApplyDiff(diff)
+	require.NoError(t, err)
+
 	// RevealSeed with slot 99 (not in group).
 	seedMsg := &types.MsgRevealSeed{SlotId: 99, Signature: []byte("seed")}
 	seedMsg.ProposerSig = testutil.SignProposerTx(t, hosts[0], seedMsg)
 
-	diff := testutil.SignDiff(t, user, "escrow-1", 1, []*types.SubnetTx{txRevealSeed(seedMsg)})
-	_, err := sm.ApplyDiff(diff)
+	diff = testutil.SignDiff(t, user, "escrow-1", 2, []*types.SubnetTx{txRevealSeed(seedMsg)})
+	_, err = sm.ApplyDiff(diff)
 	require.ErrorIs(t, err, types.ErrSlotNotInGroup)
 }
 
@@ -1389,6 +1404,382 @@ func TestApplyDiff_PostStateRoot_Empty_Accepted(t *testing.T) {
 	diff := testutil.SignDiff(t, user, "escrow-1", 1, nil)
 	_, err := sm.ApplyDiff(diff)
 	require.NoError(t, err)
+}
+
+// --- Phase 4: RevealSeed with state effects ---
+
+func TestApplyDiff_RevealSeed_Success(t *testing.T) {
+	hosts := []*signing.Secp256k1Signer{
+		testutil.MustGenerateKey(t), testutil.MustGenerateKey(t), testutil.MustGenerateKey(t),
+	}
+	sm, user := newTestSM(t, hosts, 10000)
+
+	// Create a finished inference (executor=slot 1).
+	applyStartConfirmFinish(t, sm, user, hosts, 1)
+
+	// Finalize.
+	nonce := sm.LatestNonce() + 1
+	diff := testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{
+		{Tx: &types.SubnetTx_FinalizeRound{FinalizeRound: &types.MsgFinalizeRound{}}},
+	})
+	_, err := sm.ApplyDiff(diff)
+	require.NoError(t, err)
+
+	// Reveal from slot 0 (not the executor).
+	seedMsg := testutil.SignRevealSeed(t, hosts[0], "escrow-1", 0)
+	nonce = sm.LatestNonce() + 1
+	diff = testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{txRevealSeed(seedMsg)})
+	_, err = sm.ApplyDiff(diff)
+	require.NoError(t, err)
+
+	st := sm.SnapshotState()
+	require.Contains(t, st.RevealedSeeds, uint32(0))
+	require.NotZero(t, st.RevealedSeeds[0])
+}
+
+func TestApplyDiff_RevealSeed_DuplicateAddress(t *testing.T) {
+	// Multi-slot: signer[0] owns slots 0,1. Revealing from slot 1 after slot 0 should fail.
+	signers := []*signing.Secp256k1Signer{
+		testutil.MustGenerateKey(t), testutil.MustGenerateKey(t), testutil.MustGenerateKey(t),
+	}
+	user := testutil.MustGenerateKey(t)
+	group := testutil.MakeMultiSlotGroup(signers, []int{2, 1, 1})
+	config := testutil.DefaultConfig(len(group))
+	verifier := signing.NewSecp256k1Verifier()
+	sm := NewStateMachine("escrow-1", config, group, 10000, user.Address(), verifier)
+
+	// Finalize.
+	nonce := uint64(1)
+	diff := testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{
+		{Tx: &types.SubnetTx_FinalizeRound{FinalizeRound: &types.MsgFinalizeRound{}}},
+	})
+	_, err := sm.ApplyDiff(diff)
+	require.NoError(t, err)
+
+	// First reveal from slot 0 (signer[0]).
+	seedMsg := testutil.SignRevealSeed(t, signers[0], "escrow-1", 0)
+	nonce++
+	diff = testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{txRevealSeed(seedMsg)})
+	_, err = sm.ApplyDiff(diff)
+	require.NoError(t, err)
+
+	// Second reveal from slot 1 (same signer[0]) -> duplicate.
+	seedMsg2 := testutil.SignRevealSeed(t, signers[0], "escrow-1", 1)
+	nonce++
+	diff = testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{txRevealSeed(seedMsg2)})
+	_, err = sm.ApplyDiff(diff)
+	require.ErrorIs(t, err, types.ErrDuplicateSeedReveal)
+}
+
+func TestApplyDiff_RevealSeed_NotFinalizing(t *testing.T) {
+	hosts := []*signing.Secp256k1Signer{testutil.MustGenerateKey(t), testutil.MustGenerateKey(t), testutil.MustGenerateKey(t)}
+	sm, user := newTestSM(t, hosts, 10000)
+
+	seedMsg := testutil.SignRevealSeed(t, hosts[0], "escrow-1", 0)
+	diff := testutil.SignDiff(t, user, "escrow-1", 1, []*types.SubnetTx{txRevealSeed(seedMsg)})
+	_, err := sm.ApplyDiff(diff)
+	require.ErrorIs(t, err, types.ErrSessionNotFinalizing)
+}
+
+// Fixed private keys for reproducible seed derivation.
+// signer[0] signing escrowID "escrow-1" produces seed=8507102209880137399.
+// With 3 hosts, 100% rate, prob=0.5: ShouldValidate(seed, 1)=true, (seed, 4)=false, (seed, 7)=false.
+var fixedKeys = []string{
+	"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+	"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+}
+
+func fixedSigners(t *testing.T) []*signing.Secp256k1Signer {
+	t.Helper()
+	out := make([]*signing.Secp256k1Signer, len(fixedKeys))
+	for i, k := range fixedKeys {
+		out[i] = testutil.MustSignerFromHex(t, k)
+	}
+	return out
+}
+
+func TestApplyDiff_RevealSeed_ComplianceComputed(t *testing.T) {
+	hosts := fixedSigners(t)
+	user := testutil.MustSignerFromHex(t, "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd")
+	group := testutil.MakeGroup(hosts)
+	config := types.SessionConfig{
+		RefusalTimeout:   60,
+		ExecutionTimeout: 1200,
+		TokenPrice:       1,
+		VoteThreshold:    uint32(len(hosts)) / 2,
+		ValidationRate:   10000, // 100%
+	}
+	verifier := signing.NewSecp256k1Verifier()
+	sm := NewStateMachine("escrow-1", config, group, 100000, user.Address(), verifier)
+
+	// 3 finished inferences. Each uses 3 nonces (start, confirm, finish).
+	// inference 1: executor = slot 1%3=1. inference 4: slot 4%3=1. inference 7: slot 7%3=1.
+	// All executors are slot 1 (hosts[1]), so slot 0 is eligible for all 3.
+	applyStartConfirmFinish(t, sm, user, hosts, 1)
+	applyStartConfirmFinish(t, sm, user, hosts, 4)
+	applyStartConfirmFinish(t, sm, user, hosts, 7)
+
+	// Finalize.
+	nonce := sm.LatestNonce() + 1
+	diff := testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{
+		{Tx: &types.SubnetTx_FinalizeRound{FinalizeRound: &types.MsgFinalizeRound{}}},
+	})
+	_, err := sm.ApplyDiff(diff)
+	require.NoError(t, err)
+
+	// Reveal from slot 0 (hosts[0]).
+	seedMsg := testutil.SignRevealSeed(t, hosts[0], "escrow-1", 0)
+	nonce = sm.LatestNonce() + 1
+	diff = testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{txRevealSeed(seedMsg)})
+	_, err = sm.ApplyDiff(diff)
+	require.NoError(t, err)
+
+	st := sm.SnapshotState()
+	hs := st.HostStats[0]
+
+	// With fixed key, seed=8507102209880137399.
+	// prob = 1.0 * 1/(3-1) = 0.5.
+	// ShouldValidate(seed, 1) = true (0.433 < 0.5)
+	// ShouldValidate(seed, 4) = false (0.570 >= 0.5)
+	// ShouldValidate(seed, 7) = false (0.821 >= 0.5)
+	// So RequiredValidations = 1, CompletedValidations = 0 (no actual validation).
+	require.Equal(t, uint32(1), hs.RequiredValidations,
+		"exactly 1 of 3 inferences should require validation with this seed")
+	require.Equal(t, uint32(0), hs.CompletedValidations,
+		"no validations were performed")
+}
+
+func TestApplyDiff_RevealSeed_CompletedValidationsCounted(t *testing.T) {
+	hosts := fixedSigners(t)
+	user := testutil.MustSignerFromHex(t, "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd")
+	group := testutil.MakeGroup(hosts)
+	config := types.SessionConfig{
+		RefusalTimeout:   60,
+		ExecutionTimeout: 1200,
+		TokenPrice:       1,
+		VoteThreshold:    uint32(len(hosts)) / 2,
+		ValidationRate:   10000,
+	}
+	verifier := signing.NewSecp256k1Verifier()
+	sm := NewStateMachine("escrow-1", config, group, 100000, user.Address(), verifier)
+
+	// Inference 1: executor = slot 1%3=1 (hosts[1]).
+	// ShouldValidate(seed, 1) = true with this fixed key. So it counts as required.
+	applyStartConfirmFinish(t, sm, user, hosts, 1)
+
+	// hosts[0] validates inference 1: Finished -> Challenged.
+	valMsg := &types.MsgValidation{InferenceId: 1, ValidatorSlot: 0, Valid: true}
+	valMsg.ProposerSig = testutil.SignProposerTx(t, hosts[0], valMsg)
+	nonce := sm.LatestNonce() + 1
+	diff := testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{txValidation(valMsg)})
+	_, err := sm.ApplyDiff(diff)
+	require.NoError(t, err)
+
+	// Finalize.
+	nonce = sm.LatestNonce() + 1
+	diff = testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{
+		{Tx: &types.SubnetTx_FinalizeRound{FinalizeRound: &types.MsgFinalizeRound{}}},
+	})
+	_, err = sm.ApplyDiff(diff)
+	require.NoError(t, err)
+
+	// Reveal from slot 0 (hosts[0], the validator).
+	seedMsg := testutil.SignRevealSeed(t, hosts[0], "escrow-1", 0)
+	nonce = sm.LatestNonce() + 1
+	diff = testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{txRevealSeed(seedMsg)})
+	_, err = sm.ApplyDiff(diff)
+	require.NoError(t, err)
+
+	st := sm.SnapshotState()
+	hs := st.HostStats[0]
+
+	// ShouldValidate(seed, 1) = true for this key.
+	// hosts[0] validated inference 1 (ValidatorSlot=0, status=Challenged).
+	require.Equal(t, uint32(1), hs.RequiredValidations,
+		"inference 1 should require validation")
+	require.Equal(t, uint32(1), hs.CompletedValidations,
+		"hosts[0] validated inference 1, so CompletedValidations must be 1")
+}
+
+func TestApplyDiff_RevealSeed_ZeroRateNoRequirements(t *testing.T) {
+	hosts := fixedSigners(t)
+	user := testutil.MustSignerFromHex(t, "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd")
+	group := testutil.MakeGroup(hosts)
+	config := types.SessionConfig{
+		RefusalTimeout:   60,
+		ExecutionTimeout: 1200,
+		TokenPrice:       1,
+		VoteThreshold:    uint32(len(hosts)) / 2,
+		ValidationRate:   0, // 0% -- no validations required
+	}
+	verifier := signing.NewSecp256k1Verifier()
+	sm := NewStateMachine("escrow-1", config, group, 100000, user.Address(), verifier)
+
+	applyStartConfirmFinish(t, sm, user, hosts, 1)
+
+	// Finalize + reveal.
+	nonce := sm.LatestNonce() + 1
+	diff := testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{
+		{Tx: &types.SubnetTx_FinalizeRound{FinalizeRound: &types.MsgFinalizeRound{}}},
+	})
+	_, err := sm.ApplyDiff(diff)
+	require.NoError(t, err)
+
+	seedMsg := testutil.SignRevealSeed(t, hosts[0], "escrow-1", 0)
+	nonce = sm.LatestNonce() + 1
+	diff = testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{txRevealSeed(seedMsg)})
+	_, err = sm.ApplyDiff(diff)
+	require.NoError(t, err)
+
+	st := sm.SnapshotState()
+	require.Equal(t, uint32(0), st.HostStats[0].RequiredValidations,
+		"0%% validation rate must produce zero required validations")
+	require.Equal(t, uint32(0), st.HostStats[0].CompletedValidations)
+}
+
+func TestApplyDiff_RevealSeed_MultipleRevealers(t *testing.T) {
+	hosts := fixedSigners(t)
+	user := testutil.MustSignerFromHex(t, "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd")
+	group := testutil.MakeGroup(hosts)
+	config := types.SessionConfig{
+		RefusalTimeout: 60, ExecutionTimeout: 1200, TokenPrice: 1,
+		VoteThreshold: uint32(len(hosts)) / 2, ValidationRate: 10000,
+	}
+	verifier := signing.NewSecp256k1Verifier()
+	sm := NewStateMachine("escrow-1", config, group, 100000, user.Address(), verifier)
+
+	// 3 inferences, all with executor=slot 1 (hosts[1]).
+	applyStartConfirmFinish(t, sm, user, hosts, 1)
+	applyStartConfirmFinish(t, sm, user, hosts, 4)
+	applyStartConfirmFinish(t, sm, user, hosts, 7)
+
+	// Finalize.
+	nonce := sm.LatestNonce() + 1
+	diff := testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{
+		{Tx: &types.SubnetTx_FinalizeRound{FinalizeRound: &types.MsgFinalizeRound{}}},
+	})
+	_, err := sm.ApplyDiff(diff)
+	require.NoError(t, err)
+
+	// Reveal from all 3 validators.
+	for i := 0; i < 3; i++ {
+		seedMsg := testutil.SignRevealSeed(t, hosts[i], "escrow-1", uint32(i))
+		nonce = sm.LatestNonce() + 1
+		diff = testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{txRevealSeed(seedMsg)})
+		_, err = sm.ApplyDiff(diff)
+		require.NoError(t, err)
+	}
+
+	st := sm.SnapshotState()
+
+	// Each signer derives a different seed from signing escrowID.
+	// signer[0] seed=8507102209880137399 -> ShouldValidate: inf1=true, inf4=false, inf7=false -> Required=1
+	// signer[1] seed=8250581583015032772 -> executor for all 3 inferences -> Required=0
+	// signer[2] seed=88554756047201157  -> ShouldValidate: inf1=false, inf4=false, inf7=true -> Required=1
+	require.NotEqual(t, st.RevealedSeeds[0], st.RevealedSeeds[1], "different keys must produce different seeds")
+	require.NotEqual(t, st.RevealedSeeds[1], st.RevealedSeeds[2], "different keys must produce different seeds")
+
+	require.Equal(t, uint32(1), st.HostStats[0].RequiredValidations,
+		"signer[0]: only inference 1 passes ShouldValidate")
+	require.Equal(t, uint32(0), st.HostStats[1].RequiredValidations,
+		"signer[1]: executor of all inferences, nothing to validate")
+	require.Equal(t, uint32(1), st.HostStats[2].RequiredValidations,
+		"signer[2]: only inference 7 passes ShouldValidate")
+
+	// No actual validations were performed.
+	for i := uint32(0); i < 3; i++ {
+		require.Equal(t, uint32(0), st.HostStats[i].CompletedValidations)
+	}
+}
+
+func TestApplyDiff_RevealSeed_ExecutorSkipsSelf(t *testing.T) {
+	hosts := []*signing.Secp256k1Signer{
+		testutil.MustGenerateKey(t), testutil.MustGenerateKey(t), testutil.MustGenerateKey(t),
+	}
+	user := testutil.MustGenerateKey(t)
+	group := testutil.MakeGroup(hosts)
+	config := types.SessionConfig{
+		RefusalTimeout:   60,
+		ExecutionTimeout: 1200,
+		TokenPrice:       1,
+		VoteThreshold:    uint32(len(hosts)) / 2,
+		ValidationRate:   10000,
+	}
+	verifier := signing.NewSecp256k1Verifier()
+	sm := NewStateMachine("escrow-1", config, group, 100000, user.Address(), verifier)
+
+	// Inference 1: nonces 1,2,3. executor = slot 1%3 = 1 = hosts[1].
+	// But we want hosts[0] to be the executor. Inference ID 3 has executor slot 3%3=0.
+	// applyStartConfirmFinish uses nonce = latestNonce+1 = 1 for the start,
+	// so inference_id must be 1. executor = slot 1%3 = 1 (hosts[1]).
+	// Let's use the fact that inference_id=nonce. We need inference where executor=slot 0.
+	// slot 0 executes when inference_id % 3 == 0. E.g. inference_id = 3.
+	// But applyStartConfirmFinish starts at nonce=1, so inference_id must be 1.
+	// Instead, advance nonce first, then use inference_id = 3 at nonce = 3.
+	// Simplest: apply two empty diffs first.
+	diff := testutil.SignDiff(t, user, "escrow-1", 1, nil)
+	_, err := sm.ApplyDiff(diff)
+	require.NoError(t, err)
+	diff = testutil.SignDiff(t, user, "escrow-1", 2, nil)
+	_, err = sm.ApplyDiff(diff)
+	require.NoError(t, err)
+
+	// Now nonce=2, next will be 3. inference_id=3, executor = 3%3=0 = hosts[0].
+	applyStartConfirmFinish(t, sm, user, hosts, 3)
+
+	// Finalize. nonce is now 5, next is 6.
+	nonce := sm.LatestNonce() + 1
+	diff = testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{
+		{Tx: &types.SubnetTx_FinalizeRound{FinalizeRound: &types.MsgFinalizeRound{}}},
+	})
+	_, err = sm.ApplyDiff(diff)
+	require.NoError(t, err)
+
+	// Reveal from slot 0 (hosts[0], who is the executor of inference 3).
+	seedMsg := testutil.SignRevealSeed(t, hosts[0], "escrow-1", 0)
+	nonce = sm.LatestNonce() + 1
+	diff = testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{txRevealSeed(seedMsg)})
+	_, err = sm.ApplyDiff(diff)
+	require.NoError(t, err)
+
+	st := sm.SnapshotState()
+	// Executor should skip its own inference, so RequiredValidations = 0.
+	require.Equal(t, uint32(0), st.HostStats[0].RequiredValidations,
+		"executor should not be required to validate its own inferences")
+}
+
+func TestApplyDiff_RevealSeed_ForgeSeedSig(t *testing.T) {
+	hosts := []*signing.Secp256k1Signer{
+		testutil.MustGenerateKey(t), testutil.MustGenerateKey(t), testutil.MustGenerateKey(t),
+	}
+	sm, user := newTestSM(t, hosts, 10000)
+
+	// Finalize.
+	nonce := uint64(1)
+	diff := testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{
+		{Tx: &types.SubnetTx_FinalizeRound{FinalizeRound: &types.MsgFinalizeRound{}}},
+	})
+	_, err := sm.ApplyDiff(diff)
+	require.NoError(t, err)
+
+	// Create a MsgRevealSeed where the seed signature is from a different key.
+	wrongKey := testutil.MustGenerateKey(t)
+	wrongSeedSig, err := wrongKey.Sign([]byte("escrow-1"))
+	require.NoError(t, err)
+
+	seedMsg := &types.MsgRevealSeed{
+		SlotId:    0,
+		Signature: wrongSeedSig,
+	}
+	// Proposer sig is correct (from hosts[0]).
+	cloned := &types.MsgRevealSeed{SlotId: 0, Signature: wrongSeedSig}
+	seedMsg.ProposerSig = testutil.SignProposerTx(t, hosts[0], cloned)
+
+	nonce++
+	diff = testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{txRevealSeed(seedMsg)})
+	_, err = sm.ApplyDiff(diff)
+	require.ErrorIs(t, err, types.ErrInvalidSeedSig)
 }
 
 // applyStartConfirmFinish_Setup applies start + confirm only (no finish).

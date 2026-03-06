@@ -68,6 +68,15 @@ func GenerateKey() (*Secp256k1Signer, error) {
 	return NewSecp256k1Signer(key), nil
 }
 
+// SignerFromHex creates a signer from a hex-encoded private key.
+func SignerFromHex(hexKey string) (*Secp256k1Signer, error) {
+	key, err := crypto.HexToECDSA(hexKey)
+	if err != nil {
+		return nil, fmt.Errorf("parse hex key: %w", err)
+	}
+	return NewSecp256k1Signer(key), nil
+}
+
 func AddressFromPubKey(pubkey []byte) string {
 	return common.BytesToAddress(crypto.Keccak256(pubkey[1:])[12:]).Hex()
 }

@@ -559,22 +559,23 @@ Testable deliverable: subnet cluster of N nodes communicates over HTTP, gossip d
 Goal: probabilistic validation protocol, seed reveal, settlement data construction.
 
 Scope:
-- ShouldValidate logic: deterministic selection based on seed + inference_id
-- Seed derivation: `first_8_bytes(sign(escrow_id_bytes))` per host per session
-- MsgRevealSeed handling: verify seed signature against pinned signing key
-- Two finalizing rounds before settlement (round 1: collect seeds + remaining txs; round 2: propagate complete state, hosts sign final state)
-- Compliance computation: required_validations and completed_validations from revealed seeds + existing MsgValidation txs
-- MsgSettleEscrow data construction: (state_root, rest_hash, host_stats, signatures)
-- Dispute detection: compare proposed nonce against local latest_nonce
+- Seed derivation: `first_8_bytes(sign(escrow_id_bytes))` per host per session. Pure function, ~10 lines.
+- ShouldValidate: pure function using DeterministicFloat (sha256-based, same approach as chain). Flat probability per session via `SessionConfig.ValidationRate`. No reputation or traffic basis -- subnet has no cross-session state. All hosts compute the same result from the same inputs. ~20 lines.
+- MsgRevealSeed state effect: derive seed from revealed signature, run ShouldValidate for all finished inferences, update required_validations and completed_validations in HostStats.
+- Host: produce MsgRevealSeed during finalization (sign escrow_id_bytes, add to mempool).
+- Compliance computation: deterministic from revealed seeds + existing MsgValidation txs.
+- Settlement payload construction: extract (state_root, rest_hash, host_stats, signatures) for MsgSettleEscrow.
 
-Relevant existing code in decentralized-api:
-- `inference-chain/x/inference/calculations/should_validate.go`: `ShouldValidate()` and `DeterministicFloat()` are pure functions (~70 lines). Decide: reuse (requires importing chain module) or reimplement (avoids dependency).
+Existing code reference (not imported, reimplemented):
+- `inference-chain/x/inference/calculations/should_validate.go`: `DeterministicFloat()` pattern reused (sha256 + first 8 bytes -> float). `ShouldValidate()` simplified -- subnet uses flat rate instead of reputation-weighted probability.
 - `decentralized-api/internal/seed/seed.go`: `CreateSeedForEpoch()` signs bytes and takes first 8 bytes -- same pattern as subnet seed derivation (signs escrow_id instead of epoch index).
-- `decentralized-api/internal/validation/inference_validation.go`: `compareLogits()`, `customSimilarity()`, `customDistance()` are pure functions. Needed for ValidationEngine adapter in Phase 6, not here.
 
-Decision point: ShouldValidate and seed derivation are small enough (~70 lines total) to reimplement in the subnet module. This avoids importing chain types and keeps the module boundary clean. compareLogits stays in dapi (used by the ValidationEngine adapter in Phase 6).
+Not in Phase 4:
+- Dispute detection (requires MainnetBridge `OnSettlementProposed` notification -> Phase 5).
+- Host validation execution (calling `ValidationEngine.Validate()` to produce MsgValidation -> Phase 6, needs ML engine). Phase 4 tests use manually composed MsgValidation txs.
+- Pinned signing key verification (first-sig pinning for seed reveal). Adds complexity, deferred.
 
-Tests: full session with validation, seed reveal, finalizing rounds, settlement data verified. Both in-process and multi-node.
+Tests: full session with seed reveal, finalizing rounds, compliance verification, settlement data construction. Both in-process and multi-node.
 
 Testable deliverable: session ends with correct settlement payload. Seed reveal produces valid ShouldValidate expectations. Compliance numbers match. Settlement Merkle proof is verifiable.
 

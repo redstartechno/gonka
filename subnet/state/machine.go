@@ -74,12 +74,13 @@ func NewStateMachine(
 
 	return &StateMachine{
 		state: &types.EscrowState{
-			EscrowID:   escrowID,
-			Config:     config,
-			Group:      groupCopy,
-			Balance:    balance,
-			Inferences: make(map[uint64]*types.InferenceRecord),
-			HostStats:  hostStats,
+			EscrowID:      escrowID,
+			Config:        config,
+			Group:         groupCopy,
+			Balance:       balance,
+			Inferences:    make(map[uint64]*types.InferenceRecord),
+			HostStats:     hostStats,
+			RevealedSeeds: make(map[uint32]int64),
 		},
 		verifier:           verifier,
 		userAddress:        userAddress,
@@ -208,6 +209,12 @@ func (sm *StateMachine) SnapshotState() types.EscrowState {
 		s.HostStats[k] = &cp
 	}
 
+	// Deep copy RevealedSeeds.
+	s.RevealedSeeds = make(map[uint32]int64, len(sm.state.RevealedSeeds))
+	for k, v := range sm.state.RevealedSeeds {
+		s.RevealedSeeds[k] = v
+	}
+
 	// Deep copy Inferences.
 	s.Inferences = make(map[uint64]*types.InferenceRecord, len(sm.state.Inferences))
 	for k, v := range sm.state.Inferences {
@@ -234,10 +241,11 @@ func (sm *StateMachine) SnapshotState() types.EscrowState {
 
 // mutableSnapshot holds the mutable fields of EscrowState for rollback.
 type mutableSnapshot struct {
-	Balance    uint64
-	Finalizing bool
-	Inferences map[uint64]*types.InferenceRecord
-	HostStats  map[uint32]*types.HostStats
+	Balance       uint64
+	Finalizing    bool
+	Inferences    map[uint64]*types.InferenceRecord
+	HostStats     map[uint32]*types.HostStats
+	RevealedSeeds map[uint32]int64
 }
 
 func (sm *StateMachine) snapshotMutable() mutableSnapshot {
@@ -267,11 +275,17 @@ func (sm *StateMachine) snapshotMutable() mutableSnapshot {
 		hsCopy[k] = &cp
 	}
 
+	seedsCopy := make(map[uint32]int64, len(sm.state.RevealedSeeds))
+	for k, v := range sm.state.RevealedSeeds {
+		seedsCopy[k] = v
+	}
+
 	return mutableSnapshot{
-		Balance:    sm.state.Balance,
-		Finalizing: sm.state.Finalizing,
-		Inferences: infCopy,
-		HostStats:  hsCopy,
+		Balance:       sm.state.Balance,
+		Finalizing:    sm.state.Finalizing,
+		Inferences:    infCopy,
+		HostStats:     hsCopy,
+		RevealedSeeds: seedsCopy,
 	}
 }
 
@@ -280,6 +294,7 @@ func (sm *StateMachine) restoreMutable(snap mutableSnapshot) {
 	sm.state.Finalizing = snap.Finalizing
 	sm.state.Inferences = snap.Inferences
 	sm.state.HostStats = snap.HostStats
+	sm.state.RevealedSeeds = snap.RevealedSeeds
 }
 
 // ComputeStateRoot returns the current state root without modifying state.
@@ -624,19 +639,93 @@ func (sm *StateMachine) applyTimeout(msg *types.MsgTimeoutInference) error {
 }
 
 func (sm *StateMachine) applyRevealSeed(msg *types.MsgRevealSeed) error {
+	// Guard: must be finalizing.
+	if !sm.state.Finalizing {
+		return types.ErrSessionNotFinalizing
+	}
+
 	// Verify slot is in group.
-	if _, ok := sm.slotToAddress[msg.SlotId]; !ok {
+	revealerAddr, ok := sm.slotToAddress[msg.SlotId]
+	if !ok {
 		return fmt.Errorf("%w: slot %d", types.ErrSlotNotInGroup, msg.SlotId)
 	}
 
 	// Verify proposer signature from slot owner.
 	clonedRS := proto.Clone(msg).(*types.MsgRevealSeed)
 	clonedRS.ProposerSig = nil
-	if err := sm.verifyProposerSig(clonedRS, msg.ProposerSig, sm.slotToAddress[msg.SlotId]); err != nil {
+	if err := sm.verifyProposerSig(clonedRS, msg.ProposerSig, revealerAddr); err != nil {
 		return err
 	}
 
-	// Accept but no state effect in Phase 1 (ShouldValidate deferred to Phase 4).
+	// Verify seed signature recovers to slot owner (proves honest derivation).
+	seedAddr, err := sm.verifier.RecoverAddress([]byte(sm.state.EscrowID), msg.Signature)
+	if err != nil {
+		return fmt.Errorf("%w: %v", types.ErrInvalidSeedSig, err)
+	}
+	if seedAddr != revealerAddr {
+		return fmt.Errorf("%w: expected %s, got %s", types.ErrInvalidSeedSig, revealerAddr, seedAddr)
+	}
+
+	// Dedup by address: check if any slot owned by same address already revealed.
+	for slot := range sm.state.RevealedSeeds {
+		if sm.slotToAddress[slot] == revealerAddr {
+			return fmt.Errorf("%w: address %s already revealed via slot %d", types.ErrDuplicateSeedReveal, revealerAddr, slot)
+		}
+	}
+
+	// Derive seed from signature.
+	seed, err := DeriveSeed(msg.Signature)
+	if err != nil {
+		return err
+	}
+
+	// Store seed.
+	sm.state.RevealedSeeds[msg.SlotId] = seed
+
+	// Compute compliance for this validator.
+	validatorSlotCount := sm.addressToSlotCount[revealerAddr]
+	executorSlotCount := uint32(0)
+	requiredValidations := uint32(0)
+	completedValidations := uint32(0)
+
+	for infID, rec := range sm.state.Inferences {
+		// Only consider finished-like statuses.
+		switch rec.Status {
+		case types.StatusFinished, types.StatusChallenged, types.StatusValidated, types.StatusInvalidated:
+		default:
+			continue
+		}
+
+		// Skip if executor is the revealer.
+		executorAddr := sm.slotToAddress[rec.ExecutorSlot]
+		if executorAddr == revealerAddr {
+			continue
+		}
+
+		executorSlotCount = sm.addressToSlotCount[executorAddr]
+
+		if ShouldValidate(seed, infID, validatorSlotCount, executorSlotCount, sm.totalSlots, sm.state.Config.ValidationRate) {
+			requiredValidations++
+			// Check if this validator actually validated this inference.
+			if rec.ValidatorSlot != 0 || rec.Status == types.StatusChallenged || rec.Status == types.StatusValidated || rec.Status == types.StatusInvalidated {
+				validatorAddr := sm.slotToAddress[rec.ValidatorSlot]
+				if validatorAddr == revealerAddr {
+					completedValidations++
+				}
+			}
+		}
+	}
+
+	// Write compliance to all HostStats entries owned by this address.
+	for slot, addr := range sm.slotToAddress {
+		if addr == revealerAddr {
+			if hs, ok := sm.state.HostStats[slot]; ok {
+				hs.RequiredValidations = requiredValidations
+				hs.CompletedValidations = completedValidations
+			}
+		}
+	}
+
 	return nil
 }
 

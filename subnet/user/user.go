@@ -284,14 +284,20 @@ func (s *Session) SendInference(ctx context.Context, params InferenceParams) (*I
 	return s.SendPrepared(ctx, p)
 }
 
-// Finalize completes the round in two single-pass phases.
+// Finalize completes the round in three phases.
 //
-// Phase A: one diff per host. The first diff (i=0) carries MsgFinalizeRound
-// plus any pending txs. Each subsequent diff carries txs returned by the
-// previous host's response.
+// Phase A (N iterations): The first diff carries MsgFinalizeRound plus any
+// pending txs. Each subsequent diff carries txs returned by the previous
+// host's response. Hosts see Finalizing for the first time and produce
+// MsgRevealSeed in their mempool.
 //
-// Phase B: one empty diff per host. Propagates complete state via catch-up
-// and collects signatures from every host.
+// Phase A+1 (1 iteration): Drains the last host's MsgRevealSeed that
+// remained in pendingTxs after Phase A. This is the final nonce that
+// carries any txs. After this, state is frozen.
+//
+// Phase B (N iterations): Pure propagation + signature collection. Empty
+// diffs only. Sends catch-up diffs so every host reaches the final state
+// and returns a signature.
 func (s *Session) Finalize(ctx context.Context) error {
 	n := len(s.group)
 
@@ -301,6 +307,7 @@ func (s *Session) Finalize(ctx context.Context) error {
 		nonce := s.nonce + 1
 		hostIdx := int(nonce % uint64(n))
 
+		s.filterPendingTxs()
 		txs := make([]*types.SubnetTx, len(s.pendingTxs))
 		copy(txs, s.pendingTxs)
 		if i == 0 {
@@ -338,7 +345,47 @@ func (s *Session) Finalize(ctx context.Context) error {
 		s.mu.Unlock()
 	}
 
+	// Phase A+1: drain the last host's reveal sitting in pendingTxs.
+	{
+		s.mu.Lock()
+		nonce := s.nonce + 1
+		hostIdx := int(nonce % uint64(n))
+
+		s.filterPendingTxs()
+		txs := make([]*types.SubnetTx, len(s.pendingTxs))
+		copy(txs, s.pendingTxs)
+
+		postStateRoot, err := s.sm.ApplyLocal(nonce, txs)
+		if err != nil {
+			s.mu.Unlock()
+			return fmt.Errorf("local apply: %w", err)
+		}
+		diff, err := s.signDiff(nonce, txs, postStateRoot)
+		if err != nil {
+			s.mu.Unlock()
+			return err
+		}
+		s.diffs = append(s.diffs, diff)
+		s.nonce = nonce
+		s.clearPendingTxs()
+		catchUp := s.diffsForHost(hostIdx)
+		s.mu.Unlock()
+
+		resp, err := s.clients[hostIdx].Send(ctx, host.HostRequest{Diffs: catchUp, Nonce: nonce})
+		if err != nil {
+			return fmt.Errorf("send to host %d: %w", hostIdx, err)
+		}
+
+		s.mu.Lock()
+		if err := s.processResponse(hostIdx, resp); err != nil {
+			s.mu.Unlock()
+			return fmt.Errorf("process response from host %d: %w", hostIdx, err)
+		}
+		s.mu.Unlock()
+	}
+
 	// Phase B: propagate complete state, collect signatures.
+	// No txs -- state is frozen after Phase A+1.
 	for i := 0; i < n; i++ {
 		s.mu.Lock()
 		nonce := s.nonce + 1
@@ -425,6 +472,38 @@ func (s *Session) addPendingTx(tx *types.SubnetTx) {
 func (s *Session) clearPendingTxs() {
 	s.pendingTxs = nil
 	clear(s.pendingTxKeys)
+}
+
+// filterPendingTxs removes txs that would be rejected by the state machine.
+// Currently: drops MsgRevealSeed for addresses that already revealed.
+func (s *Session) filterPendingTxs() {
+	st := s.sm.SnapshotState()
+	if len(st.RevealedSeeds) == 0 {
+		return
+	}
+
+	// Build set of addresses that already revealed.
+	revealed := make(map[string]bool, len(st.RevealedSeeds))
+	for slot := range st.RevealedSeeds {
+		revealed[s.sm.SlotAddress(slot)] = true
+	}
+
+	filtered := s.pendingTxs[:0]
+	for _, tx := range s.pendingTxs {
+		if rs := tx.GetRevealSeed(); rs != nil {
+			addr := s.sm.SlotAddress(rs.SlotId)
+			if revealed[addr] {
+				// Drop: already revealed.
+				key := subnetTxKey(tx)
+				if key != "" {
+					delete(s.pendingTxKeys, key)
+				}
+				continue
+			}
+		}
+		filtered = append(filtered, tx)
+	}
+	s.pendingTxs = filtered
 }
 
 func (s *Session) Signatures() map[uint64]map[uint32][]byte {

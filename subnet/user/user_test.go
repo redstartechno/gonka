@@ -261,10 +261,10 @@ func TestUser_Finalize_DiffCount(t *testing.T) {
 	err := session.Finalize(ctx)
 	require.NoError(t, err)
 
-	// Finalize adds N diffs (Phase A) + N diffs (Phase B) = 2*N.
-	expected := preFinalize + 2*numHosts
+	// Finalize adds N (Phase A) + 1 (drain) + N (Phase B) = 2*N + 1.
+	expected := preFinalize + 2*numHosts + 1
 	require.Equal(t, expected, len(session.Diffs()),
-		"total diffs = pre-finalize(%d) + 2*N(%d)", preFinalize, 2*numHosts)
+		"total diffs = pre-finalize(%d) + 2*N+1(%d)", preFinalize, 2*numHosts+1)
 }
 
 func TestUser_PendingTxDedup(t *testing.T) {

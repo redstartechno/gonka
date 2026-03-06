@@ -204,9 +204,12 @@ func (h *Host) HandleRequest(ctx context.Context, req HostRequest) (*HostRespons
 		return nil, err
 	}
 
+	// (d) Produce MsgRevealSeed if finalizing and not already revealed.
+	h.maybeRevealSeed()
+
 	h.mu.Unlock()
 
-	// (d) Execute inference outside mutex.
+	// (e) Execute inference outside mutex.
 	if job != nil {
 		h.executeAsync(ctx, job)
 	}
@@ -400,6 +403,58 @@ func (h *Host) executeAsync(ctx context.Context, job *executeJob) {
 			FinishInference: finishMsg,
 		}},
 		ProposedAt: job.diffNonce,
+	})
+}
+
+// maybeRevealSeed produces a MsgRevealSeed if the session is finalizing and
+// this host's address has not yet revealed. Caller must hold h.mu.
+func (h *Host) maybeRevealSeed() {
+	if !h.sm.IsFinalizing() {
+		return
+	}
+
+	// Check if we already have a reveal in the mempool.
+	for _, tx := range h.mempool.Txs() {
+		if rs := tx.GetRevealSeed(); rs != nil {
+			if h.slotIDs[rs.SlotId] {
+				return
+			}
+		}
+	}
+
+	// Pick first owned slot as representative.
+	var repSlot uint32
+	for slot := range h.slotIDs {
+		repSlot = slot
+		break
+	}
+
+	// Sign escrowID bytes to derive the seed signature.
+	seedSig, err := h.signer.Sign([]byte(h.escrowID))
+	if err != nil {
+		logging.Error("sign seed failed", "subsystem", "host", "error", err)
+		return
+	}
+
+	msg := &types.MsgRevealSeed{
+		SlotId:    repSlot,
+		Signature: seedSig,
+	}
+	msgData, err := proto.Marshal(msg)
+	if err != nil {
+		logging.Error("marshal reveal seed failed", "subsystem", "host", "error", err)
+		return
+	}
+	proposerSig, err := h.signer.Sign(msgData)
+	if err != nil {
+		logging.Error("sign reveal seed failed", "subsystem", "host", "error", err)
+		return
+	}
+	msg.ProposerSig = proposerSig
+
+	h.mempool.Add(MempoolEntry{
+		Tx:         &types.SubnetTx{Tx: &types.SubnetTx_RevealSeed{RevealSeed: msg}},
+		ProposedAt: h.sm.LatestNonce(),
 	})
 }
 

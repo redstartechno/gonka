@@ -50,6 +50,7 @@ type SessionConfig struct {
 	ExecutionTimeout int64  // seconds before reason=execution timeout
 	TokenPrice       uint64 // price per unit (flat per session)
 	VoteThreshold    uint32 // minimum accept votes for timeout (total_slots / 2)
+	ValidationRate   uint32 // basis points (10000 = 100%, 1000 = 10%)
 }
 
 // EscrowState is the full state of a subnet session.
@@ -57,11 +58,12 @@ type EscrowState struct {
 	EscrowID    string
 	Config      SessionConfig
 	Group       []SlotAssignment
-	Balance     uint64
-	Finalizing  bool
-	Inferences  map[uint64]*InferenceRecord
-	HostStats   map[uint32]*HostStats
-	LatestNonce uint64
+	Balance       uint64
+	Finalizing    bool
+	Inferences    map[uint64]*InferenceRecord
+	HostStats     map[uint32]*HostStats
+	RevealedSeeds map[uint32]int64
+	LatestNonce   uint64
 }
 
 // Diff is the protocol primitive: what the user creates and signs.

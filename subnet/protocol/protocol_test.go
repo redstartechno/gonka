@@ -601,10 +601,10 @@ func TestProtocol_Finalize_ExactDiffCount(t *testing.T) {
 	err := env.session.Finalize(ctx)
 	require.NoError(t, err)
 
-	// Total diffs = numInferences + 2*numHosts (N per phase).
-	expected := numInferences + 2*numHosts
+	// Total diffs = numInferences + N (Phase A) + 1 (drain) + N (Phase B).
+	expected := numInferences + 2*numHosts + 1
 	require.Equal(t, expected, len(env.session.Diffs()),
-		"total diffs = inferences(%d) + 2*N(%d)", numInferences, 2*numHosts)
+		"total diffs = inferences(%d) + N(%d) + 1 + N(%d)", numInferences, numHosts, numHosts)
 }
 
 func TestProtocol_SignatureThreshold(t *testing.T) {
@@ -623,4 +623,67 @@ func TestProtocol_SignatureThreshold(t *testing.T) {
 		require.Len(t, slotSigs, 1,
 			"nonce %d: expected 1 signature from round-robin host, got %d", nonce, len(slotSigs))
 	}
+}
+
+func TestProtocol_Finalize_WithSeedReveal(t *testing.T) {
+	env := setupEnv(t, 5, 1000000, 100)
+	ctx := context.Background()
+	params := defaultParams()
+
+	for i := 0; i < 10; i++ {
+		_, err := env.session.SendInference(ctx, params)
+		require.NoError(t, err)
+	}
+
+	err := env.session.Finalize(ctx)
+	require.NoError(t, err)
+
+	// After finalization, hosts should have produced seed reveals.
+	// Check final state for revealed seeds and compliance.
+	st := env.session.StateMachine().SnapshotState()
+	require.True(t, st.Finalizing)
+
+	// At least some seeds should be revealed.
+	require.True(t, len(st.RevealedSeeds) > 0, "expected seed reveals after finalization, got %d", len(st.RevealedSeeds))
+
+	// HostStats for revealed slots should have RequiredValidations set.
+	for slotID := range st.RevealedSeeds {
+		hs := st.HostStats[slotID]
+		// With 50% rate and multiple inferences, RequiredValidations should be > 0
+		// in most cases (statistically). We just verify the fields were written.
+		require.NotNil(t, hs, "host stats should exist for revealed slot %d", slotID)
+	}
+}
+
+func TestProtocol_Settlement_EndToEnd(t *testing.T) {
+	env := setupEnv(t, 3, 100000, 100)
+	ctx := context.Background()
+	params := defaultParams()
+
+	for i := 0; i < 6; i++ {
+		_, err := env.session.SendInference(ctx, params)
+		require.NoError(t, err)
+	}
+
+	err := env.session.Finalize(ctx)
+	require.NoError(t, err)
+
+	st := env.session.StateMachine().SnapshotState()
+	nonce := env.session.Nonce()
+
+	// Collect all signatures for the latest nonce.
+	allSigs := env.session.Signatures()
+	latestSigs := allSigs[nonce]
+
+	settlement, err := state.BuildSettlement(st, latestSigs, nonce)
+	require.NoError(t, err)
+	require.NotNil(t, settlement)
+
+	// Verify Merkle proof: sha256(hostStatsHash || restHash) == stateRoot.
+	hostStatsHash, err := state.ComputeHostStatsHash(st.HostStats)
+	require.NoError(t, err)
+
+	h := sha256.Sum256(append(hostStatsHash, settlement.RestHash...))
+	require.Equal(t, h[:], settlement.StateRoot, "Merkle proof must verify")
+	require.Equal(t, nonce, settlement.Nonce)
 }

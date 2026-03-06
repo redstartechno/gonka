@@ -21,6 +21,15 @@ func MustGenerateKey(t *testing.T) *signing.Secp256k1Signer {
 	return s
 }
 
+// MustSignerFromHex creates a signer from a fixed hex private key.
+// Use for reproducible tests where the derived seed must be deterministic.
+func MustSignerFromHex(t *testing.T, hexKey string) *signing.Secp256k1Signer {
+	t.Helper()
+	s, err := signing.SignerFromHex(hexKey)
+	require.NoError(t, err)
+	return s
+}
+
 func MakeGroup(signers []*signing.Secp256k1Signer) []types.SlotAssignment {
 	group := make([]types.SlotAssignment, len(signers))
 	for i, s := range signers {
@@ -34,13 +43,15 @@ func MakeGroup(signers []*signing.Secp256k1Signer) []types.SlotAssignment {
 	return group
 }
 
-// DefaultConfig returns a SessionConfig with VoteThreshold = numHosts/2.
+// DefaultConfig returns a SessionConfig with VoteThreshold = numHosts/2
+// and ValidationRate = 5000 (50%).
 func DefaultConfig(numHosts int) types.SessionConfig {
 	return types.SessionConfig{
 		RefusalTimeout:   60,
 		ExecutionTimeout: 1200,
 		TokenPrice:       1,
 		VoteThreshold:    uint32(numHosts) / 2,
+		ValidationRate:   5000,
 	}
 }
 
@@ -127,6 +138,24 @@ func MakeMultiSlotGroup(signers []*signing.Secp256k1Signer, slotsPerSigner []int
 		}
 	}
 	return group
+}
+
+// SignRevealSeed creates a signed MsgRevealSeed. The seed signature is produced
+// by signing the escrowID bytes with the signer's key.
+func SignRevealSeed(t *testing.T, signer *signing.Secp256k1Signer, escrowID string, slotID uint32) *types.MsgRevealSeed {
+	t.Helper()
+	seedSig, err := signer.Sign([]byte(escrowID))
+	require.NoError(t, err)
+	msg := &types.MsgRevealSeed{
+		SlotId:    slotID,
+		Signature: seedSig,
+	}
+	data, err := proto.Marshal(msg)
+	require.NoError(t, err)
+	proposerSig, err := signer.Sign(data)
+	require.NoError(t, err)
+	msg.ProposerSig = proposerSig
+	return msg
 }
 
 func StartTx(inferenceID uint64) *types.SubnetTx {
