@@ -1234,7 +1234,9 @@ func TestApplyDiff_Validation_MultipleValidators(t *testing.T) {
 	require.NoError(t, err)
 	rec := sm.SnapshotState().Inferences[1]
 	require.Equal(t, types.StatusChallenged, rec.Status)
-	require.Equal(t, uint64(1<<0), rec.ValidatedBy, "first validator bit must be set")
+	var expectedBitmap1 types.Bitmap128
+	expectedBitmap1.Set(0)
+	require.Equal(t, expectedBitmap1, rec.ValidatedBy, "first validator bit must be set")
 
 	// Second validation from different host -> bitmap updated.
 	valMsg2 := &types.MsgValidation{InferenceId: 1, ValidatorSlot: 2, Valid: true}
@@ -1245,7 +1247,10 @@ func TestApplyDiff_Validation_MultipleValidators(t *testing.T) {
 	require.NoError(t, err)
 
 	rec = sm.SnapshotState().Inferences[1]
-	require.Equal(t, uint64(1<<0|1<<2), rec.ValidatedBy, "both validator bits must be set")
+	var expectedBitmap2 types.Bitmap128
+	expectedBitmap2.Set(0)
+	expectedBitmap2.Set(2)
+	require.Equal(t, expectedBitmap2, rec.ValidatedBy, "both validator bits must be set")
 }
 
 func TestApplyDiff_Validation_DuplicateAddress(t *testing.T) {

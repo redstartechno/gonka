@@ -124,11 +124,7 @@ func measureStateSize(st types.EscrowState) (hostStatsMB, inferencesMB, totalMB 
 	infEntries := make([]*types.InferenceRecordProto, 0, len(ids))
 	for _, id := range ids {
 		r := st.Inferences[id]
-		var votedSlots []uint32
-		for slot := range r.VotedSlots {
-			votedSlots = append(votedSlots, slot)
-		}
-		slices.SortFunc(votedSlots, func(a, b uint32) int { return cmp.Compare(a, b) })
+		votedSlots := r.VotedSlots.Bytes()
 		infEntries = append(infEntries, &types.InferenceRecordProto{
 			InferenceId:    id,
 			Status:         uint32(r.Status),
@@ -149,7 +145,7 @@ func measureStateSize(st types.EscrowState) (hostStatsMB, inferencesMB, totalMB 
 			VotedSlots:     votedSlots,
 			ValidatorSlot:  r.ValidatorSlot,
 			ValidatorValid: r.ValidatorValid,
-			ValidatedBy:    r.ValidatedBy,
+			ValidatedBy:    r.ValidatedBy.Bytes(),
 		})
 	}
 	infData, _ := proto.Marshal(&types.InferencesMapProto{Entries: infEntries})

@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 
+	"subnet"
 	"subnet/internal/testutil"
 	"subnet/signing"
 	"subnet/state"
@@ -657,4 +658,126 @@ func TestHost_ExecuteFailure_ReturnsReceiptNoMempool(t *testing.T) {
 	require.NoError(t, err, "should not return error on engine failure")
 	require.NotNil(t, resp.Receipt, "receipt should still be present")
 	require.Empty(t, resp.Mempool, "mempool should be empty (no MsgFinishInference)")
+}
+
+// countingEngine wraps stub engine and counts Execute calls.
+type countingEngine struct {
+	inner *stub.InferenceEngine
+	calls int
+}
+
+func (e *countingEngine) Execute(ctx context.Context, req subnet.ExecuteRequest) (*subnet.ExecuteResult, error) {
+	e.calls++
+	return e.inner.Execute(ctx, req)
+}
+
+func TestHost_SignReceipt_NoDuplicateExecution(t *testing.T) {
+	hosts := []*signing.Secp256k1Signer{testutil.MustGenerateKey(t), testutil.MustGenerateKey(t), testutil.MustGenerateKey(t)}
+	user := testutil.MustGenerateKey(t)
+	group := testutil.MakeGroup(hosts)
+	config := testutil.DefaultConfig(len(hosts))
+	verifier := signing.NewSecp256k1Verifier()
+	sm := state.NewStateMachine("escrow-1", config, group, 10000, user.Address(), verifier)
+	engine := &countingEngine{inner: stub.NewInferenceEngine()}
+	h, err := NewHost(sm, hosts[1], engine, "escrow-1", group, nil, WithGrace(10))
+	require.NoError(t, err)
+
+	diff := testutil.SignDiff(t, user, "escrow-1", 1, []*types.SubnetTx{testutil.StartTx(1)})
+
+	// Simulate in-flight execution by pre-marking inference 1 as executing.
+	h.mu.Lock()
+	h.executing[1] = struct{}{}
+	h.mu.Unlock()
+
+	// Request returns receipt (proves executor alive) but skips execution.
+	resp, err := h.HandleRequest(context.Background(), HostRequest{
+		Diffs: []types.Diff{diff}, Nonce: 1, Payload: defaultPayload(),
+	})
+	require.NoError(t, err)
+	require.NotNil(t, resp.Receipt, "should return receipt to prove executor alive")
+	require.Equal(t, 0, engine.calls, "engine should not be called (already executing)")
+}
+
+func TestHost_ExecutingCleanup(t *testing.T) {
+	hosts := []*signing.Secp256k1Signer{testutil.MustGenerateKey(t), testutil.MustGenerateKey(t), testutil.MustGenerateKey(t)}
+	user := testutil.MustGenerateKey(t)
+	group := testutil.MakeGroup(hosts)
+	config := testutil.DefaultConfig(len(hosts))
+	verifier := signing.NewSecp256k1Verifier()
+	sm := state.NewStateMachine("escrow-1", config, group, 10000, user.Address(), verifier)
+	engine := &countingEngine{inner: stub.NewInferenceEngine()}
+	h, err := NewHost(sm, hosts[1], engine, "escrow-1", group, nil, WithGrace(10))
+	require.NoError(t, err)
+
+	diff := testutil.SignDiff(t, user, "escrow-1", 1, []*types.SubnetTx{testutil.StartTx(1)})
+	_, err = h.HandleRequest(context.Background(), HostRequest{
+		Diffs: []types.Diff{diff}, Nonce: 1, Payload: defaultPayload(),
+	})
+	require.NoError(t, err)
+
+	// After execute completes, executing map should be clean.
+	h.mu.Lock()
+	_, inMap := h.executing[1]
+	h.mu.Unlock()
+	require.False(t, inMap, "inference ID should be removed from executing after completion")
+}
+
+func TestHost_ChallengeReceipt_AlreadyExecuting(t *testing.T) {
+	hosts := []*signing.Secp256k1Signer{testutil.MustGenerateKey(t), testutil.MustGenerateKey(t), testutil.MustGenerateKey(t)}
+	user := testutil.MustGenerateKey(t)
+	group := testutil.MakeGroup(hosts)
+	config := testutil.DefaultConfig(len(hosts))
+	verifier := signing.NewSecp256k1Verifier()
+	sm := state.NewStateMachine("escrow-1", config, group, 10000, user.Address(), verifier)
+	engine := &countingEngine{inner: stub.NewInferenceEngine()}
+	h, err := NewHost(sm, hosts[1], engine, "escrow-1", group, nil, WithGrace(10))
+	require.NoError(t, err)
+
+	diff := testutil.SignDiff(t, user, "escrow-1", 1, []*types.SubnetTx{testutil.StartTx(1)})
+	// First: normal request triggers execution.
+	_, err = h.HandleRequest(context.Background(), HostRequest{
+		Diffs: []types.Diff{diff}, Nonce: 1, Payload: defaultPayload(),
+	})
+	require.NoError(t, err)
+
+	// Simulate: manually mark inference as executing (it already completed above,
+	// so we re-add it to test the guard).
+	h.mu.Lock()
+	h.executing[1] = struct{}{}
+	h.mu.Unlock()
+
+	// ChallengeReceipt returns receipt (proves executor is alive) but skips execution.
+	receipt, _, err := h.ChallengeReceipt(context.Background(), 1, defaultPayload(), []types.Diff{diff})
+	require.NoError(t, err)
+	require.NotNil(t, receipt, "should return receipt to prove executor is alive")
+	// Engine was called once from HandleRequest, not again from ChallengeReceipt.
+	require.Equal(t, 1, engine.calls, "engine should not be called again")
+}
+
+func TestHost_ChallengeReceipt_AlreadyFinished(t *testing.T) {
+	hosts := []*signing.Secp256k1Signer{testutil.MustGenerateKey(t), testutil.MustGenerateKey(t), testutil.MustGenerateKey(t)}
+	user := testutil.MustGenerateKey(t)
+	group := testutil.MakeGroup(hosts)
+	config := testutil.DefaultConfig(len(hosts))
+	verifier := signing.NewSecp256k1Verifier()
+	sm := state.NewStateMachine("escrow-1", config, group, 10000, user.Address(), verifier)
+	engine := &countingEngine{inner: stub.NewInferenceEngine()}
+	h, err := NewHost(sm, hosts[1], engine, "escrow-1", group, nil, WithGrace(10))
+	require.NoError(t, err)
+
+	diff := testutil.SignDiff(t, user, "escrow-1", 1, []*types.SubnetTx{testutil.StartTx(1)})
+
+	// Normal request: produces receipt + finish in mempool.
+	resp, err := h.HandleRequest(context.Background(), HostRequest{
+		Diffs: []types.Diff{diff}, Nonce: 1, Payload: defaultPayload(),
+	})
+	require.NoError(t, err)
+	require.NotNil(t, resp.Receipt)
+	require.Len(t, resp.Mempool, 1, "should have MsgFinishInference in mempool")
+
+	// ChallengeReceipt returns receipt (proves executor is alive) but skips execution.
+	receipt, _, err := h.ChallengeReceipt(context.Background(), 1, defaultPayload(), []types.Diff{diff})
+	require.NoError(t, err)
+	require.NotNil(t, receipt, "should return receipt even when finish is in mempool")
+	require.Equal(t, 1, engine.calls, "engine should not be called again")
 }

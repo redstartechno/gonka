@@ -55,10 +55,13 @@ func VerifyRefusedTimeout(
 		return false, nil
 	}
 
-	// Fast path: check local mempool for MsgConfirmStart.
+	// Fast path: check local mempool for MsgConfirmStart or MsgFinishInference.
 	for _, tx := range localMempool {
 		if cs := tx.GetConfirmStart(); cs != nil && cs.InferenceId == inferenceID {
 			return false, nil // executor already confirmed
+		}
+		if fi := tx.GetFinishInference(); fi != nil && fi.InferenceId == inferenceID {
+			return false, nil // executor already finished
 		}
 	}
 

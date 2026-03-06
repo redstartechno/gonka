@@ -250,6 +250,17 @@ func TestVerifyExecution_NilExecutorClient(t *testing.T) {
 	require.True(t, accept, "should accept: no executor client (unreachable)")
 }
 
+func TestVerifyRefused_FinishInMempool(t *testing.T) {
+	st := stateWithPendingFull(1, 1)
+	mempool := []*types.SubnetTx{
+		{Tx: &types.SubnetTx_FinishInference{FinishInference: &types.MsgFinishInference{InferenceId: 1}}},
+	}
+
+	accept, err := VerifyRefusedTimeout(context.Background(), st, 1, testPayload(), nil, mempool, nil, st.Config, deadlinePassedRefused(st, 1))
+	require.NoError(t, err)
+	require.False(t, accept, "should reject: MsgFinishInference in local mempool")
+}
+
 func TestVerifyExecution_DeadlineNotPassed(t *testing.T) {
 	st := stateWithStarted(1, 1)
 	tooEarly := st.Inferences[1].StartedAt + st.Config.ExecutionTimeout - 1

@@ -107,13 +107,6 @@ func computeInferencesHash(inferences map[uint64]*types.InferenceRecord) ([]byte
 	for _, id := range ids {
 		r := inferences[id]
 
-		// Sort VotedSlots for deterministic hashing.
-		var votedSlots []uint32
-		for slot := range r.VotedSlots {
-			votedSlots = append(votedSlots, slot)
-		}
-		slices.SortFunc(votedSlots, func(a, b uint32) int { return cmp.Compare(a, b) })
-
 		entries = append(entries, &types.InferenceRecordProto{
 			InferenceId:    id,
 			Status:         uint32(r.Status),
@@ -131,10 +124,10 @@ func computeInferencesHash(inferences map[uint64]*types.InferenceRecord) ([]byte
 			ConfirmedAt:    r.ConfirmedAt,
 			VotesValid:     r.VotesValid,
 			VotesInvalid:   r.VotesInvalid,
-			VotedSlots:     votedSlots,
+			VotedSlots:     r.VotedSlots.Bytes(),
 			ValidatorSlot:  r.ValidatorSlot,
 			ValidatorValid: r.ValidatorValid,
-			ValidatedBy:    r.ValidatedBy,
+			ValidatedBy:    r.ValidatedBy.Bytes(),
 		})
 	}
 

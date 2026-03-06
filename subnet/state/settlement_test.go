@@ -15,8 +15,8 @@ func TestBuildSettlement_MerkleProof(t *testing.T) {
 		1: {Cost: 200, Missed: 1},
 	}
 	inferences := map[uint64]*types.InferenceRecord{
-		1: {Status: types.StatusFinished, ExecutorSlot: 0, ActualCost: 100, VotedSlots: map[uint32]bool{}},
-		2: {Status: types.StatusFinished, ExecutorSlot: 1, ActualCost: 200, VotedSlots: map[uint32]bool{}},
+		1: {Status: types.StatusFinished, ExecutorSlot: 0, ActualCost: 100},
+		2: {Status: types.StatusFinished, ExecutorSlot: 1, ActualCost: 200},
 	}
 
 	st := types.EscrowState{

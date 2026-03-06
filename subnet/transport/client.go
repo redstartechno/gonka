@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"sync"
 	"time"
 
 	json "github.com/goccy/go-json"
@@ -16,6 +17,21 @@ import (
 	"subnet/signing"
 	"subnet/types"
 )
+
+var sharedTransports sync.Map // baseURL -> *http.Transport
+
+func getTransport(baseURL string) *http.Transport {
+	if t, ok := sharedTransports.Load(baseURL); ok {
+		return t.(*http.Transport)
+	}
+	t := &http.Transport{
+		MaxIdleConnsPerHost: 4,
+		IdleConnTimeout:     120 * time.Second,
+		TLSHandshakeTimeout: 10 * time.Second,
+	}
+	actual, _ := sharedTransports.LoadOrStore(baseURL, t)
+	return actual.(*http.Transport)
+}
 
 // ClientConfig holds per-endpoint timeout settings.
 type ClientConfig struct {
@@ -55,11 +71,7 @@ func NewHTTPClient(baseURL, escrowID string, signer signing.Signer, cfgs ...Clie
 		escrowID: escrowID,
 		signer:   signer,
 		http: &http.Client{
-			Transport: &http.Transport{
-				MaxIdleConnsPerHost: 4,
-				IdleConnTimeout:     120 * time.Second,
-				TLSHandshakeTimeout: 10 * time.Second,
-			},
+			Transport: getTransport(baseURL),
 		},
 		config: cfg,
 	}

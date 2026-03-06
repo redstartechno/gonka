@@ -577,6 +577,8 @@ Not in Phase 4:
 
 Tests: full session with seed reveal, finalizing rounds, compliance verification, settlement data construction. Both in-process and multi-node.
 
+Max group size is 128 slots. Enforced by Bitmap128 in ValidatedBy and VotedSlots. Bitmap operations are no-op/false for bit >= 128, preventing out-of-bounds corruption.
+
 Testable deliverable: session ends with correct settlement payload. Seed reveal produces valid ShouldValidate expectations. Compliance numbers match. Settlement Merkle proof is verifiable.
 
 

@@ -226,10 +226,6 @@ func (sm *StateMachine) SnapshotState() types.EscrowState {
 			cp.ResponseHash = make([]byte, len(v.ResponseHash))
 			copy(cp.ResponseHash, v.ResponseHash)
 		}
-		if v.VotedSlots != nil {
-			cp.VotedSlots = make(map[uint32]bool, len(v.VotedSlots))
-			maps.Copy(cp.VotedSlots, v.VotedSlots)
-		}
 		s.Inferences[k] = &cp
 	}
 
@@ -249,10 +245,6 @@ func (sm *StateMachine) snapshotMutable() mutableSnapshot {
 	infCopy := make(map[uint64]*types.InferenceRecord, len(sm.state.Inferences))
 	for k, v := range sm.state.Inferences {
 		cp := *v
-		if v.VotedSlots != nil {
-			cp.VotedSlots = make(map[uint32]bool, len(v.VotedSlots))
-			maps.Copy(cp.VotedSlots, v.VotedSlots)
-		}
 		if v.PromptHash != nil {
 			cp.PromptHash = make([]byte, len(v.PromptHash))
 			copy(cp.PromptHash, v.PromptHash)
@@ -355,7 +347,6 @@ func (sm *StateMachine) applyStartInference(msg *types.MsgStartInference) error 
 		MaxTokens:    msg.MaxTokens,
 		ReservedCost: reservedCost,
 		StartedAt:    msg.StartedAt,
-		VotedSlots:   make(map[uint32]bool),
 	}
 
 	sm.state.Inferences[msg.InferenceId] = rec
@@ -476,7 +467,7 @@ func (sm *StateMachine) applyValidation(msg *types.MsgValidation) error {
 		// Dedup by address: check if any slot with same address already has bit set.
 		validatorAddr := sm.slotToAddress[msg.ValidatorSlot]
 		for _, slot := range slices.Sorted(maps.Keys(sm.slotToAddress)) {
-			if sm.slotToAddress[slot] == validatorAddr && (rec.ValidatedBy>>slot)&1 == 1 {
+			if sm.slotToAddress[slot] == validatorAddr && rec.ValidatedBy.IsSet(slot) {
 				return fmt.Errorf("%w: address %s already validated via slot %d", types.ErrDuplicateValidation, validatorAddr, slot)
 			}
 		}
@@ -486,7 +477,7 @@ func (sm *StateMachine) applyValidation(msg *types.MsgValidation) error {
 		if err := sm.verifyProposerSig(clonedV, msg.ProposerSig, sm.slotToAddress[msg.ValidatorSlot]); err != nil {
 			return err
 		}
-		rec.ValidatedBy |= 1 << msg.ValidatorSlot
+		rec.ValidatedBy.Set(msg.ValidatorSlot)
 		return nil
 	}
 
@@ -513,7 +504,7 @@ func (sm *StateMachine) applyValidation(msg *types.MsgValidation) error {
 	rec.Status = types.StatusChallenged
 	rec.ValidatorSlot = msg.ValidatorSlot
 	rec.ValidatorValid = msg.Valid
-	rec.ValidatedBy |= 1 << msg.ValidatorSlot
+	rec.ValidatedBy.Set(msg.ValidatorSlot)
 
 	return nil
 }
@@ -538,8 +529,8 @@ func (sm *StateMachine) applyValidationVote(msg *types.MsgValidationVote) error 
 
 	// Dedup by address: a multi-slot validator votes once for all its slots.
 	voterAddr := sm.slotToAddress[msg.VoterSlot]
-	for _, slot := range slices.Sorted(maps.Keys(rec.VotedSlots)) {
-		if rec.VotedSlots[slot] && sm.slotToAddress[slot] == voterAddr {
+	for _, slot := range slices.Sorted(maps.Keys(sm.slotToAddress)) {
+		if rec.VotedSlots.IsSet(slot) && sm.slotToAddress[slot] == voterAddr {
 			return fmt.Errorf("%w: slot %d (address %s already voted via slot %d)", types.ErrDuplicateVote, msg.VoterSlot, voterAddr, slot)
 		}
 	}
@@ -555,7 +546,7 @@ func (sm *StateMachine) applyValidationVote(msg *types.MsgValidationVote) error 
 	weight := sm.addressToSlotCount[voterAddr]
 	for _, slot := range slices.Sorted(maps.Keys(sm.slotToAddress)) {
 		if sm.slotToAddress[slot] == voterAddr {
-			rec.VotedSlots[slot] = true
+			rec.VotedSlots.Set(slot)
 		}
 	}
 	if msg.VoteValid {
@@ -730,7 +721,7 @@ func (sm *StateMachine) applyRevealSeed(msg *types.MsgRevealSeed) error {
 			// NOTE: if MsgFinishInference arrives after seed reveal, the inference is not counted in compliance.
 			if rec.Status == types.StatusChallenged || rec.Status == types.StatusValidated || rec.Status == types.StatusInvalidated {
 				for _, vSlot := range slices.Sorted(maps.Keys(sm.slotToAddress)) {
-					if sm.slotToAddress[vSlot] == revealerAddr && (rec.ValidatedBy>>vSlot)&1 == 1 {
+					if sm.slotToAddress[vSlot] == revealerAddr && rec.ValidatedBy.IsSet(vSlot) {
 						completedValidations++
 						break
 					}

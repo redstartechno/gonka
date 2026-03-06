@@ -72,6 +72,8 @@ type Host struct {
 	// Lookup maps built from group at construction time.
 	slotToAddr  map[uint32]string   // slotID -> validator address
 	addrToSlots map[string][]uint32 // address -> all slotIDs owned
+
+	executing map[uint64]struct{} // inference IDs with in-flight execution
 }
 
 func NewHost(
@@ -108,6 +110,7 @@ func NewHost(
 		checker:     checker,
 		slotToAddr:  slotToAddr,
 		addrToSlots: addrToSlots,
+		executing:   make(map[uint64]struct{}),
 	}
 	for _, opt := range opts {
 		opt(h)
@@ -348,6 +351,13 @@ func (h *Host) signReceipt(req HostRequest) ([]byte, int64, *executeJob, error) 
 			return nil, 0, nil, fmt.Errorf("sign executor receipt: %w", err)
 		}
 
+		// Dedup: return receipt (proves executor alive) but skip execution.
+		if _, dup := h.executing[start.InferenceId]; dup {
+			return sig, confirmedAt, nil, nil
+		}
+
+		h.executing[start.InferenceId] = struct{}{}
+
 		job := &executeJob{
 			inferenceID:  start.InferenceId,
 			model:        start.Model,
@@ -376,6 +386,9 @@ func (h *Host) executeAsync(ctx context.Context, job *executeJob) {
 	})
 	if err != nil {
 		logging.Error("execute failed", "subsystem", "host", "inference_id", job.inferenceID, "error", err)
+		h.mu.Lock()
+		delete(h.executing, job.inferenceID)
+		h.mu.Unlock()
 		return
 	}
 
@@ -404,6 +417,10 @@ func (h *Host) executeAsync(ctx context.Context, job *executeJob) {
 		}},
 		ProposedAt: job.diffNonce,
 	})
+
+	h.mu.Lock()
+	delete(h.executing, job.inferenceID)
+	h.mu.Unlock()
 }
 
 // maybeRevealSeed produces a MsgRevealSeed if the session is finalizing and
@@ -582,9 +599,17 @@ func (h *Host) challengeReceiptLocked(inferenceID uint64, payload *InferencePayl
 		}
 	}
 
-	for _, tx := range h.mempool.Txs() {
-		if cs := tx.GetConfirmStart(); cs != nil && cs.InferenceId == inferenceID {
-			return cs.ExecutorSig, cs.ConfirmedAt, nil, nil
+	// Check if already executing or already finished (MsgFinishInference in mempool).
+	alreadyRunning := false
+	if _, dup := h.executing[inferenceID]; dup {
+		alreadyRunning = true
+	}
+	if !alreadyRunning {
+		for _, tx := range h.mempool.Txs() {
+			if fi := tx.GetFinishInference(); fi != nil && fi.InferenceId == inferenceID {
+				alreadyRunning = true
+				break
+			}
 		}
 	}
 
@@ -621,6 +646,13 @@ func (h *Host) challengeReceiptLocked(inferenceID uint64, payload *InferencePayl
 	if err != nil {
 		return nil, 0, nil, fmt.Errorf("sign executor receipt: %w", err)
 	}
+
+	// Return receipt (proves executor is alive) but skip execution if already running.
+	if alreadyRunning {
+		return sig, confirmedAt, nil, nil
+	}
+
+	h.executing[inferenceID] = struct{}{}
 
 	job := &executeJob{
 		inferenceID:  inferenceID,

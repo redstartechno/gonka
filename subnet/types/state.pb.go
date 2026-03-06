@@ -167,10 +167,10 @@ type InferenceRecordProto struct {
 	ConfirmedAt    int64                  `protobuf:"varint,19,opt,name=confirmed_at,json=confirmedAt,proto3" json:"confirmed_at,omitempty"`
 	VotesValid     uint32                 `protobuf:"varint,14,opt,name=votes_valid,json=votesValid,proto3" json:"votes_valid,omitempty"`
 	VotesInvalid   uint32                 `protobuf:"varint,15,opt,name=votes_invalid,json=votesInvalid,proto3" json:"votes_invalid,omitempty"`
-	VotedSlots     []uint32               `protobuf:"varint,16,rep,packed,name=voted_slots,json=votedSlots,proto3" json:"voted_slots,omitempty"`
+	VotedSlots     []byte                 `protobuf:"bytes,16,opt,name=voted_slots,json=votedSlots,proto3" json:"voted_slots,omitempty"`
 	ValidatorSlot  uint32                 `protobuf:"varint,17,opt,name=validator_slot,json=validatorSlot,proto3" json:"validator_slot,omitempty"`
 	ValidatorValid bool                   `protobuf:"varint,18,opt,name=validator_valid,json=validatorValid,proto3" json:"validator_valid,omitempty"`
-	ValidatedBy    uint64                 `protobuf:"varint,20,opt,name=validated_by,json=validatedBy,proto3" json:"validated_by,omitempty"`
+	ValidatedBy    []byte                 `protobuf:"bytes,20,opt,name=validated_by,json=validatedBy,proto3" json:"validated_by,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -317,7 +317,7 @@ func (x *InferenceRecordProto) GetVotesInvalid() uint32 {
 	return 0
 }
 
-func (x *InferenceRecordProto) GetVotedSlots() []uint32 {
+func (x *InferenceRecordProto) GetVotedSlots() []byte {
 	if x != nil {
 		return x.VotedSlots
 	}
@@ -338,11 +338,11 @@ func (x *InferenceRecordProto) GetValidatorValid() bool {
 	return false
 }
 
-func (x *InferenceRecordProto) GetValidatedBy() uint64 {
+func (x *InferenceRecordProto) GetValidatedBy() []byte {
 	if x != nil {
 		return x.ValidatedBy
 	}
-	return 0
+	return nil
 }
 
 type InferencesMapProto struct {
@@ -426,11 +426,11 @@ const file_subnet_v1_state_proto_rawDesc = "" +
 	"\vvotes_valid\x18\x0e \x01(\rR\n" +
 	"votesValid\x12#\n" +
 	"\rvotes_invalid\x18\x0f \x01(\rR\fvotesInvalid\x12\x1f\n" +
-	"\vvoted_slots\x18\x10 \x03(\rR\n" +
+	"\vvoted_slots\x18\x10 \x01(\fR\n" +
 	"votedSlots\x12%\n" +
 	"\x0evalidator_slot\x18\x11 \x01(\rR\rvalidatorSlot\x12'\n" +
 	"\x0fvalidator_valid\x18\x12 \x01(\bR\x0evalidatorValid\x12!\n" +
-	"\fvalidated_by\x18\x14 \x01(\x04R\vvalidatedBy\"O\n" +
+	"\fvalidated_by\x18\x14 \x01(\fR\vvalidatedBy\"O\n" +
 	"\x12InferencesMapProto\x129\n" +
 	"\aentries\x18\x01 \x03(\v2\x1f.subnet.v1.InferenceRecordProtoR\aentriesB\x0eZ\fsubnet/typesb\x06proto3"
 
