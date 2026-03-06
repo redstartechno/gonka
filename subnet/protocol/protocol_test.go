@@ -573,17 +573,12 @@ func TestProtocol_Finalize_SignaturesFromAllHosts(t *testing.T) {
 	err := env.session.Finalize(ctx)
 	require.NoError(t, err)
 
-	// All 5 hosts should have contributed at least one signature.
+	// All 5 hosts must sign at the final nonce (Phase B collects all signatures).
+	finalNonce := env.session.Nonce()
 	sigs := env.session.Signatures()
-	signedSlots := make(map[uint32]bool)
-	for _, slotSigs := range sigs {
-		for slotID := range slotSigs {
-			signedSlots[slotID] = true
-		}
-	}
-	for i := uint32(0); i < 5; i++ {
-		require.True(t, signedSlots[i], "slot %d should have signed at least once", i)
-	}
+	latestSigs, ok := sigs[finalNonce]
+	require.True(t, ok, "no signatures at final nonce %d", finalNonce)
+	require.Len(t, latestSigs, 5, "all 5 hosts should sign the final nonce")
 }
 
 func TestProtocol_Finalize_ExactDiffCount(t *testing.T) {
@@ -601,10 +596,10 @@ func TestProtocol_Finalize_ExactDiffCount(t *testing.T) {
 	err := env.session.Finalize(ctx)
 	require.NoError(t, err)
 
-	// Total diffs = numInferences + N (Phase A) + 1 (drain) + N (Phase B).
-	expected := numInferences + 2*numHosts + 1
+	// Total diffs = numInferences + N (Phase A) + 1 (drain). Phase B sends catch-up only.
+	expected := numInferences + numHosts + 1
 	require.Equal(t, expected, len(env.session.Diffs()),
-		"total diffs = inferences(%d) + N(%d) + 1 + N(%d)", numInferences, numHosts, numHosts)
+		"total diffs = inferences(%d) + N+1(%d)", numInferences, numHosts+1)
 }
 
 func TestProtocol_SignatureThreshold(t *testing.T) {

@@ -878,6 +878,11 @@ header names the attack, body lists mitigations as a numbered list.
 Add new entries there when identifying new vectors.
 
 
+## Performance Tracking
+
+`make stress-test` runs a stress test: 16 hosts, 1 user, 1000 rounds (16,000 inferences), full pipeline through finalization and settlement. Measures per-diff timing (percentiles), seed reveal cost, state/diff memory footprint, and signature collection completeness. Build tag `stress` isolates it from normal test runs.
+
+
 ## Open Questions
 
 1. Re-propagation timeout: 120s is a starting point. Should it scale with model latency or be fixed?

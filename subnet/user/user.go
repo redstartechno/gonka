@@ -295,9 +295,9 @@ func (s *Session) SendInference(ctx context.Context, params InferenceParams) (*I
 // remained in pendingTxs after Phase A. This is the final nonce that
 // carries any txs. After this, state is frozen.
 //
-// Phase B (N iterations): Pure propagation + signature collection. Empty
-// diffs only. Sends catch-up diffs so every host reaches the final state
-// and returns a signature.
+// Phase B (N iterations): Pure propagation + signature collection. No new
+// diffs created. Sends catch-up diffs so every host reaches the final
+// nonce and signs the same state.
 func (s *Session) Finalize(ctx context.Context) error {
 	n := len(s.group)
 
@@ -385,24 +385,11 @@ func (s *Session) Finalize(ctx context.Context) error {
 	}
 
 	// Phase B: propagate complete state, collect signatures.
-	// No txs -- state is frozen after Phase A+1.
-	for i := 0; i < n; i++ {
+	// Nonce is frozen -- no new diffs. Each host receives catch-up to
+	// the final nonce and signs the same state.
+	for hostIdx := 0; hostIdx < n; hostIdx++ {
 		s.mu.Lock()
-		nonce := s.nonce + 1
-		hostIdx := int(nonce % uint64(n))
-
-		postStateRoot, err := s.sm.ApplyLocal(nonce, nil)
-		if err != nil {
-			s.mu.Unlock()
-			return fmt.Errorf("local apply: %w", err)
-		}
-		diff, err := s.signDiff(nonce, nil, postStateRoot)
-		if err != nil {
-			s.mu.Unlock()
-			return err
-		}
-		s.diffs = append(s.diffs, diff)
-		s.nonce = nonce
+		nonce := s.nonce
 		catchUp := s.diffsForHost(hostIdx)
 		s.mu.Unlock()
 
