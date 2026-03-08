@@ -230,10 +230,21 @@ func runFault(t *testing.T, failPct int) {
 		}})
 	}
 
-	// --- Phase 4: Finalize (partial -- fails on dead host in round-robin) ---
+	// --- Phase 4: Finalize (tolerates dead hosts if quorum is met) ---
 	preFinNonce := session.Nonce()
 	err = session.Finalize(ctx)
-	require.Error(t, err, "finalize should fail with dead hosts")
+
+	aliveHosts := faultNumHosts - numDead
+	threshold := 2*faultNumHosts/3 + 1
+	expectSuccess := aliveHosts >= threshold
+	if expectSuccess {
+		require.NoError(t, err, "finalize should succeed with %d/%d alive (threshold %d)",
+			aliveHosts, faultNumHosts, threshold)
+	} else {
+		require.Error(t, err, "finalize should fail with %d/%d alive (threshold %d)",
+			aliveHosts, faultNumHosts, threshold)
+		require.Contains(t, err.Error(), "insufficient signatures")
+	}
 	postFinNonce := session.Nonce()
 
 	// --- Post-finalize state snapshot ---
@@ -355,7 +366,11 @@ func runFault(t *testing.T, failPct int) {
 		preFinNonce, postFinNonce, totalInf)
 	t.Logf("  balance: pre=%d post=%d (timeout refund=%d)",
 		expectedBalance, st.Balance, timedOutRefund)
-	t.Logf("  finalize: failed as expected (dead hosts in iteration)")
+	if expectSuccess {
+		t.Logf("  finalize: succeeded (%d/%d alive >= threshold %d)", aliveHosts, faultNumHosts, threshold)
+	} else {
+		t.Logf("  finalize: failed as expected (%d/%d alive < threshold %d)", aliveHosts, faultNumHosts, threshold)
+	}
 	t.Logf("  alive hosts with req_val>0: %d", aliveWithReqVal)
 	t.Logf("  dead hosts penalized (req_val>0, comp_val=0): %d", numDead)
 	t.Logf("")

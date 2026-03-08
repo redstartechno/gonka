@@ -367,7 +367,7 @@ func (s *Session) Finalize(ctx context.Context) error {
 
 		resp, err := s.clients[hostIdx].Send(ctx, host.HostRequest{Diffs: catchUp, Nonce: nonce})
 		if err != nil {
-			return fmt.Errorf("send to host %d: %w", hostIdx, err)
+			continue // skip dead host
 		}
 
 		s.mu.Lock()
@@ -406,15 +406,15 @@ func (s *Session) Finalize(ctx context.Context) error {
 
 		resp, err := s.clients[hostIdx].Send(ctx, host.HostRequest{Diffs: catchUp, Nonce: nonce})
 		if err != nil {
-			return fmt.Errorf("send to host %d: %w", hostIdx, err)
-		}
-
-		s.mu.Lock()
-		if err := s.processResponse(hostIdx, resp); err != nil {
+			// skip dead host in A+1
+		} else {
+			s.mu.Lock()
+			if err := s.processResponse(hostIdx, resp); err != nil {
+				s.mu.Unlock()
+				return fmt.Errorf("process response from host %d: %w", hostIdx, err)
+			}
 			s.mu.Unlock()
-			return fmt.Errorf("process response from host %d: %w", hostIdx, err)
 		}
-		s.mu.Unlock()
 	}
 
 	// Phase B: propagate complete state, collect signatures.
@@ -428,7 +428,7 @@ func (s *Session) Finalize(ctx context.Context) error {
 
 		resp, err := s.clients[hostIdx].Send(ctx, host.HostRequest{Diffs: catchUp, Nonce: nonce})
 		if err != nil {
-			return fmt.Errorf("send to host %d: %w", hostIdx, err)
+			continue // skip dead host
 		}
 
 		s.mu.Lock()
@@ -437,6 +437,25 @@ func (s *Session) Finalize(ctx context.Context) error {
 			return fmt.Errorf("process response from host %d: %w", hostIdx, err)
 		}
 		s.mu.Unlock()
+	}
+
+	// Check signature quorum: need 2/3+1 slot-weighted signatures.
+	var sigWeight uint32
+	finalNonce := s.nonce
+	if sigs, ok := s.signatures[finalNonce]; ok {
+		counted := make(map[string]bool)
+		for slotID := range sigs {
+			addr := s.sm.SlotAddress(slotID)
+			if counted[addr] {
+				continue
+			}
+			counted[addr] = true
+			sigWeight += s.sm.AddressSlotCount(addr)
+		}
+	}
+	threshold := 2*s.sm.TotalSlots()/3 + 1
+	if sigWeight < threshold {
+		return fmt.Errorf("insufficient signatures: %d/%d weight", sigWeight, threshold)
 	}
 
 	return nil
