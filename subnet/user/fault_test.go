@@ -234,7 +234,6 @@ func runFault(t *testing.T, failPct int) {
 	preFinNonce := session.Nonce()
 	err = session.Finalize(ctx)
 	require.Error(t, err, "finalize should fail with dead hosts")
-	session.StateMachine().PenalizeUnrevealedSeeds()
 	postFinNonce := session.Nonce()
 
 	// --- Post-finalize state snapshot ---

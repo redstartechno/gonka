@@ -49,6 +49,15 @@ func TestValidateGroup(t *testing.T) {
 			wantErr: ErrInvalidGroup,
 		},
 		{
+			name: "compact but unsorted",
+			group: []SlotAssignment{
+				{SlotID: 1, ValidatorAddress: "b"},
+				{SlotID: 0, ValidatorAddress: "a"},
+				{SlotID: 2, ValidatorAddress: "c"},
+			},
+			wantErr: ErrInvalidGroup,
+		},
+		{
 			name:    "exceeds MaxGroupSize",
 			group:   makeOversizedGroup(),
 			wantErr: ErrInvalidGroup,

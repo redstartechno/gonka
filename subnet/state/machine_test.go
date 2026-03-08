@@ -1938,7 +1938,8 @@ func TestPenalizeUnrevealedSeeds(t *testing.T) {
 	applyStartConfirmFinish(t, sm, user, hosts, 4)
 	applyStartConfirmFinish(t, sm, user, hosts, 7)
 
-	// Finalize.
+	// Finalize -- penalizeUnrevealedSeeds runs inside applyCore.
+	// After this diff, all hosts are unrevealed so all get penalized.
 	nonce := sm.LatestNonce() + 1
 	diff := testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{
 		{Tx: &types.SubnetTx_FinalizeRound{FinalizeRound: &types.MsgFinalizeRound{}}},
@@ -1946,7 +1947,15 @@ func TestPenalizeUnrevealedSeeds(t *testing.T) {
 	_, err := sm.ApplyDiff(diff)
 	require.NoError(t, err)
 
-	// Reveal seeds for hosts 0 and 1 only.
+	stAfterFinalize := sm.SnapshotState()
+	// All 3 inferences -> executor slot 1. Penalty rate 100%, p=1/(3-1)=0.5.
+	require.Equal(t, uint32(2), stAfterFinalize.HostStats[0].RequiredValidations)
+	require.Equal(t, uint32(0), stAfterFinalize.HostStats[1].RequiredValidations)
+	require.Equal(t, uint32(2), stAfterFinalize.HostStats[2].RequiredValidations)
+
+	// Reveal seeds for hosts 0 and 1 only. applyRevealSeed sets correct
+	// compliance for revealed hosts; penalizeUnrevealedSeeds keeps penalty
+	// for host 2.
 	for _, slot := range []uint32{0, 1} {
 		seedMsg := testutil.SignRevealSeed(t, hosts[slot], "escrow-1", slot)
 		nonce = sm.LatestNonce() + 1
@@ -1955,31 +1964,12 @@ func TestPenalizeUnrevealedSeeds(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	// Snapshot before penalty to check hosts 0 and 1 are not changed.
-	prePenalty := sm.SnapshotState()
-	hs0Before := *prePenalty.HostStats[0]
-	hs1Before := *prePenalty.HostStats[1]
-
-	// Host 2 has no seed revealed -- RequiredValidations should be 0 before penalty.
-	require.Equal(t, uint32(0), prePenalty.HostStats[2].RequiredValidations)
-
-	sm.PenalizeUnrevealedSeeds()
-
 	st := sm.SnapshotState()
 
-	// Host 2: penalized. ValidationRate=5000 (50%), 3 inferences -> required = 3*5000/10000 = 1.
-	require.Equal(t, uint32(1), st.HostStats[2].RequiredValidations,
-		"unrevealed host should have RequiredValidations = numInf * rate / 10000")
-	require.Equal(t, uint32(0), st.HostStats[2].CompletedValidations,
-		"unrevealed host should have CompletedValidations = 0")
-
-	// Hosts 0 and 1: unchanged by penalty.
-	require.Equal(t, hs0Before.RequiredValidations, st.HostStats[0].RequiredValidations,
-		"revealed host 0 RequiredValidations should be unchanged")
-	require.Equal(t, hs0Before.CompletedValidations, st.HostStats[0].CompletedValidations,
-		"revealed host 0 CompletedValidations should be unchanged")
-	require.Equal(t, hs1Before.RequiredValidations, st.HostStats[1].RequiredValidations,
-		"revealed host 1 RequiredValidations should be unchanged")
-	require.Equal(t, hs1Before.CompletedValidations, st.HostStats[1].CompletedValidations,
-		"revealed host 1 CompletedValidations should be unchanged")
+	require.Equal(t, uint32(2), st.HostStats[2].RequiredValidations)
+	require.Equal(t, uint32(0), st.HostStats[2].CompletedValidations)
+	for _, slot := range []uint32{0, 1} {
+		_, revealed := st.RevealedSeeds[slot]
+		require.True(t, revealed, "host %d should have revealed seed", slot)
+	}
 }

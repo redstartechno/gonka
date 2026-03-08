@@ -97,8 +97,9 @@ type SlotAssignment struct {
 	Weight           uint64
 }
 
-// ValidateGroup checks that group slot IDs form compact indices 0..n-1
-// with no gaps or duplicates, and that the group size is within bounds.
+// ValidateGroup checks that group[i].SlotID == i for all entries, group size
+// is within bounds, and the group is non-empty. This ordering invariant is
+// required by direct indexing in transport and user code: group[slotID].
 func ValidateGroup(group []SlotAssignment) error {
 	n := len(group)
 	if n == 0 {
@@ -107,15 +108,10 @@ func ValidateGroup(group []SlotAssignment) error {
 	if n > MaxGroupSize {
 		return fmt.Errorf("%w: %d slots exceeds max %d", ErrInvalidGroup, n, MaxGroupSize)
 	}
-	seen := make(map[uint32]bool, n)
-	for _, s := range group {
-		if s.SlotID >= uint32(n) {
-			return fmt.Errorf("%w: slot %d out of range [0..%d)", ErrInvalidGroup, s.SlotID, n)
+	for i, s := range group {
+		if s.SlotID != uint32(i) {
+			return fmt.Errorf("%w: group[%d].SlotID = %d, want %d", ErrInvalidGroup, i, s.SlotID, i)
 		}
-		if seen[s.SlotID] {
-			return fmt.Errorf("%w: duplicate slot %d", ErrInvalidGroup, s.SlotID)
-		}
-		seen[s.SlotID] = true
 	}
 	return nil
 }

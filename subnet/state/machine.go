@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"maps"
+	"math"
 	"slices"
 
 	"google.golang.org/protobuf/proto"
@@ -12,6 +13,9 @@ import (
 	"subnet/signing"
 	"subnet/types"
 )
+
+// Assumed validation rate (bps) for unrevealed seed penalty. 10000 = 100%.
+const penaltyValidationRate = 10000
 
 func safeMul(a, b uint64) (uint64, bool) {
 	if a == 0 || b == 0 {
@@ -158,6 +162,10 @@ func (sm *StateMachine) applyCore(nonce uint64, txs []*types.SubnetTx, postState
 
 	// 5. Update nonce.
 	sm.state.LatestNonce = nonce
+
+	if sm.state.Finalizing {
+		sm.penalizeUnrevealedSeeds()
+	}
 
 	// 6. Compute state root.
 	// TODO: optimize for sure
@@ -744,27 +752,50 @@ func (sm *StateMachine) applyRevealSeed(msg *types.MsgRevealSeed) error {
 	return nil
 }
 
-// PenalizeUnrevealedSeeds sets RequiredValidations for hosts that didn't reveal
-// their seed during finalization. Without a seed we can't call ShouldValidate,
-// so we use a proportional estimate: len(inferences) * ValidationRate / 10000.
-// CompletedValidations stays 0, producing 0% compliance.
-func (sm *StateMachine) PenalizeUnrevealedSeeds() {
+// penalizeUnrevealedSeeds sets RequiredValidations for unrevealed hosts.
+// Mirrors applyRevealSeed with penaltyValidationRate. CompletedValidations stays 0.
+func (sm *StateMachine) penalizeUnrevealedSeeds() {
 	revealedAddrs := make(map[string]bool, len(sm.state.RevealedSeeds))
 	for slot := range sm.state.RevealedSeeds {
 		revealedAddrs[sm.slotToAddress[slot]] = true
 	}
-
-	numInf := uint32(len(sm.state.Inferences))
-	required := numInf * sm.state.Config.ValidationRate / 10000
 
 	for _, slot := range slices.Sorted(maps.Keys(sm.slotToAddress)) {
 		addr := sm.slotToAddress[slot]
 		if revealedAddrs[addr] {
 			continue
 		}
-		if hs, ok := sm.state.HostStats[slot]; ok {
-			hs.RequiredValidations = required
+		hs, ok := sm.state.HostStats[slot]
+		if !ok {
+			continue
 		}
+
+		validatorSlotCount := sm.addressToSlotCount[addr]
+		rate := float64(penaltyValidationRate) / 10000.0
+		var probSum float64
+		for _, infID := range slices.Sorted(maps.Keys(sm.state.Inferences)) {
+			rec := sm.state.Inferences[infID]
+			switch rec.Status {
+			case types.StatusFinished, types.StatusChallenged, types.StatusValidated, types.StatusInvalidated:
+			default:
+				continue
+			}
+			executorAddr := sm.slotToAddress[rec.ExecutorSlot]
+			if executorAddr == addr {
+				continue
+			}
+			executorSlotCount := sm.addressToSlotCount[executorAddr]
+			if sm.totalSlots <= executorSlotCount {
+				continue
+			}
+			p := rate * float64(validatorSlotCount) / float64(sm.totalSlots-executorSlotCount)
+			if p > 1.0 {
+				p = 1.0
+			}
+			probSum += p
+		}
+
+		hs.RequiredValidations = uint32(math.Ceil(probSum))
 	}
 }
 
