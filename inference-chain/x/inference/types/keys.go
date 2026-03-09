@@ -64,6 +64,12 @@ var (
 	PocV2EnabledEpochPrefix           = collections.NewPrefix(41)
 	PoCValidationSnapshotPrefix       = collections.NewPrefix(42)
 	PunishmentGraceEpochsPrefix       = collections.NewPrefix(43)
+	SubnetEscrowsPrefix               = collections.NewPrefix(44)
+	SubnetEscrowCounterPrefix         = collections.NewPrefix(45)
+	SubnetEscrowEpochCountPrefix      = collections.NewPrefix(46)
+	SubnetHostEpochStatsPrefix        = collections.NewPrefix(47)
+	SubnetEscrowsByEpochPrefix        = collections.NewPrefix(48)
+	SubnetPrunedEpochPrefix           = collections.NewPrefix(49)
 	ParamsKey                         = []byte("p_inference")
 )
 

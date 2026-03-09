@@ -29,6 +29,10 @@ func (k Keeper) Prune(ctx context.Context, currentEpochIndex int64) error {
 	if err != nil {
 		return err
 	}
+	err = k.PruneSubnetData(ctx, currentEpochIndex)
+	if err != nil {
+		return err
+	}
 	return nil
 }
 

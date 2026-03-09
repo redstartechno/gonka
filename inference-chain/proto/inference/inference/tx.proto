@@ -13,6 +13,7 @@ import "inference/inference/hardware_node.proto";
 import "inference/inference/network_node.proto";
 import "inference/inference/bridge.proto";
 import "inference/inference/poc_v2.proto";
+import "inference/inference/subnet_escrow.proto";
 
 option go_package = "github.com/productscience/inference/x/inference/types";
 
@@ -66,6 +67,8 @@ service Msg {
   rpc SetTrainingAllowList             (MsgSetTrainingAllowList) returns (MsgSetTrainingAllowListResponse);
   rpc AddParticipantsToAllowList       (MsgAddParticipantsToAllowList) returns (MsgAddParticipantsToAllowListResponse);
   rpc RemoveParticipantsFromAllowList  (MsgRemoveParticipantsFromAllowList) returns (MsgRemoveParticipantsFromAllowListResponse);
+  rpc CreateSubnetEscrow               (MsgCreateSubnetEscrow) returns (MsgCreateSubnetEscrowResponse);
+  rpc SettleSubnetEscrow               (MsgSettleSubnetEscrow) returns (MsgSettleSubnetEscrowResponse);
 }
 // MsgUpdateParams is the Msg/UpdateParams request type.
 message MsgUpdateParams {
@@ -567,3 +570,26 @@ message MsgMigrateAllWrappedTokensResponse {
   // number of contracts attempted; success/failure details are in logs/events
   uint32 attempted = 1;
 }
+
+message MsgCreateSubnetEscrow {
+  option (cosmos.msg.v1.signer) = "creator";
+  string creator = 1;
+  uint64 amount = 2;
+}
+
+message MsgCreateSubnetEscrowResponse {
+  uint64 escrow_id = 1;
+}
+
+message MsgSettleSubnetEscrow {
+  option (cosmos.msg.v1.signer) = "settler";
+  string settler = 1;
+  uint64 escrow_id = 2;
+  bytes state_root = 3;
+  uint64 nonce = 4;
+  bytes rest_hash = 5;
+  repeated SubnetSettlementHostStats host_stats = 6;
+  repeated SubnetSlotSignature signatures = 7;
+}
+
+message MsgSettleSubnetEscrowResponse {}
