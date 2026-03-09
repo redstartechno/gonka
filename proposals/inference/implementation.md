@@ -15,11 +15,12 @@ Test levels:
 | 2     | x    | in-process         |            |
 | 3     | x    | multi-node (HTTP)  |            |
 | 4     | x    | multi-node         |            |
-| 5     | x    | + real chain query |            |
-| 6     | x    | dapi-hosted        |            |
-| 7     |      | user lib           |            |
-| 8     | x    |                    |            |
-| 9     |      |                    | x          |
+| 5     | x    |                    |            |
+| 6     | x    | multi-node         |            |
+| 7     | x    | + real chain query |            |
+| 8     | x    | dapi-hosted        |            |
+| 9     |      | user lib           |            |
+| 10    |      |                    | x          |
 
 
 ## Phase 1: Foundation and State Machine [COMMITTED]
@@ -257,7 +258,8 @@ type DiffRecord struct {
 
 type SlotAssignment struct {
   SlotID           uint32
-  ValidatorAddress string
+  ValidatorAddress string   // cold key / validator identity, used for settlement
+  SigningAddress   string   // warm key address, pinned at session start, used for sig verification
   PublicKey        []byte
   Weight           uint64
 }
@@ -571,8 +573,8 @@ Existing code reference (not imported, reimplemented):
 - `decentralized-api/internal/seed/seed.go`: `CreateSeedForEpoch()` signs bytes and takes first 8 bytes -- same pattern as subnet seed derivation (signs escrow_id instead of epoch index).
 
 Not in Phase 4:
-- Dispute detection (requires MainnetBridge `OnSettlementProposed` notification -> Phase 5).
-- Host validation execution (calling `ValidationEngine.Validate()` to produce MsgValidation -> Phase 6, needs ML engine). Phase 4 tests use manually composed MsgValidation txs.
+- Dispute detection (requires MainnetBridge `OnSettlementProposed` notification -> Phase 7).
+- Host validation execution (calling `ValidationEngine.Validate()` to produce MsgValidation -> Phase 8, needs ML engine). Phase 4 tests use manually composed MsgValidation txs.
 - Pinned signing key verification (first-sig pinning for seed reveal). Adds complexity, deferred.
 
 Tests: full session with seed reveal, finalizing rounds, compliance verification, settlement data construction. Both in-process and multi-node.
@@ -582,54 +584,7 @@ Max group size is 128 slots. Enforced by Bitmap128 in ValidatedBy and VotedSlots
 Testable deliverable: session ends with correct settlement payload. Seed reveal produces valid ShouldValidate expectations. Compliance numbers match. Settlement Merkle proof is verifiable.
 
 
-## Phase 5: Chain Adapter (MainnetBridge)
-
-Goal: real mainnet communication via REST. Host discovery.
-
-Scope:
-- MainnetBridge implementation via chain's grpc-gateway REST endpoints
-- GetEscrow, GetValidatorInfo, VerifyWarmKey (authz grant check)
-- Host discovery: /v1/identity endpoint, DelegateTAs, deterministic instance selection via `hash(escrow_id, app_hash) % len(DelegateTAs)`
-- Slot assignment derivation from (app_hash, escrow_id, validator_weights) using existing `GetSlotsFromSorted`
-- Notification handlers: OnEscrowCreated, OnSettlementProposed, OnSettlementFinalized
-- Event subscription: listen for escrow creation and settlement events from chain
-
-Tests: integration tests against testnet chain for real data fetching. Mock bridge preserved for all prior test levels. Warm key verification tested with real authz grants. Slot assignment verified against chain computation.
-
-Testable deliverable: bridge adapter correctly fetches escrow info, validator data, verifies warm keys from a running chain. Slot assignment derivation matches chain-side result.
-
-
-## Phase 6: dapi Integration and ML Node Adapters
-
-Goal: subnet runs as part of decentralized-api. Real ML node interaction via existing infrastructure.
-
-Scope:
-- InferenceEngine adapter wrapping broker + completionapi (execute inference on vLLM node, stream response, extract hashes and token counts)
-- ValidationEngine adapter wrapping broker + validation logic (re-execute with enforced tokens, compareLogits)
-- Router: mount `/subnet/v1/` echo group on existing dapi public server
-- MainnetBridge adapter using dapi's chain client (alternative to REST bridge from Phase 5)
-- SQLite storage (WAL mode, single writer goroutine, as specified in design.md)
-
-Tests: subnet running inside dapi, mock ML node (WireMock), real signing, real SQLite, real gossip over localhost. Full session with actual inference execution and streaming.
-
-Testable deliverable: dapi serves subnet inference requests, executes on ML node via existing broker, returns streaming results with subnet protocol (diffs, signatures, mempool).
-
-
-## Phase 7: User Client Library
-
-Goal: Go library for the user side of the protocol. Callable from code, usable in integration tests and testermint.
-
-Scope:
-- User SDK: open session (escrow_id, bridge), send inference requests (OpenAI-compatible), handle receipts and pipelining, collect signatures, trigger finalizing rounds, construct settlement payload
-- Go library API: no HTTP server, direct function calls
-- Later iteration: proxy mode wrapping the library behind an OpenAI-compatible HTTP server (user sends normal /chat/completions, proxy handles all subnet protocol transparently)
-
-Tests: Go test creates user client, sends inference requests to a subnet cluster, gets streaming responses, verifies session settles correctly.
-
-Testable deliverable: user client library drives a full session against real subnet nodes. No manual diff construction or protocol handling from test code.
-
-
-## Phase 8: Mainnet Modifications
+## Phase 5: Mainnet Modifications
 
 Goal: MsgCreateEscrow and MsgSettleEscrow in the inference chain module.
 
@@ -646,7 +601,151 @@ Tests: keeper unit tests in `inference-chain/x/inference/keeper/`. Settlement ve
 Testable deliverable: chain correctly creates escrows, verifies settlement Merkle proofs and signatures, distributes funds, handles disputes.
 
 
-## Phase 9: End-to-End (Testermint)
+## Phase 6: Warm Key Support
+
+Goal: support warm keys (operator keys authorized via authz grants) so hosts can sign with a key different from their validator identity.
+
+### Problem
+
+On mainnet, hosts sign with warm keys -- operator keys authorized via on-chain authz grants. The dapi config separates `account_public_key` (cold/validator key) from `signer_key_name` (warm key loaded from keyring). The warm key address differs from the validator address.
+
+The subnet currently assumes a single key per slot. `SlotAssignment.PublicKey` and `SlotAssignment.ValidatorAddress` are used for both identity and signature verification. This breaks with warm keys because:
+- `verifyProposerSig()` recovers a signer address and compares it against ValidatorAddress
+- Host startup matches `signer.Address()` against ValidatorAddress to find its own slot
+- Seed reveal verification uses the same address check
+
+With warm keys, the signing address and the validator address are different. The validator address identifies the slot for settlement; the signing address proves the host controls an authorized key.
+
+### Design
+
+Add `SigningAddress` to `SlotAssignment`, pinned at session start. When building the group from escrow data, each slot gets both:
+- `ValidatorAddress` -- the validator/cold key identity, used for on-chain settlement
+- `SigningAddress` -- the warm key address that will sign all messages for this slot
+
+SigningAddress is determined during session setup. The host's first interaction pins which key it uses. Once pinned, the host must use the same key for all signatures in that session.
+
+Rule: if host X uses warm key A in any message during a session, it must use A for all subsequent messages. A different key from the same host is rejected.
+
+SigningAddress is trusted because it was verified at session setup. Before populating SigningAddress, the session initiator calls VerifyWarmKey on the MainnetBridge to confirm the warm key has a valid authz grant from the validator. Once verified, the grant is cached for the session lifetime -- no re-verification during the session. If the grant is revoked mid-session, the session continues (grant revocation takes effect on next session). Phase 6 tests skip this verification (SigningAddress set directly in test group). Real verification is Phase 7.
+
+### State Machine Changes
+
+Signature verification switches from ValidatorAddress to SigningAddress:
+- `verifyProposerSig()` recovers address, compares against `group[slot].SigningAddress`
+- Host slot lookup on startup: match `signer.Address()` against SigningAddress
+- Seed reveal: verify signature against SigningAddress
+- Settlement: use ValidatorAddress to identify the recipient on chain
+
+No change to state hashing -- SigningAddress is session metadata, not part of EscrowState. Host stats and settlement data reference slots, which map to ValidatorAddress for on-chain distribution.
+
+### Host Changes
+
+Host startup uses SigningAddress instead of ValidatorAddress to find its slot:
+```go
+for i, slot := range group {
+    if slot.SigningAddress == signer.Address() {
+        mySlot = i
+    }
+}
+```
+
+### Test Plan
+
+```
+TestWarmKey_AcceptValidSigningAddress
+  - Group with SigningAddress != ValidatorAddress
+  - Host signs with warm key matching SigningAddress
+  - Verify signature accepted
+
+TestWarmKey_RejectWrongSigningKey
+  - Host signs with key matching neither SigningAddress nor ValidatorAddress
+  - Verify rejection
+
+TestWarmKey_HostFindsSlotBySigningAddress
+  - Host signer address matches SigningAddress but not ValidatorAddress
+  - Verify host correctly identifies its slot
+
+TestWarmKey_SettlementUsesValidatorAddress
+  - Session with warm keys settles
+  - Settlement payload maps costs to ValidatorAddress, not SigningAddress
+
+TestWarmKey_SeedRevealWithWarmKey
+  - Host reveals seed signed with warm key
+  - Verify seed derivation and ShouldValidate use the warm key signature
+```
+
+### Scope Boundary
+
+Phase 6 does NOT include:
+- Mid-session key rotation (warm key is pinned for the entire session)
+- VerifyWarmKey bridge call during session (authz grant verification happens at session setup, not on every signature)
+- Discovery of warm key addresses (that is Phase 7 via /v1/identity)
+
+Warm key authorization (verifying authz grants on chain) belongs to Phase 7 (MainnetBridge). Phase 6 only adds the SigningAddress field and updates signature verification to use it. In Phase 6 tests, SigningAddress is set directly in the test group.
+
+
+## Phase 7: Chain Adapter (MainnetBridge)
+
+Goal: real mainnet communication via REST. Host discovery.
+
+Scope:
+- MainnetBridge implementation via chain's grpc-gateway REST endpoints
+- GetEscrow, GetValidatorInfo, VerifyWarmKey (authz grant check)
+- Host discovery: /v1/identity endpoint returns the host's warm key address (SigningAddress) along with DelegateTAs. Deterministic instance selection via `hash(escrow_id, app_hash) % len(DelegateTAs)`.
+- Warm key discovery: query /v1/identity on each host to obtain its SigningAddress. Populate `SlotAssignment.SigningAddress` from this response during session setup. This bridges Phase 6 (which introduced SigningAddress) with real mainnet data.
+- /v1/identity endpoint extension: add `signer_address` field to the response. This lets session initiators discover which warm key a host uses without querying chain grants directly. Chain grant check is still needed to verify authorization.
+- VerifyWarmKey flow at session setup:
+  1. For each slot, query `GranteesByMessageType(validator_address, msg_type)` on chain
+  2. Confirm the host's warm key address appears in the grantee list
+  3. Cache the `(validator_address -> warm_key_pubkey)` mapping for the session lifetime
+  4. Populate `SlotAssignment.SigningAddress` from the verified warm key
+- Warm key cache is session-scoped, not global. Existing dapi AuthzCache uses 2-min TTL, but subnet sessions can last longer. The subnet caches warm key verification per `(escrow_id, slot_id)` for the session duration. Different sessions may see different warm keys for the same validator.
+- Slot assignment derivation from (app_hash, escrow_id, validator_weights) using existing `GetSlotsFromSorted`
+- Notification handlers: OnEscrowCreated, OnSettlementProposed, OnSettlementFinalized
+- Event subscription: listen for escrow creation and settlement events from chain
+
+Tests: integration tests against testnet chain for real data fetching. Mock bridge preserved for all prior test levels. Warm key verification tested with real authz grants. Warm key discovery tested: /v1/identity returns SigningAddress, session setup populates SlotAssignment correctly. Slot assignment verified against chain computation.
+
+Testable deliverable: bridge adapter correctly fetches escrow info, validator data, discovers warm key addresses via /v1/identity, verifies authz grants from a running chain. Slot assignment derivation matches chain-side result.
+
+### Scope Boundary
+
+- Grant revocation mid-session does not invalidate an active session. The warm key was valid at setup time. Revocation takes effect on next session creation.
+- Warm key cache is per-session, not global. Different sessions may see different warm keys for the same validator.
+- /v1/identity provides discovery only. The chain grant check (VerifyWarmKey) is the authorization source of truth.
+
+
+## Phase 8: dapi Integration and ML Node Adapters
+
+Goal: subnet runs as part of decentralized-api. Real ML node interaction via existing infrastructure.
+
+Scope:
+- InferenceEngine adapter wrapping broker + completionapi (execute inference on vLLM node, stream response, extract hashes and token counts)
+- ValidationEngine adapter wrapping broker + validation logic (re-execute with enforced tokens, compareLogits)
+- Router: mount `/subnet/v1/` echo group on existing dapi public server
+- MainnetBridge adapter using dapi's chain client (alternative to REST bridge from Phase 7)
+- SQLite storage (WAL mode, single writer goroutine, as specified in design.md)
+
+Tests: subnet running inside dapi, mock ML node (WireMock), real signing, real SQLite, real gossip over localhost. Full session with actual inference execution and streaming.
+
+Testable deliverable: dapi serves subnet inference requests, executes on ML node via existing broker, returns streaming results with subnet protocol (diffs, signatures, mempool).
+
+
+## Phase 9: User Client Library
+
+Goal: Go library for the user side of the protocol. Callable from code, usable in integration tests and testermint.
+
+Scope:
+- User SDK: open session (escrow_id, bridge), send inference requests (OpenAI-compatible), handle receipts and pipelining, collect signatures, trigger finalizing rounds, construct settlement payload
+- Go library API: no HTTP server, direct function calls
+- Later iteration: proxy mode wrapping the library behind an OpenAI-compatible HTTP server (user sends normal /chat/completions, proxy handles all subnet protocol transparently)
+
+Tests: Go test creates user client, sends inference requests to a subnet cluster, gets streaming responses, verifies session settles correctly.
+
+Testable deliverable: user client library drives a full session against real subnet nodes. No manual diff construction or protocol handling from test code.
+
+
+## Phase 10: End-to-End (Testermint)
 
 Goal: full system tested through testermint integration framework.
 
@@ -656,7 +755,7 @@ Scope:
 - Edge cases: host down during session (timeout recovery), user disappears (host-initiated settlement)
 - Verify integration with existing epoch/PoC system (subnet sessions coexist with current inference flow)
 
-Tests: testermint integration tests using user client library from Phase 7 against full local cluster (chain nodes + dapi + mock ML nodes).
+Tests: testermint integration tests using user client library from Phase 9 against full local cluster (chain nodes + dapi + mock ML nodes).
 
 Testable deliverable: complete system works end-to-end. Settlement produces correct on-chain state.
 
