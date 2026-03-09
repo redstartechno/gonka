@@ -14,6 +14,7 @@ import (
 
 	"github.com/labstack/echo/v4"
 
+	"subnet/bridge"
 	"subnet/gossip"
 	"subnet/host"
 	"subnet/logging"
@@ -36,6 +37,7 @@ type Server struct {
 	peerClients map[int]*HTTPClient // slot index -> client, for timeout verification
 	rateLimit   *rateLimiter        // nil = no limiting
 	maxBodySize int64               // max request body bytes, 0 = no limit
+	bridge      bridge.MainnetBridge // optional, for warm key verification
 }
 
 // ServerOption configures the Server.
@@ -63,6 +65,11 @@ func WithServerGossip(g *gossip.Gossip) ServerOption {
 // WithServerPeerClients sets executor clients for timeout verification.
 func WithServerPeerClients(peers map[int]*HTTPClient) ServerOption {
 	return func(s *Server) { s.peerClients = peers }
+}
+
+// WithBridge sets the bridge for warm key verification in transport auth.
+func WithBridge(b bridge.MainnetBridge) ServerOption {
+	return func(s *Server) { s.bridge = b }
 }
 
 // NewServer creates an HTTP server wrapping the given host.
@@ -129,13 +136,39 @@ func errJSON(c echo.Context, code int, msg string) error {
 	return writeJSON(c, code, map[string]string{"error": msg})
 }
 
-// isAllowedSender returns true if addr is the session user or a group member.
+// isAllowedSender returns true if addr is the session user, a group member,
+// or a verified warm key for any group member.
 func (s *Server) isAllowedSender(addr string) bool {
 	if s.userAddr != "" && addr == s.userAddr {
 		return true
 	}
 	for _, slot := range s.group {
 		if slot.ValidatorAddress == addr {
+			return true
+		}
+	}
+	return s.isWarmKeySender(addr)
+}
+
+// isWarmKeySender checks if addr is a known warm key (from state) or can be
+// verified via bridge for any group member. Cached by the bridge implementation.
+func (s *Server) isWarmKeySender(addr string) bool {
+	if s.host.IsWarmKeyAddress(addr) {
+		return true
+	}
+
+	// Bridge fallback for gossip bootstrap.
+	if s.bridge == nil {
+		return false
+	}
+	seen := make(map[string]bool, len(s.group))
+	for _, slot := range s.group {
+		if seen[slot.ValidatorAddress] {
+			continue
+		}
+		seen[slot.ValidatorAddress] = true
+		ok, err := s.bridge.VerifyWarmKey(addr, slot.ValidatorAddress)
+		if err == nil && ok {
 			return true
 		}
 	}

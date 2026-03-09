@@ -29,8 +29,8 @@ func (m *mockBridge) GetValidatorInfo(addr string) (*ValidatorInfo, error) {
 	}
 	return info, nil
 }
-func (m *mockBridge) VerifyWarmKey(_, _ string) (*WarmKeyInfo, error) {
-	return nil, ErrNotImplemented
+func (m *mockBridge) VerifyWarmKey(_, _ string) (bool, error) {
+	return false, ErrNotImplemented
 }
 func (m *mockBridge) OnEscrowCreated(_ EscrowInfo) error                            { return ErrNotImplemented }
 func (m *mockBridge) OnSettlementProposed(_ string, _ []byte, _ uint64) error       { return ErrNotImplemented }
@@ -134,7 +134,7 @@ func (q *queryCountBridge) GetValidatorInfo(addr string) (*ValidatorInfo, error)
 	q.counts[addr]++
 	return q.inner.GetValidatorInfo(addr)
 }
-func (q *queryCountBridge) VerifyWarmKey(w, v string) (*WarmKeyInfo, error) {
+func (q *queryCountBridge) VerifyWarmKey(w, v string) (bool, error) {
 	return q.inner.VerifyWarmKey(w, v)
 }
 func (q *queryCountBridge) OnEscrowCreated(e EscrowInfo) error { return q.inner.OnEscrowCreated(e) }

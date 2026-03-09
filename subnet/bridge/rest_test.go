@@ -101,9 +101,9 @@ func TestVerifyWarmKey_Authorized(t *testing.T) {
 	defer srv.Close()
 
 	b := NewRESTBridge(srv.URL)
-	info, err := b.VerifyWarmKey("inference1warm2", "valA")
+	ok, err := b.VerifyWarmKey("inference1warm2", "valA")
 	require.NoError(t, err)
-	assert.Equal(t, "valA", info.ValidatorAddress)
+	assert.True(t, ok)
 }
 
 func TestVerifyWarmKey_NotAuthorized(t *testing.T) {
@@ -117,8 +117,9 @@ func TestVerifyWarmKey_NotAuthorized(t *testing.T) {
 	defer srv.Close()
 
 	b := NewRESTBridge(srv.URL)
-	_, err := b.VerifyWarmKey("inference1warm2", "valA")
-	assert.ErrorIs(t, err, ErrWarmKeyNotAuthorized)
+	ok, err := b.VerifyWarmKey("inference1warm2", "valA")
+	require.NoError(t, err)
+	assert.False(t, ok)
 }
 
 func TestVerifyWarmKey_EmptyGrantees(t *testing.T) {
@@ -130,8 +131,34 @@ func TestVerifyWarmKey_EmptyGrantees(t *testing.T) {
 	defer srv.Close()
 
 	b := NewRESTBridge(srv.URL)
-	_, err := b.VerifyWarmKey("inference1warm", "valA")
-	assert.ErrorIs(t, err, ErrWarmKeyNotAuthorized)
+	ok, err := b.VerifyWarmKey("inference1warm", "valA")
+	require.NoError(t, err)
+	assert.False(t, ok)
+}
+
+func TestVerifyWarmKey_CachesResult(t *testing.T) {
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		json.NewEncoder(w).Encode(map[string]any{
+			"grantees": []map[string]string{
+				{"address": "inference1warm1", "pub_key": ""},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	b := NewRESTBridge(srv.URL)
+
+	ok1, err := b.VerifyWarmKey("inference1warm1", "valA")
+	require.NoError(t, err)
+	assert.True(t, ok1)
+
+	ok2, err := b.VerifyWarmKey("inference1warm1", "valA")
+	require.NoError(t, err)
+	assert.True(t, ok2)
+
+	assert.Equal(t, 1, calls, "second call should hit cache")
 }
 
 func TestStubMethods_ReturnNotImplemented(t *testing.T) {

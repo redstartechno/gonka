@@ -11,7 +11,7 @@ type MainnetBridge interface {
 	// Queries: subnet -> mainnet
 	GetEscrow(escrowID string) (*EscrowInfo, error)
 	GetValidatorInfo(validatorAddress string) (*ValidatorInfo, error)
-	VerifyWarmKey(warmAddress, validatorAddress string) (*WarmKeyInfo, error)
+	VerifyWarmKey(warmAddress, validatorAddress string) (bool, error)
 
 	// Actions: subnet -> mainnet
 	SubmitDisputeState(escrowID string, stateRoot []byte, nonce uint64, sigs map[uint32][]byte) error
@@ -30,8 +30,4 @@ type ValidatorInfo struct {
 	PublicKey []byte
 	URL       string
 	Weight    uint64
-}
-
-type WarmKeyInfo struct {
-	ValidatorAddress string
 }

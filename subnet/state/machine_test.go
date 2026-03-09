@@ -2104,11 +2104,11 @@ func TestPhase_StateRootDiffersPerPhase(t *testing.T) {
 		1: {Status: types.StatusFinished, ExecutorSlot: 0, ActualCost: 100},
 	}
 
-	rootActive, err := ComputeStateRoot(500, hostStats, inferences, types.PhaseActive)
+	rootActive, err := ComputeStateRoot(500, hostStats, inferences, types.PhaseActive, nil)
 	require.NoError(t, err)
-	rootFinalizing, err := ComputeStateRoot(500, hostStats, inferences, types.PhaseFinalizing)
+	rootFinalizing, err := ComputeStateRoot(500, hostStats, inferences, types.PhaseFinalizing, nil)
 	require.NoError(t, err)
-	rootSettlement, err := ComputeStateRoot(500, hostStats, inferences, types.PhaseSettlement)
+	rootSettlement, err := ComputeStateRoot(500, hostStats, inferences, types.PhaseSettlement, nil)
 	require.NoError(t, err)
 
 	require.NotEqual(t, rootActive, rootFinalizing, "Active and Finalizing roots must differ")

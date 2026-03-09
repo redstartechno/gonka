@@ -8,14 +8,22 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sync"
 	"time"
 )
+
+// warmCacheKey is the key for the warm key verification cache.
+type warmCacheKey struct {
+	validator string
+	warm      string
+}
 
 // RESTBridge implements MainnetBridge query methods via the chain's grpc-gateway REST API.
 // Notification and action methods return ErrNotImplemented.
 type RESTBridge struct {
-	baseURL string
-	client  *http.Client
+	baseURL   string
+	client    *http.Client
+	warmCache sync.Map // warmCacheKey -> bool
 }
 
 type Option func(*RESTBridge)
@@ -147,24 +155,33 @@ func (b *RESTBridge) GetValidatorInfo(validatorAddress string) (*ValidatorInfo, 
 
 const warmKeyMsgType = "/inference.inference.MsgStartInference"
 
-func (b *RESTBridge) VerifyWarmKey(warmAddress, validatorAddress string) (*WarmKeyInfo, error) {
+func (b *RESTBridge) VerifyWarmKey(warmAddress, validatorAddress string) (bool, error) {
+	key := warmCacheKey{validator: validatorAddress, warm: warmAddress}
+	if cached, ok := b.warmCache.Load(key); ok {
+		return cached.(bool), nil
+	}
+
 	u := fmt.Sprintf("%s/productscience/inference/inference/grantees_by_message_type/%s/%s",
 		b.baseURL, validatorAddress, url.PathEscape(warmKeyMsgType))
 
 	resp, err := doGet[granteesResponse](b.client, u)
 	if err != nil {
-		return nil, err
+		return false, err
 	}
 	if resp == nil {
-		return nil, ErrWarmKeyNotAuthorized
+		b.warmCache.Store(key, false)
+		return false, nil
 	}
 
+	found := false
 	for _, g := range resp.Grantees {
 		if g.Address == warmAddress {
-			return &WarmKeyInfo{ValidatorAddress: validatorAddress}, nil
+			found = true
+			break
 		}
 	}
-	return nil, ErrWarmKeyNotAuthorized
+	b.warmCache.Store(key, found)
+	return found, nil
 }
 
 // -- stubs --

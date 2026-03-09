@@ -35,7 +35,7 @@ func TestBuildSettlement_MerkleProof(t *testing.T) {
 	require.Equal(t, uint64(10), payload.Nonce)
 
 	// RestHash should match independently computed value.
-	restHash, err := ComputeRestHash(st.Balance, st.Inferences)
+	restHash, err := ComputeRestHash(st.Balance, st.Inferences, st.WarmKeys)
 	require.NoError(t, err)
 	require.Equal(t, restHash, payload.RestHash)
 }

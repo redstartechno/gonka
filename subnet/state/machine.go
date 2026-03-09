@@ -36,6 +36,11 @@ func safeAdd(a, b uint64) (uint64, bool) {
 	return result, true
 }
 
+// WarmKeyResolver checks whether warmAddr is authorized to act on behalf of
+// coldAddr. Injected callback, wraps a cached bridge query. Called at most
+// once per slot. Set to nil when warm keys are not used.
+type WarmKeyResolver func(warmAddr, coldAddr string) (bool, error)
+
 // StateMachine applies diffs and tracks session state.
 type StateMachine struct {
 	state       *types.EscrowState
@@ -48,6 +53,16 @@ type StateMachine struct {
 	addressInGroup     map[string]bool
 	addressToSlotCount map[string]uint32
 	totalSlots         uint32
+
+	warmResolver WarmKeyResolver // optional, nil = no warm key support
+}
+
+// SMOption configures optional StateMachine behavior.
+type SMOption func(*StateMachine)
+
+// WithWarmKeyResolver sets a callback for warm key verification.
+func WithWarmKeyResolver(r WarmKeyResolver) SMOption {
+	return func(sm *StateMachine) { sm.warmResolver = r }
 }
 
 func NewStateMachine(
@@ -57,6 +72,7 @@ func NewStateMachine(
 	balance uint64,
 	userAddress string,
 	verifier signing.Verifier,
+	opts ...SMOption,
 ) *StateMachine {
 	slotToAddr := make(map[uint32]string, len(group))
 	slotToPub := make(map[uint32][]byte, len(group))
@@ -77,7 +93,7 @@ func NewStateMachine(
 		hostStats[s.SlotID] = &types.HostStats{}
 	}
 
-	return &StateMachine{
+	sm := &StateMachine{
 		state: &types.EscrowState{
 			EscrowID:      escrowID,
 			Config:        config,
@@ -86,6 +102,7 @@ func NewStateMachine(
 			Inferences:    make(map[uint64]*types.InferenceRecord),
 			HostStats:     hostStats,
 			RevealedSeeds: make(map[uint32]int64),
+			WarmKeys:      make(map[uint32]string),
 		},
 		verifier:           verifier,
 		userAddress:        userAddress,
@@ -95,6 +112,10 @@ func NewStateMachine(
 		addressToSlotCount: addrToSlotCount,
 		totalSlots:         uint32(len(group)),
 	}
+	for _, o := range opts {
+		o(sm)
+	}
+	return sm
 }
 
 // ApplyDiff validates user signature and post_state_root, then applies the diff.
@@ -181,7 +202,7 @@ func (sm *StateMachine) applyCore(nonce uint64, txs []*types.SubnetTx, postState
 	}
 
 	// 6. Compute state root.
-	root, err := ComputeStateRoot(sm.state.Balance, sm.state.HostStats, sm.state.Inferences, sm.state.Phase)
+	root, err := ComputeStateRoot(sm.state.Balance, sm.state.HostStats, sm.state.Inferences, sm.state.Phase, sm.state.WarmKeys)
 	if err != nil {
 		return nil, fmt.Errorf("compute state root: %w", err)
 	}
@@ -232,6 +253,10 @@ func (sm *StateMachine) SnapshotState() types.EscrowState {
 	s.RevealedSeeds = make(map[uint32]int64, len(sm.state.RevealedSeeds))
 	maps.Copy(s.RevealedSeeds, sm.state.RevealedSeeds)
 
+	// Deep copy WarmKeys.
+	s.WarmKeys = make(map[uint32]string, len(sm.state.WarmKeys))
+	maps.Copy(s.WarmKeys, sm.state.WarmKeys)
+
 	// Deep copy Inferences.
 	s.Inferences = make(map[uint64]*types.InferenceRecord, len(sm.state.Inferences))
 	for k, v := range sm.state.Inferences {
@@ -259,6 +284,7 @@ type mutableSnapshot struct {
 	Inferences    map[uint64]*types.InferenceRecord
 	HostStats     map[uint32]*types.HostStats
 	RevealedSeeds map[uint32]int64
+	WarmKeys      map[uint32]string
 }
 
 func (sm *StateMachine) snapshotMutable() mutableSnapshot {
@@ -285,6 +311,9 @@ func (sm *StateMachine) snapshotMutable() mutableSnapshot {
 	seedsCopy := make(map[uint32]int64, len(sm.state.RevealedSeeds))
 	maps.Copy(seedsCopy, sm.state.RevealedSeeds)
 
+	warmCopy := make(map[uint32]string, len(sm.state.WarmKeys))
+	maps.Copy(warmCopy, sm.state.WarmKeys)
+
 	return mutableSnapshot{
 		Balance:       sm.state.Balance,
 		Phase:         sm.state.Phase,
@@ -293,6 +322,7 @@ func (sm *StateMachine) snapshotMutable() mutableSnapshot {
 		Inferences:    infCopy,
 		HostStats:     hsCopy,
 		RevealedSeeds: seedsCopy,
+		WarmKeys:      warmCopy,
 	}
 }
 
@@ -304,11 +334,32 @@ func (sm *StateMachine) restoreMutable(snap mutableSnapshot) {
 	sm.state.Inferences = snap.Inferences
 	sm.state.HostStats = snap.HostStats
 	sm.state.RevealedSeeds = snap.RevealedSeeds
+	sm.state.WarmKeys = snap.WarmKeys
 }
 
 // ComputeStateRoot returns the current state root without modifying state.
 func (sm *StateMachine) ComputeStateRoot() ([]byte, error) {
-	return ComputeStateRoot(sm.state.Balance, sm.state.HostStats, sm.state.Inferences, sm.state.Phase)
+	return ComputeStateRoot(sm.state.Balance, sm.state.HostStats, sm.state.Inferences, sm.state.Phase, sm.state.WarmKeys)
+}
+
+// WarmKeys returns the current warm key bindings (shallow copy).
+func (sm *StateMachine) WarmKeys() map[uint32]string {
+	if len(sm.state.WarmKeys) == 0 {
+		return nil
+	}
+	cp := make(map[uint32]string, len(sm.state.WarmKeys))
+	maps.Copy(cp, sm.state.WarmKeys)
+	return cp
+}
+
+// IsWarmKeyAddress returns true if addr is a known warm key for any slot.
+func (sm *StateMachine) IsWarmKeyAddress(addr string) bool {
+	for _, warmAddr := range sm.state.WarmKeys {
+		if warmAddr == addr {
+			return true
+		}
+	}
+	return false
 }
 
 func (sm *StateMachine) applyTx(tx *types.SubnetTx) error {
@@ -410,8 +461,10 @@ func (sm *StateMachine) applyConfirmStart(msg *types.MsgConfirmStart) error {
 
 	expectedAddr := sm.slotToAddress[rec.ExecutorSlot]
 	if recovered != expectedAddr {
-		return fmt.Errorf("%w: expected executor %s (slot %d), got %s",
-			types.ErrInvalidExecutorSig, expectedAddr, rec.ExecutorSlot, recovered)
+		if !sm.resolveWarmKey(rec.ExecutorSlot, recovered, expectedAddr) {
+			return fmt.Errorf("%w: expected executor %s (slot %d), got %s",
+				types.ErrInvalidExecutorSig, expectedAddr, rec.ExecutorSlot, recovered)
+		}
 	}
 
 	rec.Status = types.StatusStarted
@@ -436,7 +489,7 @@ func (sm *StateMachine) applyFinishInference(msg *types.MsgFinishInference) erro
 	// Verify proposer signature from executor.
 	cloned := proto.Clone(msg).(*types.MsgFinishInference)
 	cloned.ProposerSig = nil
-	if err := sm.verifyProposerSig(cloned, msg.ProposerSig, sm.slotToAddress[rec.ExecutorSlot]); err != nil {
+	if err := sm.verifyProposerSig(cloned, msg.ProposerSig, sm.slotToAddress[rec.ExecutorSlot], rec.ExecutorSlot); err != nil {
 		return err
 	}
 
@@ -513,7 +566,7 @@ func (sm *StateMachine) applyValidation(msg *types.MsgValidation) error {
 	// Proposer sig + escrow_id (expensive, after dedup).
 	cloned := proto.Clone(msg).(*types.MsgValidation)
 	cloned.ProposerSig = nil
-	if err := sm.verifyProposerSig(cloned, msg.ProposerSig, sm.slotToAddress[msg.ValidatorSlot]); err != nil {
+	if err := sm.verifyProposerSig(cloned, msg.ProposerSig, sm.slotToAddress[msg.ValidatorSlot], msg.ValidatorSlot); err != nil {
 		return err
 	}
 	if msg.EscrowId != sm.state.EscrowID {
@@ -577,7 +630,7 @@ func (sm *StateMachine) applyValidationVote(msg *types.MsgValidationVote) error 
 	// Verify proposer signature from voter.
 	clonedVV := proto.Clone(msg).(*types.MsgValidationVote)
 	clonedVV.ProposerSig = nil
-	if err := sm.verifyProposerSig(clonedVV, msg.ProposerSig, sm.slotToAddress[msg.VoterSlot]); err != nil {
+	if err := sm.verifyProposerSig(clonedVV, msg.ProposerSig, sm.slotToAddress[msg.VoterSlot], msg.VoterSlot); err != nil {
 		return err
 	}
 
@@ -668,8 +721,10 @@ func (sm *StateMachine) applyTimeout(msg *types.MsgTimeoutInference) error {
 		}
 
 		if recovered != voterAddr {
-			return fmt.Errorf("%w: vote from slot %d: expected %s, got %s",
-				types.ErrInvalidVoteSig, vote.VoterSlot, voterAddr, recovered)
+			if !sm.resolveWarmKey(vote.VoterSlot, recovered, voterAddr) {
+				return fmt.Errorf("%w: vote from slot %d: expected %s, got %s",
+					types.ErrInvalidVoteSig, vote.VoterSlot, voterAddr, recovered)
+			}
 		}
 
 		if vote.Accept {
@@ -710,7 +765,7 @@ func (sm *StateMachine) applyRevealSeed(msg *types.MsgRevealSeed) error {
 	// Verify proposer signature from slot owner.
 	clonedRS := proto.Clone(msg).(*types.MsgRevealSeed)
 	clonedRS.ProposerSig = nil
-	if err := sm.verifyProposerSig(clonedRS, msg.ProposerSig, revealerAddr); err != nil {
+	if err := sm.verifyProposerSig(clonedRS, msg.ProposerSig, revealerAddr, msg.SlotId); err != nil {
 		return err
 	}
 
@@ -725,7 +780,9 @@ func (sm *StateMachine) applyRevealSeed(msg *types.MsgRevealSeed) error {
 		return fmt.Errorf("%w: %v", types.ErrInvalidSeedSig, err)
 	}
 	if seedAddr != revealerAddr {
-		return fmt.Errorf("%w: expected %s, got %s", types.ErrInvalidSeedSig, revealerAddr, seedAddr)
+		if !sm.resolveWarmKey(msg.SlotId, seedAddr, revealerAddr) {
+			return fmt.Errorf("%w: expected %s, got %s", types.ErrInvalidSeedSig, revealerAddr, seedAddr)
+		}
 	}
 
 	// Dedup by address: check if any slot owned by same address already revealed.
@@ -870,7 +927,8 @@ func BuildDiffContent(escrowID string, nonce uint64, txs []*types.SubnetTx, post
 
 // verifyProposerSig verifies that sig was produced by expectedAddress over
 // msgWithoutSig (the proto message with its proposer_sig field already zeroed).
-func (sm *StateMachine) verifyProposerSig(msgWithoutSig proto.Message, sig []byte, expectedAddress string) error {
+// slotID is used for warm key resolution; pass math.MaxUint32 to skip warm key lookup.
+func (sm *StateMachine) verifyProposerSig(msgWithoutSig proto.Message, sig []byte, expectedAddress string, slotID uint32) error {
 	data, err := deterministicMarshal.Marshal(msgWithoutSig)
 	if err != nil {
 		return fmt.Errorf("marshal for proposer sig: %w", err)
@@ -882,10 +940,31 @@ func (sm *StateMachine) verifyProposerSig(msgWithoutSig proto.Message, sig []byt
 	}
 
 	if recovered != expectedAddress {
+		if slotID != math.MaxUint32 && sm.resolveWarmKey(slotID, recovered, expectedAddress) {
+			return nil
+		}
 		return fmt.Errorf("%w: expected %s, got %s", types.ErrInvalidProposerSig, expectedAddress, recovered)
 	}
 
 	return nil
+}
+
+// resolveWarmKey checks if recovered is an authorized warm key for the given slot.
+// If already bound, checks the recorded address. Otherwise calls the resolver
+// callback and records the binding on success.
+func (sm *StateMachine) resolveWarmKey(slotID uint32, recovered, expected string) bool {
+	if warm, ok := sm.state.WarmKeys[slotID]; ok {
+		return warm == recovered
+	}
+	if sm.warmResolver == nil {
+		return false
+	}
+	ok, err := sm.warmResolver(recovered, expected)
+	if err != nil || !ok {
+		return false
+	}
+	sm.state.WarmKeys[slotID] = recovered
+	return true
 }
 
 func (sm *StateMachine) TotalSlots() uint32 {

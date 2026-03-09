@@ -99,6 +99,17 @@ func NewHost(
 			slotIDs[s.SlotID] = true
 		}
 	}
+
+	// Check state's WarmKeys for existing bindings.
+	if len(slotIDs) == 0 {
+		warmKeys := sm.WarmKeys()
+		for slotID, warmAddr := range warmKeys {
+			if warmAddr == addr {
+				slotIDs[slotID] = true
+			}
+		}
+	}
+
 	if len(slotIDs) == 0 {
 		return nil, fmt.Errorf("%w: %s", types.ErrHostNotInGroup, addr)
 	}
@@ -179,6 +190,13 @@ func (h *Host) SnapshotState() types.EscrowState {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return h.sm.SnapshotState()
+}
+
+// IsWarmKeyAddress returns true if addr is a known warm key in the current state.
+func (h *Host) IsWarmKeyAddress(addr string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.sm.IsWarmKeyAddress(addr)
 }
 
 func (h *Host) Signer() signing.Signer { return h.signer }
