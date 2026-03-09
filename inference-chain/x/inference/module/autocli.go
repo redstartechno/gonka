@@ -345,6 +345,12 @@ func (am AppModule) AutoCLIOptions() *autocliv1.ModuleOptions {
 					Short:          "Query all confirmation PoC events for an epoch",
 					PositionalArgs: []*autocliv1.PositionalArgDescriptor{{ProtoField: "epoch_index"}},
 				},
+				{
+					RpcMethod:      "SubnetEscrow",
+					Use:            "show-subnet-escrow [id]",
+					Short:          "Query a subnet escrow by ID",
+					PositionalArgs: []*autocliv1.PositionalArgDescriptor{{ProtoField: "id"}},
+				},
 				// this line is used by ignite scaffolding # autocli/query
 			},
 		},
@@ -499,6 +505,12 @@ func (am AppModule) AutoCLIOptions() *autocliv1.ModuleOptions {
 					Use:            "request-bridge-mint [amount] [destination-address] [target-chain-id]",
 					Short:          "Request minting of WGNK tokens on Ethereum by bridging native Gonka",
 					PositionalArgs: []*autocliv1.PositionalArgDescriptor{{ProtoField: "amount"}, {ProtoField: "destination_address"}, {ProtoField: "chain_id"}},
+				},
+				{
+					RpcMethod:      "CreateSubnetEscrow",
+					Use:            "create-subnet-escrow [amount]",
+					Short:          "Create a subnet escrow",
+					PositionalArgs: []*autocliv1.PositionalArgDescriptor{{ProtoField: "amount"}},
 				},
 				// this line is used by ignite scaffolding # autocli/tx
 			},

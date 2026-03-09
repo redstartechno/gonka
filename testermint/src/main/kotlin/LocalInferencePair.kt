@@ -294,6 +294,12 @@ data class LocalInferencePair(
         )
     }
 
+    fun createSubnetEscrow(amount: Long): TxResponse {
+        return this.submitTransaction(
+            listOf("inference", "create-subnet-escrow", amount.toString())
+        )
+    }
+
     fun withdrawCollateral(amount: Long): TxResponse {
         return this.submitTransaction(
             listOf(
