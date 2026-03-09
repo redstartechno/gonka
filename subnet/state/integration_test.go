@@ -78,6 +78,7 @@ func TestFullSession_HappyPath(t *testing.T) {
 				InputTokens:  80,
 				OutputTokens: 40,
 				ExecutorSlot: uint32(pf.executorIdx),
+				EscrowId:     escrowID,
 			}
 			proposerSig := testutil.SignProposerTx(t, hosts[pf.executorIdx], finishMsg)
 			finishMsg.ProposerSig = proposerSig
@@ -146,6 +147,7 @@ func TestFullSession_HappyPath(t *testing.T) {
 			InputTokens:  80,
 			OutputTokens: 40,
 			ExecutorSlot: uint32(pf.executorIdx),
+			EscrowId:     escrowID,
 		}
 		proposerSig := testutil.SignProposerTx(t, hosts[pf.executorIdx], finishMsg)
 		finishMsg.ProposerSig = proposerSig

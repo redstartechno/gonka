@@ -102,7 +102,7 @@ func NewStateMachine(
 func (sm *StateMachine) ApplyDiff(diff types.Diff) ([]byte, error) {
 	// 1. Verify user signature (covers nonce, txs, escrow_id, post_state_root).
 	diffContent := BuildDiffContent(sm.state.EscrowID, diff.Nonce, diff.Txs, diff.PostStateRoot)
-	data, err := proto.Marshal(diffContent)
+	data, err := deterministicMarshal.Marshal(diffContent)
 	if err != nil {
 		return nil, fmt.Errorf("marshal diff content: %w", err)
 	}
@@ -169,6 +169,7 @@ func (sm *StateMachine) applyCore(nonce uint64, txs []*types.SubnetTx, postState
 	}
 
 	if sm.state.Phase == types.PhaseFinalizing {
+		sm.recomputeCompliance()
 		sm.penalizeUnrevealedSeeds()
 
 		// Auto-transition Finalizing -> Settlement.
@@ -397,7 +398,7 @@ func (sm *StateMachine) applyConfirmStart(msg *types.MsgConfirmStart) error {
 		EscrowId:    sm.state.EscrowID,
 		ConfirmedAt: msg.ConfirmedAt,
 	}
-	receiptData, err := proto.Marshal(receiptContent)
+	receiptData, err := deterministicMarshal.Marshal(receiptContent)
 	if err != nil {
 		return fmt.Errorf("marshal executor receipt: %w", err)
 	}
@@ -439,6 +440,11 @@ func (sm *StateMachine) applyFinishInference(msg *types.MsgFinishInference) erro
 		return err
 	}
 
+	// Cross-session replay protection.
+	if msg.EscrowId != sm.state.EscrowID {
+		return fmt.Errorf("%w: expected %s, got %s", types.ErrEscrowIDMismatch, sm.state.EscrowID, msg.EscrowId)
+	}
+
 	// Compute actual cost.
 	tokenSum, ok := safeAdd(msg.InputTokens, msg.OutputTokens)
 	if !ok {
@@ -449,7 +455,7 @@ func (sm *StateMachine) applyFinishInference(msg *types.MsgFinishInference) erro
 		return types.ErrCostOverflow
 	}
 	if actualCost > rec.ReservedCost {
-		return types.ErrActualCostExceedsMax
+		actualCost = rec.ReservedCost
 	}
 
 	// Release surplus.
@@ -474,39 +480,7 @@ func (sm *StateMachine) applyValidation(msg *types.MsgValidation) error {
 		return fmt.Errorf("%w: inference %d", types.ErrInferenceNotFound, msg.InferenceId)
 	}
 
-	// No-op for terminal states (prevents mempool stall on redundant validations).
-	if rec.Status == types.StatusValidated || rec.Status == types.StatusInvalidated {
-		return nil
-	}
-
-	// Additional validator for already-challenged inference: record in bitmap.
-	if rec.Status == types.StatusChallenged {
-		if _, ok := sm.slotToAddress[msg.ValidatorSlot]; !ok {
-			return fmt.Errorf("%w: slot %d", types.ErrSlotNotInGroup, msg.ValidatorSlot)
-		}
-		if msg.ValidatorSlot == rec.ExecutorSlot {
-			return types.ErrSelfValidation
-		}
-		// Dedup by address: check if any slot with same address already has bit set.
-		validatorAddr := sm.slotToAddress[msg.ValidatorSlot]
-		for _, slot := range slices.Sorted(maps.Keys(sm.slotToAddress)) {
-			if sm.slotToAddress[slot] == validatorAddr && rec.ValidatedBy.IsSet(slot) {
-				return fmt.Errorf("%w: address %s already validated via slot %d", types.ErrDuplicateValidation, validatorAddr, slot)
-			}
-		}
-		// Verify proposer signature from validator.
-		clonedV := proto.Clone(msg).(*types.MsgValidation)
-		clonedV.ProposerSig = nil
-		if err := sm.verifyProposerSig(clonedV, msg.ProposerSig, sm.slotToAddress[msg.ValidatorSlot]); err != nil {
-			return err
-		}
-		rec.ValidatedBy.Set(msg.ValidatorSlot)
-		return nil
-	}
-
-	if rec.Status != types.StatusFinished {
-		return fmt.Errorf("%w: expected finished, got %d", types.ErrInvalidTransition, rec.Status)
-	}
+	// Common pre-checks.
 	if _, ok := sm.slotToAddress[msg.ValidatorSlot]; !ok {
 		return fmt.Errorf("%w: slot %d", types.ErrSlotNotInGroup, msg.ValidatorSlot)
 	}
@@ -514,22 +488,65 @@ func (sm *StateMachine) applyValidation(msg *types.MsgValidation) error {
 		return types.ErrSelfValidation
 	}
 
-	// Verify proposer signature from validator.
-	clonedV := proto.Clone(msg).(*types.MsgValidation)
-	clonedV.ProposerSig = nil
-	if err := sm.verifyProposerSig(clonedV, msg.ProposerSig, sm.slotToAddress[msg.ValidatorSlot]); err != nil {
-		return err
+	// Status gate + dedup.
+	switch rec.Status {
+	case types.StatusValidated, types.StatusInvalidated:
+		// Late compliance credit. Silent no-op if duplicate.
+		if found, _ := sm.addressHasValidated(rec, msg.ValidatorSlot); found {
+			return nil
+		}
+	case types.StatusChallenged:
+		// Additional validation during challenge. Silent no-op if duplicate.
+		if found, _ := sm.addressHasValidated(rec, msg.ValidatorSlot); found {
+			return nil
+		}
+	case types.StatusFinished:
+		// First validation or additional on Finished. Error if duplicate.
+		if found, existingSlot := sm.addressHasValidated(rec, msg.ValidatorSlot); found {
+			return fmt.Errorf("%w: address %s already validated via slot %d",
+				types.ErrDuplicateValidation, sm.slotToAddress[msg.ValidatorSlot], existingSlot)
+		}
+	default:
+		return fmt.Errorf("%w: expected finished, got %d", types.ErrInvalidTransition, rec.Status)
 	}
 
-	// Always transition to Challenged. Terminal states (Validated/Invalidated) are
-	// only reached through vote threshold in applyValidationVote.
-	// Store the initial validator's judgment for later seed-reveal verification.
-	rec.Status = types.StatusChallenged
-	rec.ValidatorSlot = msg.ValidatorSlot
-	rec.ValidatorValid = msg.Valid
+	// Proposer sig + escrow_id (expensive, after dedup).
+	cloned := proto.Clone(msg).(*types.MsgValidation)
+	cloned.ProposerSig = nil
+	if err := sm.verifyProposerSig(cloned, msg.ProposerSig, sm.slotToAddress[msg.ValidatorSlot]); err != nil {
+		return err
+	}
+	if msg.EscrowId != sm.state.EscrowID {
+		return fmt.Errorf("%w: expected %s, got %s", types.ErrEscrowIDMismatch, sm.state.EscrowID, msg.EscrowId)
+	}
+
+	// Mutation: set bitmap, count vote weight.
 	rec.ValidatedBy.Set(msg.ValidatorSlot)
 
+	// Count vote weight for Finished state (tallies accumulate before any challenge).
+	if rec.Status == types.StatusFinished {
+		validatorAddr := sm.slotToAddress[msg.ValidatorSlot]
+		weight := sm.addressToSlotCount[validatorAddr]
+		if msg.Valid {
+			rec.VotesValid += weight
+		} else {
+			rec.VotesInvalid += weight
+			rec.Status = types.StatusChallenged
+		}
+	}
+
 	return nil
+}
+
+// addressHasValidated checks if the address owning slotID has any slot bit set in ValidatedBy.
+func (sm *StateMachine) addressHasValidated(rec *types.InferenceRecord, slotID uint32) (bool, uint32) {
+	addr := sm.slotToAddress[slotID]
+	for _, slot := range slices.Sorted(maps.Keys(sm.slotToAddress)) {
+		if sm.slotToAddress[slot] == addr && rec.ValidatedBy.IsSet(slot) {
+			return true, slot
+		}
+	}
+	return false, 0
 }
 
 func (sm *StateMachine) applyValidationVote(msg *types.MsgValidationVote) error {
@@ -550,12 +567,11 @@ func (sm *StateMachine) applyValidationVote(msg *types.MsgValidationVote) error 
 		return fmt.Errorf("%w: expected challenged, got %d", types.ErrInvalidTransition, rec.Status)
 	}
 
-	// Dedup by address: a multi-slot validator votes once for all its slots.
+	// Dedup: check ValidatedBy (unified bitmap for validators + voters).
 	voterAddr := sm.slotToAddress[msg.VoterSlot]
-	for _, slot := range slices.Sorted(maps.Keys(sm.slotToAddress)) {
-		if rec.VotedSlots.IsSet(slot) && sm.slotToAddress[slot] == voterAddr {
-			return fmt.Errorf("%w: slot %d (address %s already voted via slot %d)", types.ErrDuplicateVote, msg.VoterSlot, voterAddr, slot)
-		}
+	if found, existingSlot := sm.addressHasValidated(rec, msg.VoterSlot); found {
+		return fmt.Errorf("%w: slot %d (address %s already participated via slot %d)",
+			types.ErrDuplicateVote, msg.VoterSlot, voterAddr, existingSlot)
 	}
 
 	// Verify proposer signature from voter.
@@ -565,11 +581,16 @@ func (sm *StateMachine) applyValidationVote(msg *types.MsgValidationVote) error 
 		return err
 	}
 
-	// Mark ALL slots owned by this address as voted (deterministic dedup + hash).
+	// Cross-session replay protection.
+	if msg.EscrowId != sm.state.EscrowID {
+		return fmt.Errorf("%w: expected %s, got %s", types.ErrEscrowIDMismatch, sm.state.EscrowID, msg.EscrowId)
+	}
+
+	// Mark ALL slots owned by this address in ValidatedBy (unified bitmap).
 	weight := sm.addressToSlotCount[voterAddr]
 	for _, slot := range slices.Sorted(maps.Keys(sm.slotToAddress)) {
 		if sm.slotToAddress[slot] == voterAddr {
-			rec.VotedSlots.Set(slot)
+			rec.ValidatedBy.Set(slot)
 		}
 	}
 	if msg.VoteValid {
@@ -636,7 +657,7 @@ func (sm *StateMachine) applyTimeout(msg *types.MsgTimeoutInference) error {
 			Reason:      msg.Reason,
 			Accept:      vote.Accept,
 		}
-		voteData, err := proto.Marshal(voteContent)
+		voteData, err := deterministicMarshal.Marshal(voteContent)
 		if err != nil {
 			return fmt.Errorf("marshal timeout vote: %w", err)
 		}
@@ -693,6 +714,11 @@ func (sm *StateMachine) applyRevealSeed(msg *types.MsgRevealSeed) error {
 		return err
 	}
 
+	// Cross-session replay protection.
+	if msg.EscrowId != sm.state.EscrowID {
+		return fmt.Errorf("%w: expected %s, got %s", types.ErrEscrowIDMismatch, sm.state.EscrowID, msg.EscrowId)
+	}
+
 	// Verify seed signature recovers to slot owner (proves honest derivation).
 	seedAddr, err := sm.verifier.RecoverAddress([]byte(sm.state.EscrowID), msg.Signature)
 	if err != nil {
@@ -715,37 +741,38 @@ func (sm *StateMachine) applyRevealSeed(msg *types.MsgRevealSeed) error {
 		return err
 	}
 
-	// Store seed.
+	// Store seed. Compliance is computed later in recomputeCompliance.
 	sm.state.RevealedSeeds[msg.SlotId] = seed
 
-	// Compute compliance for this validator.
-	validatorSlotCount := sm.addressToSlotCount[revealerAddr]
-	executorSlotCount := uint32(0)
-	requiredValidations := uint32(0)
-	completedValidations := uint32(0)
+	return nil
+}
 
-	for _, infID := range slices.Sorted(maps.Keys(sm.state.Inferences)) {
-		rec := sm.state.Inferences[infID]
-		// Only consider finished-like statuses.
-		switch rec.Status {
-		case types.StatusFinished, types.StatusChallenged, types.StatusValidated, types.StatusInvalidated:
-		default:
-			continue
-		}
+// recomputeCompliance recalculates RequiredValidations and CompletedValidations
+// for all revealed seeds. Called during PhaseFinalizing so that MsgFinishInference
+// arriving in the same diff as MsgRevealSeed is counted.
+func (sm *StateMachine) recomputeCompliance() {
+	for revealSlot, seed := range sm.state.RevealedSeeds {
+		revealerAddr := sm.slotToAddress[revealSlot]
+		validatorSlotCount := sm.addressToSlotCount[revealerAddr]
+		requiredValidations := uint32(0)
+		completedValidations := uint32(0)
 
-		// Skip if executor is the revealer.
-		executorAddr := sm.slotToAddress[rec.ExecutorSlot]
-		if executorAddr == revealerAddr {
-			continue
-		}
+		for _, infID := range slices.Sorted(maps.Keys(sm.state.Inferences)) {
+			rec := sm.state.Inferences[infID]
+			switch rec.Status {
+			case types.StatusFinished, types.StatusChallenged, types.StatusValidated, types.StatusInvalidated:
+			default:
+				continue
+			}
 
-		executorSlotCount = sm.addressToSlotCount[executorAddr]
+			executorAddr := sm.slotToAddress[rec.ExecutorSlot]
+			if executorAddr == revealerAddr {
+				continue
+			}
 
-		if ShouldValidate(seed, infID, validatorSlotCount, executorSlotCount, sm.totalSlots, sm.state.Config.ValidationRate) {
-			requiredValidations++
-			// Check if this validator actually validated this inference (bitmap check).
-			// NOTE: if MsgFinishInference arrives after seed reveal, the inference is not counted in compliance.
-			if rec.Status == types.StatusChallenged || rec.Status == types.StatusValidated || rec.Status == types.StatusInvalidated {
+			executorSlotCount := sm.addressToSlotCount[executorAddr]
+			if ShouldValidate(seed, infID, validatorSlotCount, executorSlotCount, sm.totalSlots, sm.state.Config.ValidationRate) {
+				requiredValidations++
 				for _, vSlot := range slices.Sorted(maps.Keys(sm.slotToAddress)) {
 					if sm.slotToAddress[vSlot] == revealerAddr && rec.ValidatedBy.IsSet(vSlot) {
 						completedValidations++
@@ -754,19 +781,16 @@ func (sm *StateMachine) applyRevealSeed(msg *types.MsgRevealSeed) error {
 				}
 			}
 		}
-	}
 
-	// Write compliance to all HostStats entries owned by this address.
-	for _, slot := range slices.Sorted(maps.Keys(sm.slotToAddress)) {
-		if sm.slotToAddress[slot] == revealerAddr {
-			if hs, ok := sm.state.HostStats[slot]; ok {
-				hs.RequiredValidations = requiredValidations
-				hs.CompletedValidations = completedValidations
+		for _, slot := range slices.Sorted(maps.Keys(sm.slotToAddress)) {
+			if sm.slotToAddress[slot] == revealerAddr {
+				if hs, ok := sm.state.HostStats[slot]; ok {
+					hs.RequiredValidations = requiredValidations
+					hs.CompletedValidations = completedValidations
+				}
 			}
 		}
 	}
-
-	return nil
 }
 
 // penalizeUnrevealedSeeds sets RequiredValidations for unrevealed hosts.
@@ -847,7 +871,7 @@ func BuildDiffContent(escrowID string, nonce uint64, txs []*types.SubnetTx, post
 // verifyProposerSig verifies that sig was produced by expectedAddress over
 // msgWithoutSig (the proto message with its proposer_sig field already zeroed).
 func (sm *StateMachine) verifyProposerSig(msgWithoutSig proto.Message, sig []byte, expectedAddress string) error {
-	data, err := proto.Marshal(msgWithoutSig)
+	data, err := deterministicMarshal.Marshal(msgWithoutSig)
 	if err != nil {
 		return fmt.Errorf("marshal for proposer sig: %w", err)
 	}

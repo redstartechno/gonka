@@ -30,6 +30,7 @@ message MsgFinishInference {
   uint64 output_tokens = 4;
   uint32 executor_slot = 5;
   bytes  proposer_sig = 6;
+  string escrow_id = 7;
 }
 
 message MsgTimeoutInference {
@@ -49,6 +50,7 @@ message MsgValidation {
   uint32 validator_slot = 2;
   bool   valid = 3;
   bytes  proposer_sig = 4;
+  string escrow_id = 5;
 }
 
 message MsgValidationVote {
@@ -56,12 +58,14 @@ message MsgValidationVote {
   uint32 voter_slot = 2;
   bool   vote_valid = 3;
   bytes  proposer_sig = 4;
+  string escrow_id = 5;
 }
 
 message MsgRevealSeed {
   uint32 slot_id = 1;
   bytes  signature = 2;
   bytes  proposer_sig = 3;
+  string escrow_id = 4;
 }
 
 message MsgFinalizeRound {

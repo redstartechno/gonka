@@ -168,6 +168,7 @@ func TestApplyDiff_FinishInference(t *testing.T) {
 	finishMsg := &types.MsgFinishInference{
 		InferenceId: 1, ResponseHash: []byte("response"),
 		InputTokens: 80, OutputTokens: 40, ExecutorSlot: 1,
+		EscrowId: "escrow-1",
 	}
 	finishMsg.ProposerSig = testutil.SignProposerTx(t, hosts[1], finishMsg)
 
@@ -205,6 +206,7 @@ func TestApplyDiff_FinishInference_WrongExecutorSlot(t *testing.T) {
 	finishMsg := &types.MsgFinishInference{
 		InferenceId: 1, ResponseHash: []byte("response"),
 		InputTokens: 80, OutputTokens: 40, ExecutorSlot: 2, // Wrong! Should be 1.
+		EscrowId: "escrow-1",
 	}
 	finishMsg.ProposerSig = testutil.SignProposerTx(t, hosts[0], finishMsg)
 
@@ -235,6 +237,7 @@ func TestApplyDiff_FinishInference_InvalidProposerSig(t *testing.T) {
 	finishMsg := &types.MsgFinishInference{
 		InferenceId: 1, ResponseHash: []byte("response"),
 		InputTokens: 80, OutputTokens: 40, ExecutorSlot: 1,
+		EscrowId: "escrow-1",
 	}
 	finishMsg.ProposerSig = testutil.SignProposerTx(t, outsider, finishMsg)
 
@@ -252,8 +255,8 @@ func TestApplyDiff_Validation_Valid(t *testing.T) {
 
 	applyStartConfirmFinish(t, sm, user, hosts, 1)
 
-	// Validation always transitions to Challenged first (prevents sybil bypass).
-	valMsg := &types.MsgValidation{InferenceId: 1, ValidatorSlot: 0, Valid: true}
+	// valid=true on Finished stays Finished (compliance credit only, no state transition).
+	valMsg := &types.MsgValidation{InferenceId: 1, ValidatorSlot: 0, Valid: true, EscrowId: "escrow-1"}
 	valMsg.ProposerSig = testutil.SignProposerTx(t, hosts[0], valMsg)
 
 	nonce := sm.SnapshotState().LatestNonce + 1
@@ -262,25 +265,9 @@ func TestApplyDiff_Validation_Valid(t *testing.T) {
 	require.NoError(t, err)
 
 	st := sm.SnapshotState()
-	require.Equal(t, types.StatusChallenged, st.Inferences[1].Status)
-	require.Equal(t, uint32(0), st.Inferences[1].ValidatorSlot)
-	require.True(t, st.Inferences[1].ValidatorValid)
-
-	// Reach StatusValidated through vote threshold (>5/2=2 valid votes).
-	var voteTxs []*types.SubnetTx
-	for _, slot := range []uint32{0, 2, 3} {
-		voteMsg := &types.MsgValidationVote{InferenceId: 1, VoterSlot: slot, VoteValid: true}
-		voteMsg.ProposerSig = testutil.SignProposerTx(t, hosts[slot], voteMsg)
-		voteTxs = append(voteTxs, txVote(voteMsg))
-	}
-
-	nonce = sm.SnapshotState().LatestNonce + 1
-	diff = testutil.SignDiff(t, user, "escrow-1", nonce, voteTxs)
-	_, err = sm.ApplyDiff(diff)
-	require.NoError(t, err)
-
-	st = sm.SnapshotState()
-	require.Equal(t, types.StatusValidated, st.Inferences[1].Status)
+	require.Equal(t, types.StatusFinished, st.Inferences[1].Status)
+	require.True(t, st.Inferences[1].ValidatedBy.IsSet(0), "validator bit must be set")
+	require.Equal(t, uint32(1), st.Inferences[1].VotesValid, "valid vote weight must be recorded")
 }
 
 func TestApplyDiff_Validation_SelfValidation(t *testing.T) {
@@ -289,7 +276,7 @@ func TestApplyDiff_Validation_SelfValidation(t *testing.T) {
 
 	applyStartConfirmFinish(t, sm, user, hosts, 1)
 
-	valMsg := &types.MsgValidation{InferenceId: 1, ValidatorSlot: 1, Valid: true}
+	valMsg := &types.MsgValidation{InferenceId: 1, ValidatorSlot: 1, Valid: true, EscrowId: "escrow-1"}
 	valMsg.ProposerSig = testutil.SignProposerTx(t, hosts[1], valMsg)
 
 	nonce := sm.SnapshotState().LatestNonce + 1
@@ -308,19 +295,22 @@ func TestApplyDiff_Validation_Invalid_ChallengeVoting(t *testing.T) {
 	applyStartConfirmFinish(t, sm, user, hosts, 1)
 
 	// Validate (valid=false) -> challenged.
-	valMsg := &types.MsgValidation{InferenceId: 1, ValidatorSlot: 0, Valid: false}
+	valMsg := &types.MsgValidation{InferenceId: 1, ValidatorSlot: 0, Valid: false, EscrowId: "escrow-1"}
 	valMsg.ProposerSig = testutil.SignProposerTx(t, hosts[0], valMsg)
 
 	nonce := sm.SnapshotState().LatestNonce + 1
 	diff := testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{txValidation(valMsg)})
 	_, err := sm.ApplyDiff(diff)
 	require.NoError(t, err)
-	require.Equal(t, types.StatusChallenged, sm.SnapshotState().Inferences[1].Status)
+	st := sm.SnapshotState()
+	require.Equal(t, types.StatusChallenged, st.Inferences[1].Status)
+	require.Equal(t, uint32(1), st.Inferences[1].VotesInvalid, "challenger weight must be pre-counted")
 
-	// Vote invalid from 3 slots -> majority (>5/2=2) -> invalidated.
+	// Vote invalid from slots 2,3 (not 0 -- challenger already participated via ValidatedBy).
+	// Challenger weight=1 + 2 voters = 3 > threshold 2 -> invalidated.
 	var voteTxs []*types.SubnetTx
-	for _, slot := range []uint32{0, 2, 3} {
-		voteMsg := &types.MsgValidationVote{InferenceId: 1, VoterSlot: slot, VoteValid: false}
+	for _, slot := range []uint32{2, 3} {
+		voteMsg := &types.MsgValidationVote{InferenceId: 1, VoterSlot: slot, VoteValid: false, EscrowId: "escrow-1"}
 		voteMsg.ProposerSig = testutil.SignProposerTx(t, hosts[slot], voteMsg)
 		voteTxs = append(voteTxs, txVote(voteMsg))
 	}
@@ -629,6 +619,7 @@ func TestApplyDiff_FinalizeRound_HostTxsStillAccepted(t *testing.T) {
 	finishMsg := &types.MsgFinishInference{
 		InferenceId: 1, ResponseHash: []byte("response"),
 		InputTokens: 80, OutputTokens: 40, ExecutorSlot: 1,
+		EscrowId: "escrow-1",
 	}
 	finishMsg.ProposerSig = testutil.SignProposerTx(t, hosts[1], finishMsg)
 
@@ -748,6 +739,7 @@ func TestApplyDiff_FullLifecycle(t *testing.T) {
 		finishMsg := &types.MsgFinishInference{
 			InferenceId: infID, ResponseHash: []byte("response"),
 			InputTokens: 80, OutputTokens: 40, ExecutorSlot: uint32(executorSlotIdx),
+			EscrowId: "escrow-1",
 		}
 		finishMsg.ProposerSig = testutil.SignProposerTx(t, hosts[executorSlotIdx], finishMsg)
 		nonce++
@@ -760,25 +752,26 @@ func TestApplyDiff_FullLifecycle(t *testing.T) {
 		}
 
 		if outcome == "validated" {
+			// Challenge with valid=false to trigger Challenged, then vote valid.
 			validatorSlot := uint32((executorSlotIdx + 1) % uint64(len(hosts)))
-			valMsg := &types.MsgValidation{InferenceId: infID, ValidatorSlot: validatorSlot, Valid: true}
+			valMsg := &types.MsgValidation{InferenceId: infID, ValidatorSlot: validatorSlot, Valid: false, EscrowId: "escrow-1"}
 			valMsg.ProposerSig = testutil.SignProposerTx(t, hosts[validatorSlot], valMsg)
 			nonce++
 			diff = testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{txValidation(valMsg)})
 			_, err = sm.ApplyDiff(diff)
 			require.NoError(t, err)
 
-			// Validation always goes to Challenged first. Reach Validated via votes.
+			// Vote valid to reach Validated. Skip executor and challenger (already in ValidatedBy).
 			var voteTxs []*types.SubnetTx
 			votedCount := 0
 			for slot := uint32(0); slot < uint32(len(hosts)); slot++ {
-				if slot == uint32(executorSlotIdx) {
+				if slot == uint32(executorSlotIdx) || slot == validatorSlot {
 					continue
 				}
 				if votedCount >= 3 {
 					break
 				}
-				voteMsg := &types.MsgValidationVote{InferenceId: infID, VoterSlot: slot, VoteValid: true}
+				voteMsg := &types.MsgValidationVote{InferenceId: infID, VoterSlot: slot, VoteValid: true, EscrowId: "escrow-1"}
 				voteMsg.ProposerSig = testutil.SignProposerTx(t, hosts[slot], voteMsg)
 				voteTxs = append(voteTxs, txVote(voteMsg))
 				votedCount++
@@ -792,7 +785,7 @@ func TestApplyDiff_FullLifecycle(t *testing.T) {
 
 		if outcome == "invalidated" {
 			validatorSlot := uint32((executorSlotIdx + 1) % uint64(len(hosts)))
-			valMsg := &types.MsgValidation{InferenceId: infID, ValidatorSlot: validatorSlot, Valid: false}
+			valMsg := &types.MsgValidation{InferenceId: infID, ValidatorSlot: validatorSlot, Valid: false, EscrowId: "escrow-1"}
 			valMsg.ProposerSig = testutil.SignProposerTx(t, hosts[validatorSlot], valMsg)
 			nonce++
 			diff = testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{txValidation(valMsg)})
@@ -808,7 +801,7 @@ func TestApplyDiff_FullLifecycle(t *testing.T) {
 				if votedCount >= 3 {
 					break
 				}
-				voteMsg := &types.MsgValidationVote{InferenceId: infID, VoterSlot: slot, VoteValid: false}
+				voteMsg := &types.MsgValidationVote{InferenceId: infID, VoterSlot: slot, VoteValid: false, EscrowId: "escrow-1"}
 				voteMsg.ProposerSig = testutil.SignProposerTx(t, hosts[slot], voteMsg)
 				voteTxs = append(voteTxs, txVote(voteMsg))
 				votedCount++
@@ -921,17 +914,19 @@ func TestApplyDiff_ValidationVote_AlreadyResolved(t *testing.T) {
 	applyStartConfirmFinish(t, sm, user, hosts, 1)
 
 	// Challenge.
-	valMsg := &types.MsgValidation{InferenceId: 1, ValidatorSlot: 0, Valid: false}
+	valMsg := &types.MsgValidation{InferenceId: 1, ValidatorSlot: 0, Valid: false, EscrowId: "escrow-1"}
 	valMsg.ProposerSig = testutil.SignProposerTx(t, hosts[0], valMsg)
 	nonce := sm.SnapshotState().LatestNonce + 1
 	diff := testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{txValidation(valMsg)})
 	_, err := sm.ApplyDiff(diff)
 	require.NoError(t, err)
 
-	// 4 votes batched in one diff. 3 are enough to resolve; 4th should silently succeed.
+	// 3 votes batched (skip slot 0 -- challenger already in ValidatedBy).
+	// Challenger weight=1 + 3 voters = 4 > threshold 2 -> invalidated.
+	// 4th vote (slot 4) arrives after resolution -> silently succeeds.
 	var voteTxs []*types.SubnetTx
-	for _, slot := range []uint32{0, 2, 3, 4} {
-		voteMsg := &types.MsgValidationVote{InferenceId: 1, VoterSlot: slot, VoteValid: false}
+	for _, slot := range []uint32{2, 3, 4} {
+		voteMsg := &types.MsgValidationVote{InferenceId: 1, VoterSlot: slot, VoteValid: false, EscrowId: "escrow-1"}
 		voteMsg.ProposerSig = testutil.SignProposerTx(t, hosts[slot], voteMsg)
 		voteTxs = append(voteTxs, txVote(voteMsg))
 	}
@@ -999,6 +994,7 @@ func applyStartConfirmFinish(t *testing.T, sm *StateMachine, user *signing.Secp2
 	finishMsg := &types.MsgFinishInference{
 		InferenceId: inferenceID, ResponseHash: []byte("response"),
 		InputTokens: 80, OutputTokens: 40, ExecutorSlot: uint32(executorSlotIdx),
+		EscrowId: "escrow-1",
 	}
 	finishMsg.ProposerSig = testutil.SignProposerTx(t, hosts[executorSlotIdx], finishMsg)
 	nonce++
@@ -1025,6 +1021,7 @@ func TestApplyDiff_FinishInference_WrongProposer(t *testing.T) {
 	finishMsg := &types.MsgFinishInference{
 		InferenceId: 1, ResponseHash: []byte("response"),
 		InputTokens: 80, OutputTokens: 40, ExecutorSlot: 1,
+		EscrowId: "escrow-1",
 	}
 	finishMsg.ProposerSig = testutil.SignProposerTx(t, hosts[0], finishMsg)
 
@@ -1041,7 +1038,7 @@ func TestApplyDiff_Validation_WrongProposer(t *testing.T) {
 	applyStartConfirmFinish(t, sm, user, hosts, 1)
 
 	// Validator is slot 0, but sign with hosts[2] (in group, wrong slot).
-	valMsg := &types.MsgValidation{InferenceId: 1, ValidatorSlot: 0, Valid: true}
+	valMsg := &types.MsgValidation{InferenceId: 1, ValidatorSlot: 0, Valid: true, EscrowId: "escrow-1"}
 	valMsg.ProposerSig = testutil.SignProposerTx(t, hosts[2], valMsg)
 
 	nonce := sm.LatestNonce() + 1
@@ -1060,7 +1057,7 @@ func TestApplyDiff_ValidationVote_WrongProposer(t *testing.T) {
 	applyStartConfirmFinish(t, sm, user, hosts, 1)
 
 	// Challenge.
-	valMsg := &types.MsgValidation{InferenceId: 1, ValidatorSlot: 0, Valid: false}
+	valMsg := &types.MsgValidation{InferenceId: 1, ValidatorSlot: 0, Valid: false, EscrowId: "escrow-1"}
 	valMsg.ProposerSig = testutil.SignProposerTx(t, hosts[0], valMsg)
 	nonce := sm.LatestNonce() + 1
 	diff := testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{txValidation(valMsg)})
@@ -1068,7 +1065,7 @@ func TestApplyDiff_ValidationVote_WrongProposer(t *testing.T) {
 	require.NoError(t, err)
 
 	// Vote from slot 2, but sign with hosts[3] (in group, wrong slot).
-	voteMsg := &types.MsgValidationVote{InferenceId: 1, VoterSlot: 2, VoteValid: false}
+	voteMsg := &types.MsgValidationVote{InferenceId: 1, VoterSlot: 2, VoteValid: false, EscrowId: "escrow-1"}
 	voteMsg.ProposerSig = testutil.SignProposerTx(t, hosts[3], voteMsg)
 
 	nonce = sm.LatestNonce() + 1
@@ -1090,7 +1087,7 @@ func TestApplyDiff_RevealSeed_WrongProposer(t *testing.T) {
 
 	// RevealSeed from slot 0, signed by hosts[1] (in group, wrong slot).
 	seedSig, _ := hosts[0].Sign([]byte("escrow-1"))
-	seedMsg := &types.MsgRevealSeed{SlotId: 0, Signature: seedSig}
+	seedMsg := &types.MsgRevealSeed{SlotId: 0, Signature: seedSig, EscrowId: "escrow-1"}
 	seedMsg.ProposerSig = testutil.SignProposerTx(t, hosts[1], seedMsg)
 
 	diff = testutil.SignDiff(t, user, "escrow-1", 2, []*types.SubnetTx{txRevealSeed(seedMsg)})
@@ -1110,7 +1107,7 @@ func TestApplyDiff_RevealSeed_InvalidSlot(t *testing.T) {
 	require.NoError(t, err)
 
 	// RevealSeed with slot 99 (not in group).
-	seedMsg := &types.MsgRevealSeed{SlotId: 99, Signature: []byte("seed")}
+	seedMsg := &types.MsgRevealSeed{SlotId: 99, Signature: []byte("seed"), EscrowId: "escrow-1"}
 	seedMsg.ProposerSig = testutil.SignProposerTx(t, hosts[0], seedMsg)
 
 	diff = testutil.SignDiff(t, user, "escrow-1", 2, []*types.SubnetTx{txRevealSeed(seedMsg)})
@@ -1171,6 +1168,7 @@ func TestApplyDiff_AtomicRollback(t *testing.T) {
 	finishMsg := &types.MsgFinishInference{
 		InferenceId: 1, ResponseHash: []byte("response"),
 		InputTokens: 80, OutputTokens: 40, ExecutorSlot: 2, // Wrong executor slot.
+		EscrowId: "escrow-1",
 	}
 	finishMsg.ProposerSig = testutil.SignProposerTx(t, hosts[2], finishMsg)
 
@@ -1192,7 +1190,8 @@ func TestApplyDiff_AtomicRollback(t *testing.T) {
 
 func TestAttack_SybilValidationBypass(t *testing.T) {
 	// Attack: attacker with 2 slots executes on slot A, submits MsgValidation(Valid=true)
-	// from slot B. Without the fix, inference instantly becomes StatusValidated (terminal).
+	// from slot B. With the new model, valid=true stays Finished -- sybil bypass is
+	// prevented by design since only valid=false triggers Challenged.
 	hosts := []*signing.Secp256k1Signer{
 		testutil.MustGenerateKey(t), testutil.MustGenerateKey(t), testutil.MustGenerateKey(t),
 		testutil.MustGenerateKey(t), testutil.MustGenerateKey(t),
@@ -1201,8 +1200,8 @@ func TestAttack_SybilValidationBypass(t *testing.T) {
 
 	applyStartConfirmFinish(t, sm, user, hosts, 1)
 
-	// Slot 0 submits MsgValidation(Valid=true). Must NOT become StatusValidated.
-	valMsg := &types.MsgValidation{InferenceId: 1, ValidatorSlot: 0, Valid: true}
+	// Slot 0 submits MsgValidation(Valid=true). Must stay Finished (no state transition).
+	valMsg := &types.MsgValidation{InferenceId: 1, ValidatorSlot: 0, Valid: true, EscrowId: "escrow-1"}
 	valMsg.ProposerSig = testutil.SignProposerTx(t, hosts[0], valMsg)
 
 	nonce := sm.SnapshotState().LatestNonce + 1
@@ -1211,8 +1210,8 @@ func TestAttack_SybilValidationBypass(t *testing.T) {
 	require.NoError(t, err)
 
 	st := sm.SnapshotState()
-	require.Equal(t, types.StatusChallenged, st.Inferences[1].Status,
-		"validation must always go to Challenged, not directly to Validated")
+	require.Equal(t, types.StatusFinished, st.Inferences[1].Status,
+		"valid=true must not change status from Finished")
 }
 
 func TestApplyDiff_Validation_MultipleValidators(t *testing.T) {
@@ -1226,7 +1225,7 @@ func TestApplyDiff_Validation_MultipleValidators(t *testing.T) {
 	applyStartConfirmFinish(t, sm, user, hosts, 1)
 
 	// First validation -> Challenged.
-	valMsg := &types.MsgValidation{InferenceId: 1, ValidatorSlot: 0, Valid: false}
+	valMsg := &types.MsgValidation{InferenceId: 1, ValidatorSlot: 0, Valid: false, EscrowId: "escrow-1"}
 	valMsg.ProposerSig = testutil.SignProposerTx(t, hosts[0], valMsg)
 	nonce := sm.SnapshotState().LatestNonce + 1
 	diff := testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{txValidation(valMsg)})
@@ -1239,7 +1238,7 @@ func TestApplyDiff_Validation_MultipleValidators(t *testing.T) {
 	require.Equal(t, expectedBitmap1, rec.ValidatedBy, "first validator bit must be set")
 
 	// Second validation from different host -> bitmap updated.
-	valMsg2 := &types.MsgValidation{InferenceId: 1, ValidatorSlot: 2, Valid: true}
+	valMsg2 := &types.MsgValidation{InferenceId: 1, ValidatorSlot: 2, Valid: true, EscrowId: "escrow-1"}
 	valMsg2.ProposerSig = testutil.SignProposerTx(t, hosts[2], valMsg2)
 	nonce = sm.SnapshotState().LatestNonce + 1
 	diff = testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{txValidation(valMsg2)})
@@ -1267,8 +1266,8 @@ func TestApplyDiff_Validation_DuplicateAddress(t *testing.T) {
 	// Inference 1: executor = group[1%4].SlotID = 1 (owned by signer[0]).
 	applyStartConfirmFinishMultiSlot(t, sm, user, signers, group, 1)
 
-	// First validation from signer[1] (slot 2) -> Challenged.
-	valMsg := &types.MsgValidation{InferenceId: 1, ValidatorSlot: 2, Valid: true}
+	// First validation from signer[1] (slot 2), valid=true -> stays Finished.
+	valMsg := &types.MsgValidation{InferenceId: 1, ValidatorSlot: 2, Valid: true, EscrowId: "escrow-1"}
 	valMsg.ProposerSig = testutil.SignProposerTx(t, signers[1], valMsg)
 	nonce := sm.SnapshotState().LatestNonce + 1
 	diff := testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{txValidation(valMsg)})
@@ -1276,7 +1275,7 @@ func TestApplyDiff_Validation_DuplicateAddress(t *testing.T) {
 	require.NoError(t, err)
 
 	// Same address (signer[1]) tries again from slot 2 -> ErrDuplicateValidation.
-	valMsg2 := &types.MsgValidation{InferenceId: 1, ValidatorSlot: 2, Valid: false}
+	valMsg2 := &types.MsgValidation{InferenceId: 1, ValidatorSlot: 2, Valid: false, EscrowId: "escrow-1"}
 	valMsg2.ProposerSig = testutil.SignProposerTx(t, signers[1], valMsg2)
 	nonce = sm.SnapshotState().LatestNonce + 1
 	diff = testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{txValidation(valMsg2)})
@@ -1300,7 +1299,7 @@ func TestApplyDiff_ValidationVote_MultiSlotWeight(t *testing.T) {
 	applyStartConfirmFinishMultiSlot(t, sm, user, signers, group, 1)
 
 	// Challenge.
-	valMsg := &types.MsgValidation{InferenceId: 1, ValidatorSlot: 2, Valid: false}
+	valMsg := &types.MsgValidation{InferenceId: 1, ValidatorSlot: 2, Valid: false, EscrowId: "escrow-1"}
 	valMsg.ProposerSig = testutil.SignProposerTx(t, signers[1], valMsg)
 	nonce := sm.SnapshotState().LatestNonce + 1
 	diff := testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{txValidation(valMsg)})
@@ -1308,7 +1307,7 @@ func TestApplyDiff_ValidationVote_MultiSlotWeight(t *testing.T) {
 	require.NoError(t, err)
 
 	// Signer[0] votes invalid from slot 0. Weight = 2 (owns slots 0 and 1).
-	voteMsg := &types.MsgValidationVote{InferenceId: 1, VoterSlot: 0, VoteValid: false}
+	voteMsg := &types.MsgValidationVote{InferenceId: 1, VoterSlot: 0, VoteValid: false, EscrowId: "escrow-1"}
 	voteMsg.ProposerSig = testutil.SignProposerTx(t, signers[0], voteMsg)
 	nonce = sm.SnapshotState().LatestNonce + 1
 	diff = testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{txVote(voteMsg)})
@@ -1316,36 +1315,45 @@ func TestApplyDiff_ValidationVote_MultiSlotWeight(t *testing.T) {
 	require.NoError(t, err)
 
 	st := sm.SnapshotState()
-	require.Equal(t, uint32(2), st.Inferences[1].VotesInvalid, "multi-slot vote should have weight 2")
+	// VotesInvalid = challenger weight (1) + voter weight (2) = 3.
+	require.Equal(t, uint32(3), st.Inferences[1].VotesInvalid, "challenger(1) + multi-slot voter(2) = 3")
 }
 
 func TestApplyDiff_ValidationVote_MultiSlotDedup(t *testing.T) {
 	// Same signer voting from two different owned slots must be rejected as duplicate.
+	// Use enough slots that the first vote alone doesn't resolve the challenge.
+	// 4 signers: signer[0] owns 2 slots (0,1), others own 1 each (2,3,4).
+	// Total 5 slots. VoteThreshold = 5/2 = 2. Need >2 weighted votes.
+	// Signer[0] weight=2, so one vote reaches threshold -- use more signers.
+	// 5 signers: signer[0] owns 2 slots (0,1), others own 1 each (2,3,4,5).
+	// Total 6 slots. VoteThreshold = 6/2 = 3. Signer[0] weight=2, won't resolve alone.
 	signers := []*signing.Secp256k1Signer{
 		testutil.MustGenerateKey(t), testutil.MustGenerateKey(t), testutil.MustGenerateKey(t),
+		testutil.MustGenerateKey(t), testutil.MustGenerateKey(t),
 	}
 	user := testutil.MustGenerateKey(t)
-	group := testutil.MakeMultiSlotGroup(signers, []int{2, 1, 1})
-	config := testutil.DefaultConfig(len(group))
+	group := testutil.MakeMultiSlotGroup(signers, []int{2, 1, 1, 1, 1})
+	config := testutil.DefaultConfig(len(group)) // VoteThreshold = 6/2 = 3
 	verifier := signing.NewSecp256k1Verifier()
 	sm := NewStateMachine("escrow-1", config, group, 10000, user.Address(), verifier)
 
+	// Inference 1: executor = group[1%6].SlotID = 1 (owned by signer[0]).
 	applyStartConfirmFinishMultiSlot(t, sm, user, signers, group, 1)
 
-	// Challenge.
-	valMsg := &types.MsgValidation{InferenceId: 1, ValidatorSlot: 2, Valid: false}
+	// Challenge from signer[1] (slot 2).
+	valMsg := &types.MsgValidation{InferenceId: 1, ValidatorSlot: 2, Valid: false, EscrowId: "escrow-1"}
 	valMsg.ProposerSig = testutil.SignProposerTx(t, signers[1], valMsg)
 	nonce := sm.SnapshotState().LatestNonce + 1
 	diff := testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{txValidation(valMsg)})
 	_, err := sm.ApplyDiff(diff)
 	require.NoError(t, err)
 
-	// Signer[0] votes from slot 0.
-	vote1 := &types.MsgValidationVote{InferenceId: 1, VoterSlot: 0, VoteValid: false}
+	// Signer[0] votes from slot 0 (weight=2). VotesInvalid = 1+2 = 3, not > 3. Still Challenged.
+	vote1 := &types.MsgValidationVote{InferenceId: 1, VoterSlot: 0, VoteValid: false, EscrowId: "escrow-1"}
 	vote1.ProposerSig = testutil.SignProposerTx(t, signers[0], vote1)
 
 	// Signer[0] votes again from slot 1 (other owned slot) -> must be rejected.
-	vote2 := &types.MsgValidationVote{InferenceId: 1, VoterSlot: 1, VoteValid: false}
+	vote2 := &types.MsgValidationVote{InferenceId: 1, VoterSlot: 1, VoteValid: false, EscrowId: "escrow-1"}
 	vote2.ProposerSig = testutil.SignProposerTx(t, signers[0], vote2)
 
 	nonce = sm.SnapshotState().LatestNonce + 1
@@ -1389,6 +1397,7 @@ func applyStartConfirmFinishMultiSlot(t *testing.T, sm *StateMachine, user *sign
 	finishMsg := &types.MsgFinishInference{
 		InferenceId: inferenceID, ResponseHash: []byte("response"),
 		InputTokens: 80, OutputTokens: 40, ExecutorSlot: executorSlot.SlotID,
+		EscrowId: "escrow-1",
 	}
 	finishMsg.ProposerSig = testutil.SignProposerTx(t, executorSigner, finishMsg)
 	nonce++
@@ -1619,8 +1628,8 @@ func TestApplyDiff_RevealSeed_CompletedValidationsCounted(t *testing.T) {
 	// ShouldValidate(seed, 1) = true with this fixed key. So it counts as required.
 	applyStartConfirmFinish(t, sm, user, hosts, 1)
 
-	// hosts[0] validates inference 1: Finished -> Challenged.
-	valMsg := &types.MsgValidation{InferenceId: 1, ValidatorSlot: 0, Valid: true}
+	// hosts[0] validates inference 1: valid=true stays Finished, sets bitmap.
+	valMsg := &types.MsgValidation{InferenceId: 1, ValidatorSlot: 0, Valid: true, EscrowId: "escrow-1"}
 	valMsg.ProposerSig = testutil.SignProposerTx(t, hosts[0], valMsg)
 	nonce := sm.LatestNonce() + 1
 	diff := testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{txValidation(valMsg)})
@@ -1646,7 +1655,7 @@ func TestApplyDiff_RevealSeed_CompletedValidationsCounted(t *testing.T) {
 	hs := st.HostStats[0]
 
 	// ShouldValidate(seed, 1) = true for this key.
-	// hosts[0] validated inference 1 (ValidatorSlot=0, status=Challenged).
+	// hosts[0] validated inference 1 (bitmap set, status=Finished).
 	require.Equal(t, uint32(1), hs.RequiredValidations,
 		"inference 1 should require validation")
 	require.Equal(t, uint32(1), hs.CompletedValidations,
@@ -1671,16 +1680,16 @@ func TestApplyDiff_Validation_MultipleValidators_ComplianceCredit(t *testing.T) 
 	// Inference 1: executor = slot 1%3=1 (hosts[1]).
 	applyStartConfirmFinish(t, sm, user, hosts, 1)
 
-	// hosts[0] validates inference 1: Finished -> Challenged.
-	valMsg := &types.MsgValidation{InferenceId: 1, ValidatorSlot: 0, Valid: true}
+	// hosts[0] validates inference 1: valid=true stays Finished, sets bitmap.
+	valMsg := &types.MsgValidation{InferenceId: 1, ValidatorSlot: 0, Valid: true, EscrowId: "escrow-1"}
 	valMsg.ProposerSig = testutil.SignProposerTx(t, hosts[0], valMsg)
 	nonce := sm.LatestNonce() + 1
 	diff := testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{txValidation(valMsg)})
 	_, err := sm.ApplyDiff(diff)
 	require.NoError(t, err)
 
-	// hosts[2] also validates inference 1: records in bitmap.
-	valMsg2 := &types.MsgValidation{InferenceId: 1, ValidatorSlot: 2, Valid: true}
+	// hosts[2] also validates inference 1: valid=true, stays Finished, sets bitmap.
+	valMsg2 := &types.MsgValidation{InferenceId: 1, ValidatorSlot: 2, Valid: true, EscrowId: "escrow-1"}
 	valMsg2.ProposerSig = testutil.SignProposerTx(t, hosts[2], valMsg2)
 	nonce = sm.LatestNonce() + 1
 	diff = testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{txValidation(valMsg2)})
@@ -1893,9 +1902,10 @@ func TestApplyDiff_RevealSeed_ForgeSeedSig(t *testing.T) {
 	seedMsg := &types.MsgRevealSeed{
 		SlotId:    0,
 		Signature: wrongSeedSig,
+		EscrowId: "escrow-1",
 	}
 	// Proposer sig is correct (from hosts[0]).
-	cloned := &types.MsgRevealSeed{SlotId: 0, Signature: wrongSeedSig}
+	cloned := &types.MsgRevealSeed{SlotId: 0, Signature: wrongSeedSig, EscrowId: "escrow-1"}
 	seedMsg.ProposerSig = testutil.SignProposerTx(t, hosts[0], cloned)
 
 	nonce++
@@ -2131,6 +2141,7 @@ func TestPhase_PenaltyFinality(t *testing.T) {
 	finishMsg := &types.MsgFinishInference{
 		InferenceId: 1, ResponseHash: []byte("resp"),
 		InputTokens: 80, OutputTokens: 40, ExecutorSlot: 1,
+		EscrowId: "escrow-1",
 	}
 	finishMsg.ProposerSig = testutil.SignProposerTx(t, hosts[1], finishMsg)
 	diff = testutil.SignDiff(t, user, "escrow-1", 3, []*types.SubnetTx{txFinish(finishMsg)})
@@ -2157,4 +2168,249 @@ func TestPhase_PenaltyFinality(t *testing.T) {
 	// Penalty is permanent: CompletedValidations stays 0.
 	require.Equal(t, uint32(0), st.HostStats[0].CompletedValidations)
 	require.Equal(t, uint32(0), st.HostStats[2].CompletedValidations)
+}
+
+// --- Security fix tests ---
+
+func TestReplayAttack_CrossEscrow(t *testing.T) {
+	// A valid proposer sig from session A must be rejected in session B.
+	hosts := []*signing.Secp256k1Signer{testutil.MustGenerateKey(t), testutil.MustGenerateKey(t), testutil.MustGenerateKey(t)}
+	user := testutil.MustGenerateKey(t)
+	group := testutil.MakeGroup(hosts)
+	config := testutil.DefaultConfig(len(hosts))
+	verifier := signing.NewSecp256k1Verifier()
+
+	// Session A: escrow-A.
+	smA := NewStateMachine("escrow-A", config, group, 10000, user.Address(), verifier)
+
+	// Start + confirm + finish in session A.
+	diff := testutil.SignDiff(t, user, "escrow-A", 1, []*types.SubnetTx{txStart(&types.MsgStartInference{
+		InferenceId: 1, PromptHash: []byte("prompt"), Model: "llama",
+		InputLength: 100, MaxTokens: 50, StartedAt: 1000,
+	})})
+	_, err := smA.ApplyDiff(diff)
+	require.NoError(t, err)
+
+	execSig := testutil.SignExecutorReceipt(t, hosts[1], "escrow-A", 1, []byte("prompt"), "llama", 100, 50, 1000, 1000)
+	diff = testutil.SignDiff(t, user, "escrow-A", 2, []*types.SubnetTx{txConfirm(&types.MsgConfirmStart{
+		InferenceId: 1, ExecutorSig: execSig, ConfirmedAt: 1000,
+	})})
+	_, err = smA.ApplyDiff(diff)
+	require.NoError(t, err)
+
+	// Build a valid MsgFinishInference for escrow-A.
+	finishMsgA := &types.MsgFinishInference{
+		InferenceId: 1, ResponseHash: []byte("response"),
+		InputTokens: 80, OutputTokens: 40, ExecutorSlot: 1, EscrowId: "escrow-A",
+	}
+	finishMsgA.ProposerSig = testutil.SignProposerTx(t, hosts[1], finishMsgA)
+
+	// Verify it works in session A.
+	diff = testutil.SignDiff(t, user, "escrow-A", 3, []*types.SubnetTx{txFinish(finishMsgA)})
+	_, err = smA.ApplyDiff(diff)
+	require.NoError(t, err)
+
+	// Session B: escrow-B, same hosts.
+	smB := NewStateMachine("escrow-B", config, group, 10000, user.Address(), verifier)
+
+	diff = testutil.SignDiff(t, user, "escrow-B", 1, []*types.SubnetTx{txStart(&types.MsgStartInference{
+		InferenceId: 1, PromptHash: []byte("prompt"), Model: "llama",
+		InputLength: 100, MaxTokens: 50, StartedAt: 1000,
+	})})
+	_, err = smB.ApplyDiff(diff)
+	require.NoError(t, err)
+
+	execSigB := testutil.SignExecutorReceipt(t, hosts[1], "escrow-B", 1, []byte("prompt"), "llama", 100, 50, 1000, 1000)
+	diff = testutil.SignDiff(t, user, "escrow-B", 2, []*types.SubnetTx{txConfirm(&types.MsgConfirmStart{
+		InferenceId: 1, ExecutorSig: execSigB, ConfirmedAt: 1000,
+	})})
+	_, err = smB.ApplyDiff(diff)
+	require.NoError(t, err)
+
+	// Replay the msg from session A into session B. Must fail.
+	diff = testutil.SignDiff(t, user, "escrow-B", 3, []*types.SubnetTx{txFinish(finishMsgA)})
+	_, err = smB.ApplyDiff(diff)
+	require.ErrorIs(t, err, types.ErrEscrowIDMismatch)
+}
+
+func TestFinishInference_CostCapped(t *testing.T) {
+	hosts := []*signing.Secp256k1Signer{testutil.MustGenerateKey(t), testutil.MustGenerateKey(t), testutil.MustGenerateKey(t)}
+	sm, user := newTestSM(t, hosts, 10000)
+
+	// Start: reserved = (100+50)*1 = 150.
+	diff := testutil.SignDiff(t, user, "escrow-1", 1, []*types.SubnetTx{txStart(&types.MsgStartInference{
+		InferenceId: 1, PromptHash: []byte("prompt"), Model: "llama",
+		InputLength: 100, MaxTokens: 50, StartedAt: 1000,
+	})})
+	_, err := sm.ApplyDiff(diff)
+	require.NoError(t, err)
+
+	execSig := testutil.SignExecutorReceipt(t, hosts[1], "escrow-1", 1, []byte("prompt"), "llama", 100, 50, 1000, 1000)
+	diff = testutil.SignDiff(t, user, "escrow-1", 2, []*types.SubnetTx{txConfirm(&types.MsgConfirmStart{
+		InferenceId: 1, ExecutorSig: execSig, ConfirmedAt: 1000,
+	})})
+	_, err = sm.ApplyDiff(diff)
+	require.NoError(t, err)
+
+	// Finish with actualCost = (200+100)*1 = 300 > reserved 150. Should cap.
+	finishMsg := &types.MsgFinishInference{
+		InferenceId: 1, ResponseHash: []byte("response"),
+		InputTokens: 200, OutputTokens: 100, ExecutorSlot: 1, EscrowId: "escrow-1",
+	}
+	finishMsg.ProposerSig = testutil.SignProposerTx(t, hosts[1], finishMsg)
+
+	diff = testutil.SignDiff(t, user, "escrow-1", 3, []*types.SubnetTx{txFinish(finishMsg)})
+	_, err = sm.ApplyDiff(diff)
+	require.NoError(t, err, "cost exceeding reserved should be capped, not rejected")
+
+	st := sm.SnapshotState()
+	rec := st.Inferences[1]
+	require.Equal(t, types.StatusFinished, rec.Status)
+	require.Equal(t, uint64(150), rec.ActualCost, "actual cost should be capped to reserved")
+	// No surplus returned: reserved - capped = 0.
+	require.Equal(t, uint64(10000-150), st.Balance)
+}
+
+func TestCompliance_FinishAfterReveal(t *testing.T) {
+	// MsgFinishInference arriving in the same diff as (or after) MsgRevealSeed
+	// must be counted in compliance thanks to deferred recomputeCompliance.
+	hosts := fixedSigners(t)
+	user := testutil.MustSignerFromHex(t, "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd")
+	group := testutil.MakeGroup(hosts)
+	config := types.SessionConfig{
+		RefusalTimeout: 60, ExecutionTimeout: 1200, TokenPrice: 1,
+		VoteThreshold: uint32(len(hosts)) / 2, ValidationRate: 10000,
+	}
+	verifier := signing.NewSecp256k1Verifier()
+	sm := NewStateMachine("escrow-1", config, group, 100000, user.Address(), verifier)
+
+	// Start + confirm inference 1 (executor = slot 1). Don't finish yet.
+	nonce := uint64(1)
+	diff := testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{txStart(&types.MsgStartInference{
+		InferenceId: 1, PromptHash: []byte("prompt"), Model: "llama",
+		InputLength: 100, MaxTokens: 50, StartedAt: 1000,
+	})})
+	_, err := sm.ApplyDiff(diff)
+	require.NoError(t, err)
+
+	execSig := testutil.SignExecutorReceipt(t, hosts[1], "escrow-1", 1, []byte("prompt"), "llama", 100, 50, 1000, 1000)
+	nonce++
+	diff = testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{txConfirm(&types.MsgConfirmStart{
+		InferenceId: 1, ExecutorSig: execSig, ConfirmedAt: 1000,
+	})})
+	_, err = sm.ApplyDiff(diff)
+	require.NoError(t, err)
+
+	// Finalize while inference is still StatusStarted.
+	nonce++
+	diff = testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{txFinalize()})
+	_, err = sm.ApplyDiff(diff)
+	require.NoError(t, err)
+
+	// In a single diff: reveal seed from host[0], then finish inference 1.
+	// recomputeCompliance runs after all txs, so the finished inference is counted.
+	seedMsg := testutil.SignRevealSeed(t, hosts[0], "escrow-1", 0)
+
+	finishMsg := &types.MsgFinishInference{
+		InferenceId: 1, ResponseHash: []byte("response"),
+		InputTokens: 80, OutputTokens: 40, ExecutorSlot: 1, EscrowId: "escrow-1",
+	}
+	finishMsg.ProposerSig = testutil.SignProposerTx(t, hosts[1], finishMsg)
+
+	nonce++
+	diff = testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{
+		txRevealSeed(seedMsg),
+		txFinish(finishMsg),
+	})
+	_, err = sm.ApplyDiff(diff)
+	require.NoError(t, err)
+
+	st := sm.SnapshotState()
+	hs := st.HostStats[0]
+	// With fixed key seed, ShouldValidate(seed, 1) = true for host[0].
+	// The inference was finished in the same diff as the reveal, but
+	// recomputeCompliance sees StatusFinished and counts it.
+	require.Equal(t, uint32(1), hs.RequiredValidations,
+		"inference finished in same diff as reveal must be counted")
+}
+
+func TestLateValidation_TerminalStateCredit(t *testing.T) {
+	hosts := []*signing.Secp256k1Signer{
+		testutil.MustGenerateKey(t), testutil.MustGenerateKey(t), testutil.MustGenerateKey(t),
+		testutil.MustGenerateKey(t), testutil.MustGenerateKey(t),
+	}
+	sm, user := newTestSM(t, hosts, 10000)
+
+	applyStartConfirmFinish(t, sm, user, hosts, 1)
+
+	// Challenge from host[0] (valid=false -> Challenged).
+	valMsg := &types.MsgValidation{InferenceId: 1, ValidatorSlot: 0, Valid: false, EscrowId: "escrow-1"}
+	valMsg.ProposerSig = testutil.SignProposerTx(t, hosts[0], valMsg)
+	nonce := sm.SnapshotState().LatestNonce + 1
+	diff := testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{txValidation(valMsg)})
+	_, err := sm.ApplyDiff(diff)
+	require.NoError(t, err)
+
+	// Vote valid to reach StatusValidated. Skip slot 0 (challenger) and slot 1 (executor).
+	// Challenger weight=1 (invalid) + 3 valid voters -> VotesValid=3 > threshold=2.
+	var voteTxs []*types.SubnetTx
+	for _, slot := range []uint32{2, 3, 4} {
+		voteMsg := &types.MsgValidationVote{InferenceId: 1, VoterSlot: slot, VoteValid: true, EscrowId: "escrow-1"}
+		voteMsg.ProposerSig = testutil.SignProposerTx(t, hosts[slot], voteMsg)
+		voteTxs = append(voteTxs, txVote(voteMsg))
+	}
+	nonce = sm.SnapshotState().LatestNonce + 1
+	diff = testutil.SignDiff(t, user, "escrow-1", nonce, voteTxs)
+	_, err = sm.ApplyDiff(diff)
+	require.NoError(t, err)
+	require.Equal(t, types.StatusValidated, sm.SnapshotState().Inferences[1].Status)
+
+	// Late validation from host[4] on terminal inference. Already voted -> silent no-op.
+	lateVal := &types.MsgValidation{InferenceId: 1, ValidatorSlot: 4, Valid: true, EscrowId: "escrow-1"}
+	lateVal.ProposerSig = testutil.SignProposerTx(t, hosts[4], lateVal)
+	nonce = sm.SnapshotState().LatestNonce + 1
+	diff = testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{txValidation(lateVal)})
+	_, err = sm.ApplyDiff(diff)
+	require.NoError(t, err)
+
+	st := sm.SnapshotState()
+	require.Equal(t, types.StatusValidated, st.Inferences[1].Status, "status must not change")
+	require.True(t, st.Inferences[1].ValidatedBy.IsSet(4), "late validator bit must be set")
+}
+
+func TestLateValidation_DeduplicateTerminal(t *testing.T) {
+	hosts := []*signing.Secp256k1Signer{
+		testutil.MustGenerateKey(t), testutil.MustGenerateKey(t), testutil.MustGenerateKey(t),
+		testutil.MustGenerateKey(t), testutil.MustGenerateKey(t),
+	}
+	sm, user := newTestSM(t, hosts, 10000)
+
+	applyStartConfirmFinish(t, sm, user, hosts, 1)
+
+	// Challenge (valid=false) + vote valid to reach StatusValidated.
+	valMsg := &types.MsgValidation{InferenceId: 1, ValidatorSlot: 0, Valid: false, EscrowId: "escrow-1"}
+	valMsg.ProposerSig = testutil.SignProposerTx(t, hosts[0], valMsg)
+	nonce := sm.SnapshotState().LatestNonce + 1
+	diff := testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{txValidation(valMsg)})
+	_, err := sm.ApplyDiff(diff)
+	require.NoError(t, err)
+
+	var voteTxs []*types.SubnetTx
+	for _, slot := range []uint32{2, 3, 4} {
+		voteMsg := &types.MsgValidationVote{InferenceId: 1, VoterSlot: slot, VoteValid: true, EscrowId: "escrow-1"}
+		voteMsg.ProposerSig = testutil.SignProposerTx(t, hosts[slot], voteMsg)
+		voteTxs = append(voteTxs, txVote(voteMsg))
+	}
+	nonce = sm.SnapshotState().LatestNonce + 1
+	diff = testutil.SignDiff(t, user, "escrow-1", nonce, voteTxs)
+	_, err = sm.ApplyDiff(diff)
+	require.NoError(t, err)
+
+	// host[0] already participated as challenger. Late re-validation is silent no-op.
+	dupeVal := &types.MsgValidation{InferenceId: 1, ValidatorSlot: 0, Valid: true, EscrowId: "escrow-1"}
+	dupeVal.ProposerSig = testutil.SignProposerTx(t, hosts[0], dupeVal)
+	nonce = sm.SnapshotState().LatestNonce + 1
+	diff = testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{txValidation(dupeVal)})
+	_, err = sm.ApplyDiff(diff)
+	require.NoError(t, err, "duplicate late validation must be a silent no-op")
 }

@@ -32,14 +32,6 @@ Refused timeout is safe: ChallengeReceipt delivers data to the executor, the exe
 
 Execution timeout uses confirmed_at as its deadline base instead of started_at. The executor sets confirmed_at to its wall-clock time when signing the ExecutorReceiptContent. The signature covers this value, so the user cannot alter it. VerifyExecutionTimeout computes the deadline from confirmed_at, which the executor controls. Refused timeout still uses started_at because ChallengeReceipt makes it non-exploitable regardless of the base.
 
-## Sybil validation bypass
-
-Attacker controls 2 slots (A and B). Executes garbage on slot A, then submits MsgValidation(Valid=true) from slot B. If validation immediately sets StatusValidated, the inference is terminal -- no other host can challenge.
-
-Fix: MsgValidation always transitions to StatusChallenged, regardless of the validator's judgment. The validator's vote is stored (ValidatorSlot, ValidatorValid) but the terminal state (Validated/Invalidated) is only reached through vote threshold in applyValidationVote. This forces the full group to weigh in.
-
-Test: TestAttack_SybilValidationBypass.
-
 ## Redundant validations halt subnet
 
 A second MsgValidation for an already-challenged inference fails because rec.Status != StatusFinished. The failed tx stays in the mempool, goes stale, and causes the host to withhold its signature.

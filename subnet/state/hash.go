@@ -12,6 +12,8 @@ import (
 	"subnet/types"
 )
 
+var deterministicMarshal = proto.MarshalOptions{Deterministic: true}
+
 // ComputeStateRoot computes a flat commitment hash over the session state:
 //
 //   state_root = sha256(host_stats_hash || rest_hash || phase_byte)
@@ -78,7 +80,7 @@ func computeHostStatsHash(hostStats map[uint32]*types.HostStats) ([]byte, error)
 	}
 
 	msg := &types.HostStatsMapProto{Entries: entries}
-	data, err := proto.Marshal(msg)
+	data, err := deterministicMarshal.Marshal(msg)
 	if err != nil {
 		return nil, fmt.Errorf("marshal host stats: %w", err)
 	}
@@ -114,31 +116,28 @@ func computeInferencesHash(inferences map[uint64]*types.InferenceRecord) ([]byte
 		r := inferences[id]
 
 		entries = append(entries, &types.InferenceRecordProto{
-			InferenceId:    id,
-			Status:         uint32(r.Status),
-			ExecutorSlot:   r.ExecutorSlot,
-			Model:          r.Model,
-			PromptHash:     r.PromptHash,
-			ResponseHash:   r.ResponseHash,
-			InputLength:    r.InputLength,
-			MaxTokens:      r.MaxTokens,
-			InputTokens:    r.InputTokens,
-			OutputTokens:   r.OutputTokens,
-			ReservedCost:   r.ReservedCost,
-			ActualCost:     r.ActualCost,
-			StartedAt:      r.StartedAt,
-			ConfirmedAt:    r.ConfirmedAt,
-			VotesValid:     r.VotesValid,
-			VotesInvalid:   r.VotesInvalid,
-			VotedSlots:     r.VotedSlots.Bytes(),
-			ValidatorSlot:  r.ValidatorSlot,
-			ValidatorValid: r.ValidatorValid,
-			ValidatedBy:    r.ValidatedBy.Bytes(),
+			InferenceId:  id,
+			Status:       uint32(r.Status),
+			ExecutorSlot: r.ExecutorSlot,
+			Model:        r.Model,
+			PromptHash:   r.PromptHash,
+			ResponseHash: r.ResponseHash,
+			InputLength:  r.InputLength,
+			MaxTokens:    r.MaxTokens,
+			InputTokens:  r.InputTokens,
+			OutputTokens: r.OutputTokens,
+			ReservedCost: r.ReservedCost,
+			ActualCost:   r.ActualCost,
+			StartedAt:    r.StartedAt,
+			ConfirmedAt:  r.ConfirmedAt,
+			VotesValid:   r.VotesValid,
+			VotesInvalid: r.VotesInvalid,
+			ValidatedBy:  r.ValidatedBy.Bytes(),
 		})
 	}
 
 	msg := &types.InferencesMapProto{Entries: entries}
-	data, err := proto.Marshal(msg)
+	data, err := deterministicMarshal.Marshal(msg)
 	if err != nil {
 		return nil, fmt.Errorf("marshal inferences: %w", err)
 	}

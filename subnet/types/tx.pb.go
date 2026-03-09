@@ -222,6 +222,7 @@ type MsgFinishInference struct {
 	OutputTokens  uint64                 `protobuf:"varint,4,opt,name=output_tokens,json=outputTokens,proto3" json:"output_tokens,omitempty"`
 	ExecutorSlot  uint32                 `protobuf:"varint,5,opt,name=executor_slot,json=executorSlot,proto3" json:"executor_slot,omitempty"`
 	ProposerSig   []byte                 `protobuf:"bytes,6,opt,name=proposer_sig,json=proposerSig,proto3" json:"proposer_sig,omitempty"`
+	EscrowId      string                 `protobuf:"bytes,7,opt,name=escrow_id,json=escrowId,proto3" json:"escrow_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -296,6 +297,13 @@ func (x *MsgFinishInference) GetProposerSig() []byte {
 		return x.ProposerSig
 	}
 	return nil
+}
+
+func (x *MsgFinishInference) GetEscrowId() string {
+	if x != nil {
+		return x.EscrowId
+	}
+	return ""
 }
 
 type MsgTimeoutInference struct {
@@ -424,6 +432,7 @@ type MsgValidation struct {
 	ValidatorSlot uint32                 `protobuf:"varint,2,opt,name=validator_slot,json=validatorSlot,proto3" json:"validator_slot,omitempty"`
 	Valid         bool                   `protobuf:"varint,3,opt,name=valid,proto3" json:"valid,omitempty"`
 	ProposerSig   []byte                 `protobuf:"bytes,4,opt,name=proposer_sig,json=proposerSig,proto3" json:"proposer_sig,omitempty"`
+	EscrowId      string                 `protobuf:"bytes,5,opt,name=escrow_id,json=escrowId,proto3" json:"escrow_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -486,12 +495,20 @@ func (x *MsgValidation) GetProposerSig() []byte {
 	return nil
 }
 
+func (x *MsgValidation) GetEscrowId() string {
+	if x != nil {
+		return x.EscrowId
+	}
+	return ""
+}
+
 type MsgValidationVote struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	InferenceId   uint64                 `protobuf:"varint,1,opt,name=inference_id,json=inferenceId,proto3" json:"inference_id,omitempty"`
 	VoterSlot     uint32                 `protobuf:"varint,2,opt,name=voter_slot,json=voterSlot,proto3" json:"voter_slot,omitempty"`
 	VoteValid     bool                   `protobuf:"varint,3,opt,name=vote_valid,json=voteValid,proto3" json:"vote_valid,omitempty"`
 	ProposerSig   []byte                 `protobuf:"bytes,4,opt,name=proposer_sig,json=proposerSig,proto3" json:"proposer_sig,omitempty"`
+	EscrowId      string                 `protobuf:"bytes,5,opt,name=escrow_id,json=escrowId,proto3" json:"escrow_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -554,11 +571,19 @@ func (x *MsgValidationVote) GetProposerSig() []byte {
 	return nil
 }
 
+func (x *MsgValidationVote) GetEscrowId() string {
+	if x != nil {
+		return x.EscrowId
+	}
+	return ""
+}
+
 type MsgRevealSeed struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	SlotId        uint32                 `protobuf:"varint,1,opt,name=slot_id,json=slotId,proto3" json:"slot_id,omitempty"`
 	Signature     []byte                 `protobuf:"bytes,2,opt,name=signature,proto3" json:"signature,omitempty"`
 	ProposerSig   []byte                 `protobuf:"bytes,3,opt,name=proposer_sig,json=proposerSig,proto3" json:"proposer_sig,omitempty"`
+	EscrowId      string                 `protobuf:"bytes,4,opt,name=escrow_id,json=escrowId,proto3" json:"escrow_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -612,6 +637,13 @@ func (x *MsgRevealSeed) GetProposerSig() []byte {
 		return x.ProposerSig
 	}
 	return nil
+}
+
+func (x *MsgRevealSeed) GetEscrowId() string {
+	if x != nil {
+		return x.EscrowId
+	}
+	return ""
 }
 
 type MsgFinalizeRound struct {
@@ -668,14 +700,15 @@ const file_subnet_v1_tx_proto_rawDesc = "" +
 	"\x0fMsgConfirmStart\x12!\n" +
 	"\finference_id\x18\x01 \x01(\x04R\vinferenceId\x12!\n" +
 	"\fexecutor_sig\x18\x02 \x01(\fR\vexecutorSig\x12!\n" +
-	"\fconfirmed_at\x18\x03 \x01(\x03R\vconfirmedAt\"\xec\x01\n" +
+	"\fconfirmed_at\x18\x03 \x01(\x03R\vconfirmedAt\"\x89\x02\n" +
 	"\x12MsgFinishInference\x12!\n" +
 	"\finference_id\x18\x01 \x01(\x04R\vinferenceId\x12#\n" +
 	"\rresponse_hash\x18\x02 \x01(\fR\fresponseHash\x12!\n" +
 	"\finput_tokens\x18\x03 \x01(\x04R\vinputTokens\x12#\n" +
 	"\routput_tokens\x18\x04 \x01(\x04R\foutputTokens\x12#\n" +
 	"\rexecutor_slot\x18\x05 \x01(\rR\fexecutorSlot\x12!\n" +
-	"\fproposer_sig\x18\x06 \x01(\fR\vproposerSig\"\x98\x01\n" +
+	"\fproposer_sig\x18\x06 \x01(\fR\vproposerSig\x12\x1b\n" +
+	"\tescrow_id\x18\a \x01(\tR\bescrowId\"\x98\x01\n" +
 	"\x13MsgTimeoutInference\x12!\n" +
 	"\finference_id\x18\x01 \x01(\x04R\vinferenceId\x120\n" +
 	"\x06reason\x18\x02 \x01(\x0e2\x18.subnet.v1.TimeoutReasonR\x06reason\x12,\n" +
@@ -684,23 +717,26 @@ const file_subnet_v1_tx_proto_rawDesc = "" +
 	"\n" +
 	"voter_slot\x18\x01 \x01(\rR\tvoterSlot\x12\x16\n" +
 	"\x06accept\x18\x02 \x01(\bR\x06accept\x12\x1c\n" +
-	"\tsignature\x18\x03 \x01(\fR\tsignature\"\x92\x01\n" +
+	"\tsignature\x18\x03 \x01(\fR\tsignature\"\xaf\x01\n" +
 	"\rMsgValidation\x12!\n" +
 	"\finference_id\x18\x01 \x01(\x04R\vinferenceId\x12%\n" +
 	"\x0evalidator_slot\x18\x02 \x01(\rR\rvalidatorSlot\x12\x14\n" +
 	"\x05valid\x18\x03 \x01(\bR\x05valid\x12!\n" +
-	"\fproposer_sig\x18\x04 \x01(\fR\vproposerSig\"\x97\x01\n" +
+	"\fproposer_sig\x18\x04 \x01(\fR\vproposerSig\x12\x1b\n" +
+	"\tescrow_id\x18\x05 \x01(\tR\bescrowId\"\xb4\x01\n" +
 	"\x11MsgValidationVote\x12!\n" +
 	"\finference_id\x18\x01 \x01(\x04R\vinferenceId\x12\x1d\n" +
 	"\n" +
 	"voter_slot\x18\x02 \x01(\rR\tvoterSlot\x12\x1d\n" +
 	"\n" +
 	"vote_valid\x18\x03 \x01(\bR\tvoteValid\x12!\n" +
-	"\fproposer_sig\x18\x04 \x01(\fR\vproposerSig\"i\n" +
+	"\fproposer_sig\x18\x04 \x01(\fR\vproposerSig\x12\x1b\n" +
+	"\tescrow_id\x18\x05 \x01(\tR\bescrowId\"\x86\x01\n" +
 	"\rMsgRevealSeed\x12\x17\n" +
 	"\aslot_id\x18\x01 \x01(\rR\x06slotId\x12\x1c\n" +
 	"\tsignature\x18\x02 \x01(\fR\tsignature\x12!\n" +
-	"\fproposer_sig\x18\x03 \x01(\fR\vproposerSig\"\x12\n" +
+	"\fproposer_sig\x18\x03 \x01(\fR\vproposerSig\x12\x1b\n" +
+	"\tescrow_id\x18\x04 \x01(\tR\bescrowId\"\x12\n" +
 	"\x10MsgFinalizeRound*i\n" +
 	"\rTimeoutReason\x12\x1e\n" +
 	"\x1aTIMEOUT_REASON_UNSPECIFIED\x10\x00\x12\x1a\n" +

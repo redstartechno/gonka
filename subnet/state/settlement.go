@@ -4,8 +4,6 @@ import (
 	"crypto/sha256"
 	"fmt"
 
-	"google.golang.org/protobuf/proto"
-
 	"subnet/signing"
 	"subnet/types"
 )
@@ -67,7 +65,7 @@ func VerifySettlement(
 		EscrowId:  payload.EscrowID,
 		Nonce:     payload.Nonce,
 	}
-	sigData, err := proto.Marshal(sigContent)
+	sigData, err := deterministicMarshal.Marshal(sigContent)
 	if err != nil {
 		return nil, fmt.Errorf("marshal signature content: %w", err)
 	}

@@ -123,28 +123,24 @@ func measureStateSize(st types.EscrowState) (hostStatsMB, inferencesMB, totalMB 
 	infEntries := make([]*types.InferenceRecordProto, 0, len(ids))
 	for _, id := range ids {
 		r := st.Inferences[id]
-		votedSlots := r.VotedSlots.Bytes()
 		infEntries = append(infEntries, &types.InferenceRecordProto{
-			InferenceId:    id,
-			Status:         uint32(r.Status),
-			ExecutorSlot:   r.ExecutorSlot,
-			Model:          r.Model,
-			PromptHash:     r.PromptHash,
-			ResponseHash:   r.ResponseHash,
-			InputLength:    r.InputLength,
-			MaxTokens:      r.MaxTokens,
-			InputTokens:    r.InputTokens,
-			OutputTokens:   r.OutputTokens,
-			ReservedCost:   r.ReservedCost,
-			ActualCost:     r.ActualCost,
-			StartedAt:      r.StartedAt,
-			ConfirmedAt:    r.ConfirmedAt,
-			VotesValid:     r.VotesValid,
-			VotesInvalid:   r.VotesInvalid,
-			VotedSlots:     votedSlots,
-			ValidatorSlot:  r.ValidatorSlot,
-			ValidatorValid: r.ValidatorValid,
-			ValidatedBy:    r.ValidatedBy.Bytes(),
+			InferenceId:  id,
+			Status:       uint32(r.Status),
+			ExecutorSlot: r.ExecutorSlot,
+			Model:        r.Model,
+			PromptHash:   r.PromptHash,
+			ResponseHash: r.ResponseHash,
+			InputLength:  r.InputLength,
+			MaxTokens:    r.MaxTokens,
+			InputTokens:  r.InputTokens,
+			OutputTokens: r.OutputTokens,
+			ReservedCost: r.ReservedCost,
+			ActualCost:   r.ActualCost,
+			StartedAt:    r.StartedAt,
+			ConfirmedAt:  r.ConfirmedAt,
+			VotesValid:   r.VotesValid,
+			VotesInvalid: r.VotesInvalid,
+			ValidatedBy:  r.ValidatedBy.Bytes(),
 		})
 	}
 	infData, _ := proto.Marshal(&types.InferencesMapProto{Entries: infEntries})

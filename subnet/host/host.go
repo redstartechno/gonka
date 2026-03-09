@@ -401,6 +401,7 @@ func (h *Host) executeAsync(ctx context.Context, job *executeJob) {
 		InputTokens:  result.InputTokens,
 		OutputTokens: result.OutputTokens,
 		ExecutorSlot: job.executorSlot,
+		EscrowId:     h.escrowID,
 	}
 	finishData, err := proto.Marshal(finishMsg)
 	if err != nil {
@@ -466,6 +467,7 @@ func (h *Host) maybeRevealSeed() {
 	msg := &types.MsgRevealSeed{
 		SlotId:    repSlot,
 		Signature: seedSig,
+		EscrowId:  h.escrowID,
 	}
 	msgData, err := proto.Marshal(msg)
 	if err != nil {

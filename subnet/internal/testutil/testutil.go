@@ -11,6 +11,8 @@ import (
 	"subnet/types"
 )
 
+var deterministicMarshal = proto.MarshalOptions{Deterministic: true}
+
 var TestPrompt = []byte("prompt")
 var TestPromptHash = sha256.Sum256(TestPrompt)
 
@@ -63,7 +65,7 @@ func SignDiff(t *testing.T, signer signing.Signer, escrowID string, nonce uint64
 func SignDiffWithRoot(t *testing.T, signer signing.Signer, escrowID string, nonce uint64, txs []*types.SubnetTx, postStateRoot []byte) types.Diff {
 	t.Helper()
 	content := &types.DiffContent{Nonce: nonce, Txs: txs, EscrowId: escrowID, PostStateRoot: postStateRoot}
-	data, err := proto.Marshal(content)
+	data, err := deterministicMarshal.Marshal(content)
 	require.NoError(t, err)
 	sig, err := signer.Sign(data)
 	require.NoError(t, err)
@@ -72,7 +74,7 @@ func SignDiffWithRoot(t *testing.T, signer signing.Signer, escrowID string, nonc
 
 func SignProposerTx(t *testing.T, signer signing.Signer, msg proto.Message) []byte {
 	t.Helper()
-	data, err := proto.Marshal(msg)
+	data, err := deterministicMarshal.Marshal(msg)
 	require.NoError(t, err)
 	sig, err := signer.Sign(data)
 	require.NoError(t, err)
@@ -91,7 +93,7 @@ func SignExecutorReceipt(t *testing.T, signer signing.Signer, escrowID string, i
 		EscrowId:    escrowID,
 		ConfirmedAt: confirmedAt,
 	}
-	data, err := proto.Marshal(content)
+	data, err := deterministicMarshal.Marshal(content)
 	require.NoError(t, err)
 	sig, err := signer.Sign(data)
 	require.NoError(t, err)
@@ -106,7 +108,7 @@ func SignTimeoutVote(t *testing.T, signer signing.Signer, escrowID string, infer
 		Reason:      reason,
 		Accept:      accept,
 	}
-	data, err := proto.Marshal(content)
+	data, err := deterministicMarshal.Marshal(content)
 	require.NoError(t, err)
 	sig, err := signer.Sign(data)
 	require.NoError(t, err)
@@ -149,8 +151,9 @@ func SignRevealSeed(t *testing.T, signer *signing.Secp256k1Signer, escrowID stri
 	msg := &types.MsgRevealSeed{
 		SlotId:    slotID,
 		Signature: seedSig,
+		EscrowId:  escrowID,
 	}
-	data, err := proto.Marshal(msg)
+	data, err := deterministicMarshal.Marshal(msg)
 	require.NoError(t, err)
 	proposerSig, err := signer.Sign(data)
 	require.NoError(t, err)
