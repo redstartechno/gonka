@@ -2414,3 +2414,319 @@ func TestLateValidation_DeduplicateTerminal(t *testing.T) {
 	_, err = sm.ApplyDiff(diff)
 	require.NoError(t, err, "duplicate late validation must be a silent no-op")
 }
+
+// --- Warm Key Tests ---
+
+func newTestSMWithWarmKey(t *testing.T, hosts []*signing.Secp256k1Signer, balance uint64, resolver WarmKeyResolver) (*StateMachine, *signing.Secp256k1Signer) {
+	t.Helper()
+	user := testutil.MustGenerateKey(t)
+	group := testutil.MakeGroup(hosts)
+	config := testutil.DefaultConfig(len(hosts))
+	verifier := signing.NewSecp256k1Verifier()
+	sm := NewStateMachine("escrow-1", config, group, balance, user.Address(), verifier, WithWarmKeyResolver(resolver))
+	return sm, user
+}
+
+// applyStartConfirmWithWarmKey starts an inference and confirms it using a warm key signer.
+// executorIdx is the index in hosts that is the executor (cold key).
+func applyStartConfirmWithWarmKey(t *testing.T, sm *StateMachine, user *signing.Secp256k1Signer, hosts []*signing.Secp256k1Signer, warmSigner *signing.Secp256k1Signer, inferenceID uint64, executorIdx int) {
+	t.Helper()
+	nonce := sm.LatestNonce() + 1
+
+	diff := testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{txStart(&types.MsgStartInference{
+		InferenceId: inferenceID, PromptHash: []byte("prompt"), Model: "llama",
+		InputLength: 100, MaxTokens: 50, StartedAt: 1000,
+	})})
+	_, err := sm.ApplyDiff(diff)
+	require.NoError(t, err)
+
+	// Sign executor receipt with warm key instead of cold key.
+	execSig := testutil.SignExecutorReceipt(t, warmSigner, "escrow-1", inferenceID, []byte("prompt"), "llama", 100, 50, 1000, 1000)
+	nonce++
+	diff = testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{txConfirm(&types.MsgConfirmStart{
+		InferenceId: inferenceID, ExecutorSig: execSig, ConfirmedAt: 1000,
+	})})
+	_, err = sm.ApplyDiff(diff)
+	require.NoError(t, err)
+}
+
+func TestWarmKey_ConfirmStartWithWarmKey(t *testing.T) {
+	hosts := []*signing.Secp256k1Signer{testutil.MustGenerateKey(t), testutil.MustGenerateKey(t), testutil.MustGenerateKey(t)}
+	warmSigner := testutil.MustGenerateKey(t)
+	executorIdx := 1 // inference 1 % 3 = 1
+
+	resolver := func(warmAddr, coldAddr string) (bool, error) {
+		return warmAddr == warmSigner.Address() && coldAddr == hosts[executorIdx].Address(), nil
+	}
+	sm, user := newTestSMWithWarmKey(t, hosts, 10000, resolver)
+
+	applyStartConfirmWithWarmKey(t, sm, user, hosts, warmSigner, 1, executorIdx)
+
+	st := sm.SnapshotState()
+	require.Equal(t, types.StatusStarted, st.Inferences[1].Status)
+	require.Equal(t, warmSigner.Address(), st.WarmKeys[uint32(executorIdx)])
+	require.True(t, sm.IsWarmKeyAddress(warmSigner.Address()))
+}
+
+func TestWarmKey_ConfirmStartRejectsUnauthorizedKey(t *testing.T) {
+	hosts := []*signing.Secp256k1Signer{testutil.MustGenerateKey(t), testutil.MustGenerateKey(t), testutil.MustGenerateKey(t)}
+	randomKey := testutil.MustGenerateKey(t)
+
+	resolver := func(warmAddr, coldAddr string) (bool, error) {
+		return false, nil // always reject
+	}
+	sm, user := newTestSMWithWarmKey(t, hosts, 10000, resolver)
+
+	nonce := sm.LatestNonce() + 1
+	diff := testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{txStart(&types.MsgStartInference{
+		InferenceId: 1, PromptHash: []byte("prompt"), Model: "llama",
+		InputLength: 100, MaxTokens: 50, StartedAt: 1000,
+	})})
+	_, err := sm.ApplyDiff(diff)
+	require.NoError(t, err)
+
+	execSig := testutil.SignExecutorReceipt(t, randomKey, "escrow-1", 1, []byte("prompt"), "llama", 100, 50, 1000, 1000)
+	nonce++
+	diff = testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{txConfirm(&types.MsgConfirmStart{
+		InferenceId: 1, ExecutorSig: execSig, ConfirmedAt: 1000,
+	})})
+	_, err = sm.ApplyDiff(diff)
+	require.ErrorIs(t, err, types.ErrInvalidExecutorSig)
+}
+
+func TestWarmKey_ConfirmStartNoResolver(t *testing.T) {
+	hosts := []*signing.Secp256k1Signer{testutil.MustGenerateKey(t), testutil.MustGenerateKey(t), testutil.MustGenerateKey(t)}
+	randomKey := testutil.MustGenerateKey(t)
+
+	// No WithWarmKeyResolver -- resolver is nil.
+	sm, user := newTestSM(t, hosts, 10000)
+
+	nonce := sm.LatestNonce() + 1
+	diff := testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{txStart(&types.MsgStartInference{
+		InferenceId: 1, PromptHash: []byte("prompt"), Model: "llama",
+		InputLength: 100, MaxTokens: 50, StartedAt: 1000,
+	})})
+	_, err := sm.ApplyDiff(diff)
+	require.NoError(t, err)
+
+	execSig := testutil.SignExecutorReceipt(t, randomKey, "escrow-1", 1, []byte("prompt"), "llama", 100, 50, 1000, 1000)
+	nonce++
+	diff = testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{txConfirm(&types.MsgConfirmStart{
+		InferenceId: 1, ExecutorSig: execSig, ConfirmedAt: 1000,
+	})})
+	_, err = sm.ApplyDiff(diff)
+	require.ErrorIs(t, err, types.ErrInvalidExecutorSig)
+}
+
+func TestWarmKey_BindingCached(t *testing.T) {
+	hosts := []*signing.Secp256k1Signer{testutil.MustGenerateKey(t), testutil.MustGenerateKey(t), testutil.MustGenerateKey(t)}
+	warmSigner := testutil.MustGenerateKey(t)
+	executorIdx := 1
+
+	callCount := 0
+	resolver := func(warmAddr, coldAddr string) (bool, error) {
+		callCount++
+		return warmAddr == warmSigner.Address() && coldAddr == hosts[executorIdx].Address(), nil
+	}
+	sm, user := newTestSMWithWarmKey(t, hosts, 100000, resolver)
+
+	// First inference: resolver called once, binding stored.
+	applyStartConfirmWithWarmKey(t, sm, user, hosts, warmSigner, 1, executorIdx)
+	require.Equal(t, 1, callCount, "resolver should be called once for first warm key use")
+
+	// Second inference with same executor slot (4 % 3 = 1).
+	// Need nonce == inferenceID, so advance nonce to 3, then use inference 4.
+	nonce := sm.LatestNonce() + 1
+	diff := testutil.SignDiff(t, user, "escrow-1", nonce, nil) // empty diff nonce 3
+	_, err := sm.ApplyDiff(diff)
+	require.NoError(t, err)
+
+	applyStartConfirmWithWarmKey(t, sm, user, hosts, warmSigner, 4, executorIdx)
+	require.Equal(t, 1, callCount, "resolver should NOT be called again -- binding is cached")
+}
+
+func TestWarmKey_FinishInferenceWithWarmKey(t *testing.T) {
+	hosts := []*signing.Secp256k1Signer{testutil.MustGenerateKey(t), testutil.MustGenerateKey(t), testutil.MustGenerateKey(t)}
+	warmSigner := testutil.MustGenerateKey(t)
+	executorIdx := 1
+
+	resolver := func(warmAddr, coldAddr string) (bool, error) {
+		return warmAddr == warmSigner.Address() && coldAddr == hosts[executorIdx].Address(), nil
+	}
+	sm, user := newTestSMWithWarmKey(t, hosts, 10000, resolver)
+
+	applyStartConfirmWithWarmKey(t, sm, user, hosts, warmSigner, 1, executorIdx)
+
+	// Finish inference signed by warm key.
+	finishMsg := &types.MsgFinishInference{
+		InferenceId: 1, ResponseHash: []byte("response"),
+		InputTokens: 80, OutputTokens: 40, ExecutorSlot: 1,
+		EscrowId: "escrow-1",
+	}
+	finishMsg.ProposerSig = testutil.SignProposerTx(t, warmSigner, finishMsg)
+
+	nonce := sm.LatestNonce() + 1
+	diff := testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{txFinish(finishMsg)})
+	_, err := sm.ApplyDiff(diff)
+	require.NoError(t, err)
+
+	st := sm.SnapshotState()
+	require.Equal(t, types.StatusFinished, st.Inferences[1].Status)
+}
+
+func TestWarmKey_ValidationWithWarmKey(t *testing.T) {
+	hosts := []*signing.Secp256k1Signer{
+		testutil.MustGenerateKey(t), testutil.MustGenerateKey(t), testutil.MustGenerateKey(t),
+		testutil.MustGenerateKey(t), testutil.MustGenerateKey(t),
+	}
+	warmSigner := testutil.MustGenerateKey(t)
+	validatorIdx := 0 // validator slot 0
+
+	resolver := func(warmAddr, coldAddr string) (bool, error) {
+		return warmAddr == warmSigner.Address() && coldAddr == hosts[validatorIdx].Address(), nil
+	}
+	sm, user := newTestSMWithWarmKey(t, hosts, 10000, resolver)
+
+	// Start, confirm, finish with cold keys (executor = slot 1).
+	applyStartConfirmFinish(t, sm, user, hosts, 1)
+
+	// Validate with warm key for slot 0.
+	valMsg := &types.MsgValidation{InferenceId: 1, ValidatorSlot: 0, Valid: true, EscrowId: "escrow-1"}
+	valMsg.ProposerSig = testutil.SignProposerTx(t, warmSigner, valMsg)
+
+	nonce := sm.LatestNonce() + 1
+	diff := testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{txValidation(valMsg)})
+	_, err := sm.ApplyDiff(diff)
+	require.NoError(t, err)
+
+	st := sm.SnapshotState()
+	require.True(t, st.Inferences[1].ValidatedBy.IsSet(0))
+}
+
+func TestWarmKey_SeedRevealWithWarmKey(t *testing.T) {
+	hosts := []*signing.Secp256k1Signer{testutil.MustGenerateKey(t), testutil.MustGenerateKey(t), testutil.MustGenerateKey(t)}
+	warmSigner := testutil.MustGenerateKey(t)
+	revealerIdx := 0
+
+	resolver := func(warmAddr, coldAddr string) (bool, error) {
+		return warmAddr == warmSigner.Address() && coldAddr == hosts[revealerIdx].Address(), nil
+	}
+	sm, user := newTestSMWithWarmKey(t, hosts, 10000, resolver)
+
+	// Enter finalizing phase.
+	nonce := sm.LatestNonce() + 1
+	diff := testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{txFinalize()})
+	_, err := sm.ApplyDiff(diff)
+	require.NoError(t, err)
+	require.Equal(t, types.PhaseFinalizing, sm.Phase())
+
+	// Sign seed reveal with warm key.
+	seedSig, err := warmSigner.Sign([]byte("escrow-1"))
+	require.NoError(t, err)
+	seedMsg := &types.MsgRevealSeed{
+		SlotId:    0,
+		Signature: seedSig,
+		EscrowId:  "escrow-1",
+	}
+	seedMsg.ProposerSig = testutil.SignProposerTx(t, warmSigner, seedMsg)
+
+	nonce++
+	diff = testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{txRevealSeed(seedMsg)})
+	_, err = sm.ApplyDiff(diff)
+	require.NoError(t, err)
+
+	st := sm.SnapshotState()
+	_, ok := st.RevealedSeeds[0]
+	require.True(t, ok, "seed should be stored for slot 0")
+}
+
+func TestWarmKey_TimeoutVoteWithWarmKey(t *testing.T) {
+	hosts := []*signing.Secp256k1Signer{
+		testutil.MustGenerateKey(t), testutil.MustGenerateKey(t), testutil.MustGenerateKey(t),
+		testutil.MustGenerateKey(t), testutil.MustGenerateKey(t),
+	}
+	warmSigners := make([]*signing.Secp256k1Signer, len(hosts))
+	for i := range warmSigners {
+		warmSigners[i] = testutil.MustGenerateKey(t)
+	}
+
+	resolver := func(warmAddr, coldAddr string) (bool, error) {
+		for i, ws := range warmSigners {
+			if warmAddr == ws.Address() && coldAddr == hosts[i].Address() {
+				return true, nil
+			}
+		}
+		return false, nil
+	}
+	sm, user := newTestSMWithWarmKey(t, hosts, 10000, resolver)
+
+	nonce := sm.LatestNonce() + 1
+	diff := testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{txStart(&types.MsgStartInference{
+		InferenceId: 1, PromptHash: []byte("prompt"), Model: "llama",
+		InputLength: 100, MaxTokens: 50, StartedAt: 1000,
+	})})
+	_, err := sm.ApplyDiff(diff)
+	require.NoError(t, err)
+
+	// Build timeout votes signed by warm keys for slots 0, 2, 3.
+	var votes []*types.TimeoutVote
+	for _, slot := range []uint32{0, 2, 3} {
+		v := testutil.SignTimeoutVote(t, warmSigners[slot], "escrow-1", 1, types.TimeoutReason_TIMEOUT_REASON_REFUSED, true)
+		v.VoterSlot = slot
+		votes = append(votes, v)
+	}
+
+	nonce++
+	diff = testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{txTimeout(&types.MsgTimeoutInference{
+		InferenceId: 1, Reason: types.TimeoutReason_TIMEOUT_REASON_REFUSED, Votes: votes,
+	})})
+	_, err = sm.ApplyDiff(diff)
+	require.NoError(t, err)
+
+	st := sm.SnapshotState()
+	require.Equal(t, types.StatusTimedOut, st.Inferences[1].Status)
+}
+
+func TestWarmKey_StateRootChangesWithWarmKeys(t *testing.T) {
+	hosts := []*signing.Secp256k1Signer{testutil.MustGenerateKey(t), testutil.MustGenerateKey(t), testutil.MustGenerateKey(t)}
+	hostStats := make(map[uint32]*types.HostStats)
+	for i := range hosts {
+		hostStats[uint32(i)] = &types.HostStats{}
+	}
+	inferences := make(map[uint64]*types.InferenceRecord)
+
+	rootNil, err := ComputeStateRoot(10000, hostStats, inferences, types.PhaseActive, nil)
+	require.NoError(t, err)
+
+	rootEmpty, err := ComputeStateRoot(10000, hostStats, inferences, types.PhaseActive, map[uint32]string{})
+	require.NoError(t, err)
+
+	rootWithWarm, err := ComputeStateRoot(10000, hostStats, inferences, types.PhaseActive, map[uint32]string{1: "0xwarmaddr"})
+	require.NoError(t, err)
+
+	// nil and empty should produce the same root (both hash sha256(nil)).
+	require.Equal(t, rootNil, rootEmpty, "nil and empty warm keys should produce same root")
+	// Non-empty warm keys must produce a different root.
+	require.NotEqual(t, rootEmpty, rootWithWarm, "warm keys must change state root")
+}
+
+func TestWarmKey_IsWarmKeyAddress(t *testing.T) {
+	hosts := []*signing.Secp256k1Signer{testutil.MustGenerateKey(t), testutil.MustGenerateKey(t), testutil.MustGenerateKey(t)}
+	warmSigner := testutil.MustGenerateKey(t)
+	executorIdx := 1
+
+	resolver := func(warmAddr, coldAddr string) (bool, error) {
+		return warmAddr == warmSigner.Address() && coldAddr == hosts[executorIdx].Address(), nil
+	}
+	sm, user := newTestSMWithWarmKey(t, hosts, 10000, resolver)
+
+	// Before any warm key binding.
+	require.False(t, sm.IsWarmKeyAddress(warmSigner.Address()))
+	require.False(t, sm.IsWarmKeyAddress(hosts[0].Address()))
+
+	// Trigger warm key binding via confirm.
+	applyStartConfirmWithWarmKey(t, sm, user, hosts, warmSigner, 1, executorIdx)
+
+	require.True(t, sm.IsWarmKeyAddress(warmSigner.Address()))
+	require.False(t, sm.IsWarmKeyAddress(testutil.MustGenerateKey(t).Address()), "unrelated address should be false")
+}

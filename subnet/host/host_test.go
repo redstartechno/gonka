@@ -781,3 +781,47 @@ func TestHost_ChallengeReceipt_AlreadyFinished(t *testing.T) {
 	require.NotNil(t, receipt, "should return receipt even when finish is in mempool")
 	require.Equal(t, 1, engine.calls, "engine should not be called again")
 }
+
+func TestWarmKey_HostFindsSlotByWarmKey(t *testing.T) {
+	hosts := []*signing.Secp256k1Signer{testutil.MustGenerateKey(t), testutil.MustGenerateKey(t), testutil.MustGenerateKey(t)}
+	warmSigner := testutil.MustGenerateKey(t)
+	user := testutil.MustGenerateKey(t)
+	executorIdx := 1 // inference 1 % 3 = 1
+
+	resolver := func(warmAddr, coldAddr string) (bool, error) {
+		return warmAddr == warmSigner.Address() && coldAddr == hosts[executorIdx].Address(), nil
+	}
+
+	group := testutil.MakeGroup(hosts)
+	config := testutil.DefaultConfig(len(hosts))
+	verifier := signing.NewSecp256k1Verifier()
+	sm := state.NewStateMachine("escrow-1", config, group, 10000, user.Address(), verifier, state.WithWarmKeyResolver(resolver))
+
+	// Apply start + confirm with warm key to populate WarmKeys in state.
+	nonce := uint64(1)
+	diff := testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{testutil.StartTx(1)})
+	_, err := sm.ApplyDiff(diff)
+	require.NoError(t, err)
+
+	execSig := testutil.SignExecutorReceipt(t, warmSigner, "escrow-1", 1, testutil.TestPromptHash[:], "llama", 100, 50, 1000, 1000)
+	nonce++
+	confirmTx := &types.SubnetTx{Tx: &types.SubnetTx_ConfirmStart{ConfirmStart: &types.MsgConfirmStart{
+		InferenceId: 1, ExecutorSig: execSig, ConfirmedAt: 1000,
+	}}}
+	diff = testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{confirmTx})
+	_, err = sm.ApplyDiff(diff)
+	require.NoError(t, err)
+
+	// Verify warm key binding exists.
+	warmKeys := sm.WarmKeys()
+	require.Equal(t, warmSigner.Address(), warmKeys[uint32(executorIdx)])
+
+	// Create Host with warmSigner (not in group as cold key).
+	engine := stub.NewInferenceEngine()
+	h, err := NewHost(sm, warmSigner, engine, "escrow-1", group, nil, WithGrace(10))
+	require.NoError(t, err)
+
+	// Host should have found its slot via WarmKeys check.
+	require.True(t, h.SlotIDs()[uint32(executorIdx)], "host should own executor slot via warm key")
+	require.Len(t, h.SlotIDs(), 1)
+}
