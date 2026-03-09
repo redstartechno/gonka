@@ -4,6 +4,9 @@ option go_package = "subnet/types";
 
 // Deterministic serialization for state hash computation.
 // Not the runtime state representation (that's domain types in Go).
+// FROZEN: field numbers and types must not change. Must produce identical
+// serialization as chain-side inference/inference/subnet_settlement.proto.
+// See chain-side TestComputeSubnetHostStatsHash_GoldenValue for validation.
 
 message HostStatsProto {
   uint32 slot_id = 1;

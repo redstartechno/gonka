@@ -1,8 +1,11 @@
 package keeper
 
 import (
+	"bytes"
+	"cmp"
 	"crypto/sha256"
 	"fmt"
+	"slices"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/decred/dcrd/dcrec/secp256k1/v4/ecdsa"
@@ -11,7 +14,7 @@ import (
 
 const (
 	SubnetGroupSize      = 16
-	SubnetQuorumSlots    = 11 // 2*16/3 + 1
+	SubnetQuorumSlots    = 2*SubnetGroupSize/3 + 1
 	SubnetFinalizedPhase = byte(0x02)
 )
 
@@ -26,7 +29,7 @@ func VerifySubnetSettlement(escrow types.SubnetEscrow, msg *types.MsgSettleSubne
 	}
 
 	// Recompute host_stats_hash
-	hostStatsHash, err := computeSubnetHostStatsHash(msg.HostStats)
+	hostStatsHash, err := ComputeSubnetHostStatsHash(msg.HostStats)
 	if err != nil {
 		return fmt.Errorf("failed to compute host stats hash: %w", err)
 	}
@@ -40,10 +43,8 @@ func VerifySubnetSettlement(escrow types.SubnetEscrow, msg *types.MsgSettleSubne
 	if len(msg.StateRoot) != 32 {
 		return fmt.Errorf("state_root must be 32 bytes, got %d", len(msg.StateRoot))
 	}
-	for i := range expectedRoot {
-		if expectedRoot[i] != msg.StateRoot[i] {
-			return fmt.Errorf("state_root mismatch")
-		}
+	if !bytes.Equal(expectedRoot[:], msg.StateRoot) {
+		return fmt.Errorf("state_root mismatch")
 	}
 
 	// Build signature data using deterministic proto marshal
@@ -59,8 +60,13 @@ func VerifySubnetSettlement(escrow types.SubnetEscrow, msg *types.MsgSettleSubne
 	sigHash := sha256.Sum256(sigData)
 
 	// Verify signatures and count slot votes
+	seenSlots := make(map[uint32]bool, len(msg.Signatures))
 	slotVotes := 0
 	for _, sig := range msg.Signatures {
+		if seenSlots[sig.SlotId] {
+			return fmt.Errorf("duplicate signature for slot %d", sig.SlotId)
+		}
+		seenSlots[sig.SlotId] = true
 		if int(sig.SlotId) >= len(escrow.Slots) {
 			return fmt.Errorf("slot_id %d out of range", sig.SlotId)
 		}
@@ -103,9 +109,9 @@ func deterministicMarshal(msg interface {
 	return msg.XXX_Marshal(nil, true)
 }
 
-// computeSubnetHostStatsHash recomputes the host stats hash from settlement host stats.
+// ComputeSubnetHostStatsHash recomputes the host stats hash from settlement host stats.
 // Uses the same proto deterministic marshal as the subnet module.
-func computeSubnetHostStatsHash(hostStats []*types.SubnetSettlementHostStats) ([]byte, error) {
+func ComputeSubnetHostStatsHash(hostStats []*types.SubnetSettlementHostStats) ([]byte, error) {
 	entries := make([]*types.SubnetHostStatsProto, len(hostStats))
 	for i, hs := range hostStats {
 		entries[i] = &types.SubnetHostStatsProto{
@@ -117,6 +123,9 @@ func computeSubnetHostStatsHash(hostStats []*types.SubnetSettlementHostStats) ([
 			CompletedValidations: hs.CompletedValidations,
 		}
 	}
+	slices.SortFunc(entries, func(a, b *types.SubnetHostStatsProto) int {
+		return cmp.Compare(a.SlotId, b.SlotId)
+	})
 	mapProto := &types.SubnetHostStatsMapProto{Entries: entries}
 	data, err := deterministicMarshal(mapProto)
 	if err != nil {

@@ -1,9 +1,12 @@
 package keeper_test
 
 import (
+	"cmp"
 	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"math/big"
+	"slices"
 	"testing"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
@@ -49,6 +52,9 @@ func buildSettlementTestData(t *testing.T, escrow types.SubnetEscrow, keys []*dc
 			CompletedValidations: hs.CompletedValidations,
 		}
 	}
+	slices.SortFunc(entries, func(a, b *types.SubnetHostStatsProto) int {
+		return cmp.Compare(a.SlotId, b.SlotId)
+	})
 	mapProto := &types.SubnetHostStatsMapProto{Entries: entries}
 	hostStatsData, err := mapProto.XXX_Marshal(nil, true)
 	require.NoError(t, err)
@@ -253,6 +259,87 @@ func TestComputeSubnetHostStatsHash_Deterministic(t *testing.T) {
 	hash2 := sha256.Sum256(data2)
 
 	require.Equal(t, hash1, hash2)
+}
+
+func TestVerifySubnetSettlement_DuplicateSlotId(t *testing.T) {
+	sdk.GetConfig().SetBech32PrefixForAccount("gonka", "gonka")
+
+	keys, slots := generateSubnetKeys(t, keeper.SubnetGroupSize)
+	escrow := types.SubnetEscrow{
+		Id: 1, Creator: "gonka1creator", Amount: 7_000_000_000, Slots: slots,
+	}
+	hostStats := makeHostStats(keeper.SubnetGroupSize, 100_000_000)
+	msg := buildSettlementTestData(t, escrow, keys, hostStats)
+
+	// Replace all 11 signatures with copies of slot 0's signature
+	slot0Sig := msg.Signatures[0]
+	dupSigs := make([]*types.SubnetSlotSignature, keeper.SubnetQuorumSlots)
+	for i := range dupSigs {
+		dupSigs[i] = &types.SubnetSlotSignature{
+			SlotId:    slot0Sig.SlotId,
+			Signature: slot0Sig.Signature,
+		}
+	}
+	msg.Signatures = dupSigs
+
+	err := keeper.VerifySubnetSettlement(escrow, msg)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "duplicate signature for slot")
+}
+
+func TestVerifySubnetSettlement_UnsortedHostStats(t *testing.T) {
+	sdk.GetConfig().SetBech32PrefixForAccount("gonka", "gonka")
+
+	keys, slots := generateSubnetKeys(t, keeper.SubnetGroupSize)
+	escrow := types.SubnetEscrow{
+		Id: 1, Creator: "gonka1creator", Amount: 7_000_000_000, Slots: slots,
+	}
+
+	// Create host stats in reverse order
+	hostStats := make([]*types.SubnetSettlementHostStats, keeper.SubnetGroupSize)
+	for i := 0; i < keeper.SubnetGroupSize; i++ {
+		hostStats[i] = &types.SubnetSettlementHostStats{
+			SlotId:               uint32(keeper.SubnetGroupSize - 1 - i),
+			Cost:                 100_000_000,
+			RequiredValidations:  10,
+			CompletedValidations: 9,
+		}
+	}
+
+	msg := buildSettlementTestData(t, escrow, keys, hostStats)
+
+	err := keeper.VerifySubnetSettlement(escrow, msg)
+	require.NoError(t, err)
+}
+
+func TestVerifySubnetSettlement_ZeroCost(t *testing.T) {
+	sdk.GetConfig().SetBech32PrefixForAccount("gonka", "gonka")
+
+	keys, slots := generateSubnetKeys(t, keeper.SubnetGroupSize)
+	escrow := types.SubnetEscrow{
+		Id: 1, Creator: "gonka1creator", Amount: 7_000_000_000, Slots: slots,
+	}
+	hostStats := makeHostStats(keeper.SubnetGroupSize, 0) // zero cost
+
+	msg := buildSettlementTestData(t, escrow, keys, hostStats)
+
+	err := keeper.VerifySubnetSettlement(escrow, msg)
+	require.NoError(t, err)
+}
+
+func TestComputeSubnetHostStatsHash_GoldenValue(t *testing.T) {
+	stats := []*types.SubnetSettlementHostStats{
+		{SlotId: 0, Missed: 1, Invalid: 0, Cost: 100, RequiredValidations: 10, CompletedValidations: 9},
+		{SlotId: 1, Missed: 0, Invalid: 1, Cost: 200, RequiredValidations: 10, CompletedValidations: 8},
+	}
+
+	hash, err := keeper.ComputeSubnetHostStatsHash(stats)
+	require.NoError(t, err)
+
+	// Fixed golden value -- if this changes, proto marshaling has drifted between
+	// the chain-side gogoproto and the subnet-side google-protobuf.
+	actual := hex.EncodeToString(hash)
+	require.Equal(t, "a3231da94dd50999b9f609263ab7b666431576806437944779c10f8124579fd1", actual, "golden hash mismatch: proto marshaling may have drifted")
 }
 
 // Verify signature format conversion roundtrip (go-ethereum <-> dcrd)

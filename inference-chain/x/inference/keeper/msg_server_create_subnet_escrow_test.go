@@ -1,6 +1,7 @@
 package keeper_test
 
 import (
+	"math"
 	"testing"
 
 	"cosmossdk.io/collections"
@@ -147,4 +148,24 @@ func TestCreateSubnetEscrow_InsufficientFunds(t *testing.T) {
 	})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "failed to lock funds")
+}
+
+func TestCreateSubnetEscrow_CounterOverflow(t *testing.T) {
+	k, ms, ctx, _ := setupSubnetEscrowTest(t)
+
+	setupEpochGroupForSubnet(ctx, k, 5)
+
+	// Set counter to max uint64
+	err := k.SubnetEscrowCounter.Set(ctx, math.MaxUint64)
+	require.NoError(t, err)
+
+	creator := sdk.AccAddress(make([]byte, 20))
+	creator[0] = 0xFF
+
+	_, err = ms.CreateSubnetEscrow(ctx, &types.MsgCreateSubnetEscrow{
+		Creator: creator.String(),
+		Amount:  5_000_000_000,
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "overflow")
 }

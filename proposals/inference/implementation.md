@@ -593,12 +593,12 @@ Scope:
 - Keeper logic: escrow creation (lock funds, store escrow info, record app_hash), settlement verification (recompute host_stats_hash, verify Merkle proof `hash(host_stats_hash || rest_hash) == state_root`, check 2/3+ slot-weighted signatures)
 - Escrow distribution: pay each host from host_stats[slot].cost, refund remaining balance to user
 - Record host_stats on chain (for reputation, future punishment logic)
-- Dispute window: X blocks after settlement proposal. Competing state with higher nonce and valid signatures overrides.
-- Host-initiated settlement after timeout (escrow expiry height or wall-clock from last nonce)
+- ~~Dispute window: X blocks after settlement proposal. Competing state with higher nonce and valid signatures overrides.~~ Replaced by finalization round in the subnet protocol. The user proposes MsgFinalizeRound, hosts reveal seeds and complete pending validations, then the user settles with a single MsgSettleSubnetEscrow that includes 2/3+ slot signatures on the finalized state root. No on-chain dispute window needed because settlement requires quorum agreement on the final state before submission.
+- Unsettled escrow pruning: escrows older than 2 epochs are pruned by the chain. Unsettled escrows split funds equally among unique validators in the group.
 
 Tests: keeper unit tests in `inference-chain/x/inference/keeper/`. Settlement verification using test vectors from Phase 4 (known state_root, host_stats, signatures from subnet integration tests).
 
-Testable deliverable: chain correctly creates escrows, verifies settlement Merkle proofs and signatures, distributes funds, handles disputes.
+Testable deliverable: chain correctly creates escrows, verifies settlement Merkle proofs and signatures, distributes funds.
 
 
 ## Phase 6: Warm Key Support

@@ -26,7 +26,7 @@ func TestPruneSubnetData_DeletesOldEscrows(t *testing.T) {
 		EpochIndex: 3,
 		Settled:    true,
 	}
-	id, err := k.StoreSubnetEscrow(ctx, escrow)
+	id, err := k.StoreSubnetEscrow(ctx, escrow, 1)
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), id)
 
@@ -56,7 +56,7 @@ func TestPruneSubnetData_PreservesRecentEscrows(t *testing.T) {
 		EpochIndex: 4,
 		Settled:    true,
 	}
-	_, err := k.StoreSubnetEscrow(ctx, escrow)
+	_, err := k.StoreSubnetEscrow(ctx, escrow, 1)
 	require.NoError(t, err)
 
 	// Prune at epoch 5 (threshold=2, so epoch 4 is not yet prunable)
@@ -84,7 +84,7 @@ func TestPruneSubnetData_HostStatsDeleted(t *testing.T) {
 		EpochIndex: 3,
 		Settled:    true,
 	}
-	_, err := k.StoreSubnetEscrow(ctx, escrow)
+	_, err := k.StoreSubnetEscrow(ctx, escrow, 1)
 	require.NoError(t, err)
 
 	_ = k.SubnetHostEpochStatsMap.Set(ctx, collections.Join(uint64(3), participant), types.SubnetHostEpochStats{
@@ -142,7 +142,7 @@ func TestPruneSubnetData_UnsettledEscrowDistributesFunds(t *testing.T) {
 		EpochIndex: 3,
 		Settled:    false, // unsettled
 	}
-	_, err := k.StoreSubnetEscrow(ctx, escrow)
+	_, err := k.StoreSubnetEscrow(ctx, escrow, 1)
 	require.NoError(t, err)
 
 	// Expect 4 payments of 2 GNK each (8 GNK / 4 unique validators)
@@ -159,6 +159,55 @@ func TestPruneSubnetData_UnsettledEscrowDistributesFunds(t *testing.T) {
 	require.False(t, found)
 }
 
+func TestPruneSubnetData_UnsettledDistributionAmounts(t *testing.T) {
+	k, ctx, mock := keepertest.InferenceKeeperReturningMocks(t)
+	sdk.GetConfig().SetBech32PrefixForAccount("gonka", "gonka")
+
+	// Create 4 unique validators in 16 slots (4 slots each)
+	addrs := make([]sdk.AccAddress, 4)
+	for i := range addrs {
+		addrs[i] = sdk.AccAddress(make([]byte, 20))
+		addrs[i][0] = byte(i + 1)
+	}
+
+	slots := make([]string, keeper.SubnetGroupSize)
+	for i := 0; i < 4; i++ {
+		slots[i] = addrs[0].String()
+	}
+	for i := 4; i < 8; i++ {
+		slots[i] = addrs[1].String()
+	}
+	for i := 8; i < 12; i++ {
+		slots[i] = addrs[2].String()
+	}
+	for i := 12; i < 16; i++ {
+		slots[i] = addrs[3].String()
+	}
+
+	escrow := &types.SubnetEscrow{
+		Creator:    "gonka1creator",
+		Amount:     8_000_000_000, // 8 GNK
+		Slots:      slots,
+		EpochIndex: 3,
+		Settled:    false,
+	}
+	_, err := k.StoreSubnetEscrow(ctx, escrow, 1)
+	require.NoError(t, err)
+
+	// Each of 4 validators should receive exactly 2 GNK (8 GNK / 4)
+	expectedShare, err := types.GetCoins(2_000_000_000)
+	require.NoError(t, err)
+
+	for _, addr := range addrs {
+		mock.BankKeeper.EXPECT().
+			SendCoinsFromModuleToAccount(gomock.Any(), types.ModuleName, addr, expectedShare, gomock.Eq("subnet_escrow_unsettled_distribution")).
+			Return(nil)
+	}
+
+	err = k.PruneSubnetData(ctx, 5)
+	require.NoError(t, err)
+}
+
 func TestPruneSubnetData_TracksProgress(t *testing.T) {
 	k, ctx, mock := keepertest.InferenceKeeperReturningMocks(t)
 	sdk.GetConfig().SetBech32PrefixForAccount("gonka", "gonka")
@@ -173,7 +222,7 @@ func TestPruneSubnetData_TracksProgress(t *testing.T) {
 			EpochIndex: epoch,
 			Settled:    true,
 		}
-		_, err := k.StoreSubnetEscrow(ctx, escrow)
+		_, err := k.StoreSubnetEscrow(ctx, escrow, epoch)
 		require.NoError(t, err)
 	}
 

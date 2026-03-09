@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"math"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/productscience/inference/x/inference/calculations"
@@ -58,6 +59,9 @@ func (k msgServer) CreateSubnetEscrow(goCtx context.Context, msg *types.MsgCreat
 	if err != nil {
 		counter = 0
 	}
+	if counter == math.MaxUint64 {
+		return nil, fmt.Errorf("subnet escrow counter overflow")
+	}
 	nextID := counter + 1
 
 	slots := calculations.GetSlotsFromSorted(appHash, fmt.Sprintf("subnet_escrow:%d", nextID), sortedEntries, totalWeight, SubnetGroupSize)
@@ -85,7 +89,7 @@ func (k msgServer) CreateSubnetEscrow(goCtx context.Context, msg *types.MsgCreat
 		Settled:    false,
 	}
 
-	id, err := k.StoreSubnetEscrow(goCtx, escrow)
+	id, err := k.StoreSubnetEscrow(goCtx, escrow, nextID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create escrow: %w", err)
 	}

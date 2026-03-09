@@ -6,6 +6,9 @@ option go_package = "github.com/productscience/inference/x/inference/types";
 
 // Duplicated from subnet module for deterministic on-chain verification.
 // These formats are frozen by the subnet protocol.
+// FROZEN: field numbers and types must not change. Chain (gogoproto) and
+// subnet (google-protobuf) must produce identical serialization.
+// See TestComputeSubnetHostStatsHash_GoldenValue for cross-library validation.
 
 message SubnetHostStatsProto {
   uint32 slot_id = 1;

@@ -7,15 +7,10 @@ import (
 	"github.com/productscience/inference/x/inference/types"
 )
 
-func (k Keeper) StoreSubnetEscrow(ctx context.Context, escrow *types.SubnetEscrow) (uint64, error) {
-	counter, err := k.SubnetEscrowCounter.Get(ctx)
-	if err != nil {
-		counter = 0
-	}
-	counter++
-	escrow.Id = counter
+func (k Keeper) StoreSubnetEscrow(ctx context.Context, escrow *types.SubnetEscrow, nextID uint64) (uint64, error) {
+	escrow.Id = nextID
 
-	if err := k.SubnetEscrowCounter.Set(ctx, counter); err != nil {
+	if err := k.SubnetEscrowCounter.Set(ctx, nextID); err != nil {
 		return 0, err
 	}
 	if err := k.SubnetEscrows.Set(ctx, escrow.Id, *escrow); err != nil {
