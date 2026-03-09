@@ -219,7 +219,7 @@ func TestFullSession_HappyPath(t *testing.T) {
 	require.NoError(t, err)
 	restHash, err := ComputeRestHash(state.Balance, state.Inferences)
 	require.NoError(t, err)
-	recomputedRoot, err := ComputeStateRoot(state.Balance, state.HostStats, state.Inferences)
+	recomputedRoot, err := ComputeStateRoot(state.Balance, state.HostStats, state.Inferences, state.Phase)
 	require.NoError(t, err)
 	require.Equal(t, finalStateRoot, recomputedRoot)
 

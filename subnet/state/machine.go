@@ -163,13 +163,24 @@ func (sm *StateMachine) applyCore(nonce uint64, txs []*types.SubnetTx, postState
 	// 5. Update nonce.
 	sm.state.LatestNonce = nonce
 
-	if sm.state.Finalizing {
+	// Track FinalizeNonce: the nonce at which finalization started.
+	if sm.state.Phase == types.PhaseFinalizing && sm.state.FinalizeNonce == 0 {
+		sm.state.FinalizeNonce = nonce
+	}
+
+	if sm.state.Phase == types.PhaseFinalizing {
 		sm.penalizeUnrevealedSeeds()
+
+		// Auto-transition Finalizing -> Settlement.
+		allRevealed := sm.allUniqueAddressesRevealed()
+		deadlinePassed := sm.state.LatestNonce >= sm.state.FinalizeNonce+uint64(len(sm.state.Group))
+		if allRevealed || deadlinePassed {
+			sm.state.Phase = types.PhaseSettlement
+		}
 	}
 
 	// 6. Compute state root.
-	// TODO: optimize for sure
-	root, err := ComputeStateRoot(sm.state.Balance, sm.state.HostStats, sm.state.Inferences)
+	root, err := ComputeStateRoot(sm.state.Balance, sm.state.HostStats, sm.state.Inferences, sm.state.Phase)
 	if err != nil {
 		return nil, fmt.Errorf("compute state root: %w", err)
 	}
@@ -189,9 +200,9 @@ func (sm *StateMachine) LatestNonce() uint64 {
 	return sm.state.LatestNonce
 }
 
-// IsFinalizing returns whether the session is in finalizing state.
-func (sm *StateMachine) IsFinalizing() bool {
-	return sm.state.Finalizing
+// Phase returns the current session phase.
+func (sm *StateMachine) Phase() types.SessionPhase {
+	return sm.state.Phase
 }
 
 // SnapshotState returns a deep copy of the current escrow state.
@@ -241,7 +252,8 @@ func (sm *StateMachine) SnapshotState() types.EscrowState {
 // mutableSnapshot holds the mutable fields of EscrowState for rollback.
 type mutableSnapshot struct {
 	Balance       uint64
-	Finalizing    bool
+	Phase         types.SessionPhase
+	FinalizeNonce uint64
 	LatestNonce   uint64
 	Inferences    map[uint64]*types.InferenceRecord
 	HostStats     map[uint32]*types.HostStats
@@ -274,7 +286,8 @@ func (sm *StateMachine) snapshotMutable() mutableSnapshot {
 
 	return mutableSnapshot{
 		Balance:       sm.state.Balance,
-		Finalizing:    sm.state.Finalizing,
+		Phase:         sm.state.Phase,
+		FinalizeNonce: sm.state.FinalizeNonce,
 		LatestNonce:   sm.state.LatestNonce,
 		Inferences:    infCopy,
 		HostStats:     hsCopy,
@@ -284,7 +297,8 @@ func (sm *StateMachine) snapshotMutable() mutableSnapshot {
 
 func (sm *StateMachine) restoreMutable(snap mutableSnapshot) {
 	sm.state.Balance = snap.Balance
-	sm.state.Finalizing = snap.Finalizing
+	sm.state.Phase = snap.Phase
+	sm.state.FinalizeNonce = snap.FinalizeNonce
 	sm.state.LatestNonce = snap.LatestNonce
 	sm.state.Inferences = snap.Inferences
 	sm.state.HostStats = snap.HostStats
@@ -293,7 +307,7 @@ func (sm *StateMachine) restoreMutable(snap mutableSnapshot) {
 
 // ComputeStateRoot returns the current state root without modifying state.
 func (sm *StateMachine) ComputeStateRoot() ([]byte, error) {
-	return ComputeStateRoot(sm.state.Balance, sm.state.HostStats, sm.state.Inferences)
+	return ComputeStateRoot(sm.state.Balance, sm.state.HostStats, sm.state.Inferences, sm.state.Phase)
 }
 
 func (sm *StateMachine) applyTx(tx *types.SubnetTx) error {
@@ -320,7 +334,7 @@ func (sm *StateMachine) applyTx(tx *types.SubnetTx) error {
 }
 
 func (sm *StateMachine) applyStartInference(msg *types.MsgStartInference) error {
-	if sm.state.Finalizing {
+	if sm.state.Phase != types.PhaseActive {
 		return types.ErrSessionFinalizing
 	}
 
@@ -658,8 +672,11 @@ func (sm *StateMachine) applyTimeout(msg *types.MsgTimeoutInference) error {
 }
 
 func (sm *StateMachine) applyRevealSeed(msg *types.MsgRevealSeed) error {
-	// Guard: must be finalizing.
-	if !sm.state.Finalizing {
+	// Guard: must be in PhaseFinalizing. Rejected in Active (too early) and Settlement (too late).
+	if sm.state.Phase == types.PhaseSettlement {
+		return types.ErrSessionSettlement
+	}
+	if sm.state.Phase != types.PhaseFinalizing {
 		return types.ErrSessionNotFinalizing
 	}
 
@@ -800,11 +817,21 @@ func (sm *StateMachine) penalizeUnrevealedSeeds() {
 }
 
 func (sm *StateMachine) applyFinalizeRound() error {
-	if sm.state.Finalizing {
+	if sm.state.Phase != types.PhaseActive {
 		return types.ErrAlreadyFinalizing
 	}
-	sm.state.Finalizing = true
+	sm.state.Phase = types.PhaseFinalizing
 	return nil
+}
+
+// allUniqueAddressesRevealed returns true when every unique address in the
+// group has revealed a seed.
+func (sm *StateMachine) allUniqueAddressesRevealed() bool {
+	revealedAddrs := make(map[string]bool, len(sm.state.RevealedSeeds))
+	for slot := range sm.state.RevealedSeeds {
+		revealedAddrs[sm.slotToAddress[slot]] = true
+	}
+	return len(revealedAddrs) == len(sm.addressInGroup)
 }
 
 // BuildDiffContent creates the proto DiffContent from nonce, txs, escrowID, and postStateRoot for signing.

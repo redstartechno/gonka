@@ -19,9 +19,9 @@ func TestComputeStateRoot_Deterministic(t *testing.T) {
 		2: {Status: types.StatusFinished, ExecutorSlot: 1, ActualCost: 200},
 	}
 
-	root1, err := ComputeStateRoot(500, hostStats, inferences)
+	root1, err := ComputeStateRoot(500, hostStats, inferences, types.PhaseActive)
 	require.NoError(t, err)
-	root2, err := ComputeStateRoot(500, hostStats, inferences)
+	root2, err := ComputeStateRoot(500, hostStats, inferences, types.PhaseActive)
 	require.NoError(t, err)
 	require.Equal(t, root1, root2)
 }
@@ -34,9 +34,9 @@ func TestComputeStateRoot_DifferentState(t *testing.T) {
 		1: {Status: types.StatusFinished, ExecutorSlot: 0, ActualCost: 100},
 	}
 
-	root1, err := ComputeStateRoot(500, hostStats, inferences)
+	root1, err := ComputeStateRoot(500, hostStats, inferences, types.PhaseActive)
 	require.NoError(t, err)
-	root2, err := ComputeStateRoot(600, hostStats, inferences)
+	root2, err := ComputeStateRoot(600, hostStats, inferences, types.PhaseActive)
 	require.NoError(t, err)
 	require.NotEqual(t, root1, root2)
 }
@@ -51,7 +51,7 @@ func TestStateRoot_MerkleStructure(t *testing.T) {
 	}
 	balance := uint64(875)
 
-	root, err := ComputeStateRoot(balance, hostStats, inferences)
+	root, err := ComputeStateRoot(balance, hostStats, inferences, types.PhaseActive)
 	require.NoError(t, err)
 
 	// Manually recompute and verify structure.
@@ -63,6 +63,7 @@ func TestStateRoot_MerkleStructure(t *testing.T) {
 	h := sha256.New()
 	h.Write(hostStatsHash)
 	h.Write(restHash)
+	h.Write([]byte{uint8(types.PhaseActive)})
 	expected := h.Sum(nil)
 
 	require.Equal(t, expected, root)
@@ -84,9 +85,9 @@ func TestStateRoot_SortedKeys(t *testing.T) {
 
 	inferences := map[uint64]*types.InferenceRecord{}
 
-	root1, err := ComputeStateRoot(1000, stats1, inferences)
+	root1, err := ComputeStateRoot(1000, stats1, inferences, types.PhaseActive)
 	require.NoError(t, err)
-	root2, err := ComputeStateRoot(1000, stats2, inferences)
+	root2, err := ComputeStateRoot(1000, stats2, inferences, types.PhaseActive)
 	require.NoError(t, err)
 	require.Equal(t, root1, root2)
 }

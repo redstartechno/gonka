@@ -589,7 +589,7 @@ func TestApplyDiff_FinalizeRound(t *testing.T) {
 	diff := testutil.SignDiff(t, user, "escrow-1", 1, []*types.SubnetTx{txFinalize()})
 	_, err := sm.ApplyDiff(diff)
 	require.NoError(t, err)
-	require.True(t, sm.SnapshotState().Finalizing)
+	require.True(t, sm.SnapshotState().Phase >= types.PhaseFinalizing)
 
 	// MsgStartInference after finalize -> rejected.
 	diff = testutil.SignDiff(t, user, "escrow-1", 2, []*types.SubnetTx{txStart(&types.MsgStartInference{
@@ -1972,4 +1972,189 @@ func TestPenalizeUnrevealedSeeds(t *testing.T) {
 		_, revealed := st.RevealedSeeds[slot]
 		require.True(t, revealed, "host %d should have revealed seed", slot)
 	}
+}
+
+// --- SessionPhase transition tests ---
+
+func TestPhase_ActiveToFinalizing(t *testing.T) {
+	hosts := []*signing.Secp256k1Signer{testutil.MustGenerateKey(t), testutil.MustGenerateKey(t), testutil.MustGenerateKey(t)}
+	sm, user := newTestSM(t, hosts, 10000)
+
+	require.Equal(t, types.PhaseActive, sm.Phase())
+
+	diff := testutil.SignDiff(t, user, "escrow-1", 1, []*types.SubnetTx{txFinalize()})
+	_, err := sm.ApplyDiff(diff)
+	require.NoError(t, err)
+	require.Equal(t, types.PhaseFinalizing, sm.Phase())
+}
+
+func TestPhase_FinalizingToSettlement_AllRevealed(t *testing.T) {
+	hosts := []*signing.Secp256k1Signer{testutil.MustGenerateKey(t), testutil.MustGenerateKey(t), testutil.MustGenerateKey(t)}
+	sm, user := newTestSM(t, hosts, 10000)
+
+	// Finalize.
+	diff := testutil.SignDiff(t, user, "escrow-1", 1, []*types.SubnetTx{txFinalize()})
+	_, err := sm.ApplyDiff(diff)
+	require.NoError(t, err)
+	require.Equal(t, types.PhaseFinalizing, sm.Phase())
+
+	// Reveal all 3 seeds -- should auto-transition to Settlement.
+	for i, h := range hosts {
+		seedMsg := testutil.SignRevealSeed(t, h, "escrow-1", uint32(i))
+		nonce := uint64(2 + i)
+		diff = testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{txRevealSeed(seedMsg)})
+		_, err = sm.ApplyDiff(diff)
+		require.NoError(t, err)
+	}
+
+	require.Equal(t, types.PhaseSettlement, sm.Phase())
+}
+
+func TestPhase_FinalizingToSettlement_Deadline(t *testing.T) {
+	hosts := []*signing.Secp256k1Signer{testutil.MustGenerateKey(t), testutil.MustGenerateKey(t), testutil.MustGenerateKey(t)}
+	sm, user := newTestSM(t, hosts, 10000)
+
+	// Finalize at nonce 1.
+	diff := testutil.SignDiff(t, user, "escrow-1", 1, []*types.SubnetTx{txFinalize()})
+	_, err := sm.ApplyDiff(diff)
+	require.NoError(t, err)
+	require.Equal(t, types.PhaseFinalizing, sm.Phase())
+
+	// FinalizeNonce is set to 1 (the nonce where finalization started).
+	// Deadline = FinalizeNonce + len(Group) = 1 + 3 = 4.
+	// Send empty diffs until LatestNonce >= 4.
+	for nonce := uint64(2); nonce <= 4; nonce++ {
+		diff = testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{})
+		_, err = sm.ApplyDiff(diff)
+		require.NoError(t, err)
+	}
+
+	require.Equal(t, types.PhaseSettlement, sm.Phase())
+}
+
+func TestPhase_RevealSeed_RejectedInSettlement(t *testing.T) {
+	hosts := []*signing.Secp256k1Signer{testutil.MustGenerateKey(t), testutil.MustGenerateKey(t), testutil.MustGenerateKey(t)}
+	sm, user := newTestSM(t, hosts, 10000)
+
+	// Finalize + empty diffs to reach Settlement via deadline.
+	diff := testutil.SignDiff(t, user, "escrow-1", 1, []*types.SubnetTx{txFinalize()})
+	_, err := sm.ApplyDiff(diff)
+	require.NoError(t, err)
+	for nonce := uint64(2); nonce <= 4; nonce++ {
+		diff = testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{})
+		_, err = sm.ApplyDiff(diff)
+		require.NoError(t, err)
+	}
+	require.Equal(t, types.PhaseSettlement, sm.Phase())
+
+	// Late reveal -> rejected with ErrSessionSettlement.
+	seedMsg := testutil.SignRevealSeed(t, hosts[0], "escrow-1", 0)
+	diff = testutil.SignDiff(t, user, "escrow-1", 5, []*types.SubnetTx{txRevealSeed(seedMsg)})
+	_, err = sm.ApplyDiff(diff)
+	require.ErrorIs(t, err, types.ErrSessionSettlement)
+}
+
+func TestPhase_StartInference_RejectedInBothFinalizingAndSettlement(t *testing.T) {
+	hosts := []*signing.Secp256k1Signer{testutil.MustGenerateKey(t), testutil.MustGenerateKey(t), testutil.MustGenerateKey(t)}
+	sm, user := newTestSM(t, hosts, 10000)
+
+	// Finalize.
+	diff := testutil.SignDiff(t, user, "escrow-1", 1, []*types.SubnetTx{txFinalize()})
+	_, err := sm.ApplyDiff(diff)
+	require.NoError(t, err)
+
+	// StartInference in Finalizing -> rejected.
+	diff = testutil.SignDiff(t, user, "escrow-1", 2, []*types.SubnetTx{txStart(&types.MsgStartInference{
+		InferenceId: 2, InputLength: 10, MaxTokens: 5,
+	})})
+	_, err = sm.ApplyDiff(diff)
+	require.ErrorIs(t, err, types.ErrSessionFinalizing)
+
+	// Advance to Settlement via deadline.
+	for nonce := uint64(2); nonce <= 4; nonce++ {
+		diff = testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{})
+		_, err = sm.ApplyDiff(diff)
+		require.NoError(t, err)
+	}
+	require.Equal(t, types.PhaseSettlement, sm.Phase())
+
+	// StartInference in Settlement -> rejected.
+	diff = testutil.SignDiff(t, user, "escrow-1", 5, []*types.SubnetTx{txStart(&types.MsgStartInference{
+		InferenceId: 5, InputLength: 10, MaxTokens: 5,
+	})})
+	_, err = sm.ApplyDiff(diff)
+	require.ErrorIs(t, err, types.ErrSessionFinalizing)
+}
+
+func TestPhase_StateRootDiffersPerPhase(t *testing.T) {
+	hostStats := map[uint32]*types.HostStats{
+		0: {Cost: 100},
+	}
+	inferences := map[uint64]*types.InferenceRecord{
+		1: {Status: types.StatusFinished, ExecutorSlot: 0, ActualCost: 100},
+	}
+
+	rootActive, err := ComputeStateRoot(500, hostStats, inferences, types.PhaseActive)
+	require.NoError(t, err)
+	rootFinalizing, err := ComputeStateRoot(500, hostStats, inferences, types.PhaseFinalizing)
+	require.NoError(t, err)
+	rootSettlement, err := ComputeStateRoot(500, hostStats, inferences, types.PhaseSettlement)
+	require.NoError(t, err)
+
+	require.NotEqual(t, rootActive, rootFinalizing, "Active and Finalizing roots must differ")
+	require.NotEqual(t, rootFinalizing, rootSettlement, "Finalizing and Settlement roots must differ")
+	require.NotEqual(t, rootActive, rootSettlement, "Active and Settlement roots must differ")
+}
+
+func TestPhase_PenaltyFinality(t *testing.T) {
+	// Verify that unrevealed seeds get penalized during Finalizing,
+	// and penalties remain after transitioning to Settlement.
+	hosts := []*signing.Secp256k1Signer{testutil.MustGenerateKey(t), testutil.MustGenerateKey(t), testutil.MustGenerateKey(t)}
+	sm, user := newTestSM(t, hosts, 100000)
+
+	// Create an inference so there's something to penalize.
+	diff := testutil.SignDiff(t, user, "escrow-1", 1, []*types.SubnetTx{txStart(&types.MsgStartInference{
+		InferenceId: 1, PromptHash: []byte("prompt"), Model: "llama",
+		InputLength: 100, MaxTokens: 50, StartedAt: 1000,
+	})})
+	_, err := sm.ApplyDiff(diff)
+	require.NoError(t, err)
+
+	// Confirm + finish so the inference reaches StatusFinished.
+	execSig := testutil.SignExecutorReceipt(t, hosts[1], "escrow-1", 1, []byte("prompt"), "llama", 100, 50, 1000, 1000)
+	diff = testutil.SignDiff(t, user, "escrow-1", 2, []*types.SubnetTx{txConfirm(&types.MsgConfirmStart{
+		InferenceId: 1, ExecutorSig: execSig, ConfirmedAt: 1000,
+	})})
+	_, err = sm.ApplyDiff(diff)
+	require.NoError(t, err)
+
+	finishMsg := &types.MsgFinishInference{
+		InferenceId: 1, ResponseHash: []byte("resp"),
+		InputTokens: 80, OutputTokens: 40, ExecutorSlot: 1,
+	}
+	finishMsg.ProposerSig = testutil.SignProposerTx(t, hosts[1], finishMsg)
+	diff = testutil.SignDiff(t, user, "escrow-1", 3, []*types.SubnetTx{txFinish(finishMsg)})
+	_, err = sm.ApplyDiff(diff)
+	require.NoError(t, err)
+
+	// Finalize.
+	diff = testutil.SignDiff(t, user, "escrow-1", 4, []*types.SubnetTx{txFinalize()})
+	_, err = sm.ApplyDiff(diff)
+	require.NoError(t, err)
+
+	// Advance to Settlement via deadline (no reveals).
+	for nonce := uint64(5); nonce <= 7; nonce++ {
+		diff = testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{})
+		_, err = sm.ApplyDiff(diff)
+		require.NoError(t, err)
+	}
+	require.Equal(t, types.PhaseSettlement, sm.Phase())
+
+	// Host 0 and 2 never revealed -> should have RequiredValidations > 0.
+	st := sm.SnapshotState()
+	require.True(t, st.HostStats[0].RequiredValidations > 0, "host 0 should be penalized")
+	require.True(t, st.HostStats[2].RequiredValidations > 0, "host 2 should be penalized")
+	// Penalty is permanent: CompletedValidations stays 0.
+	require.Equal(t, uint32(0), st.HostStats[0].CompletedValidations)
+	require.Equal(t, uint32(0), st.HostStats[2].CompletedValidations)
 }

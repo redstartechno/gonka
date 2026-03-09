@@ -477,7 +477,7 @@ func TestProtocol_Finalize_AllInferencesFinished(t *testing.T) {
 
 	// ALL 15 must be finished (not just >= 13 as in the non-finalized case).
 	st := env.session.StateMachine().SnapshotState()
-	require.True(t, st.Finalizing)
+	require.True(t, st.Phase >= types.PhaseFinalizing)
 	for id, rec := range st.Inferences {
 		require.Equal(t, types.StatusFinished, rec.Status, "inference %d should be finished", id)
 	}
@@ -636,7 +636,7 @@ func TestProtocol_Finalize_WithSeedReveal(t *testing.T) {
 	// After finalization, hosts should have produced seed reveals.
 	// Check final state for revealed seeds and compliance.
 	st := env.session.StateMachine().SnapshotState()
-	require.True(t, st.Finalizing)
+	require.True(t, st.Phase >= types.PhaseFinalizing)
 
 	// At least some seeds should be revealed.
 	require.True(t, len(st.RevealedSeeds) > 0, "expected seed reveals after finalization, got %d", len(st.RevealedSeeds))
@@ -670,15 +670,13 @@ func TestProtocol_Settlement_EndToEnd(t *testing.T) {
 	allSigs := env.session.Signatures()
 	latestSigs := allSigs[nonce]
 
-	settlement, err := state.BuildSettlement(st, latestSigs, nonce)
+	settlement, err := state.BuildSettlement("escrow-1", st, latestSigs, nonce)
 	require.NoError(t, err)
 	require.NotNil(t, settlement)
 
-	// Verify Merkle proof: sha256(hostStatsHash || restHash) == stateRoot.
-	hostStatsHash, err := state.ComputeHostStatsHash(st.HostStats)
+	// Verify settlement via VerifySettlement.
+	root, err := state.VerifySettlement(*settlement, env.group, signing.NewSecp256k1Verifier())
 	require.NoError(t, err)
-
-	h := sha256.Sum256(append(hostStatsHash, settlement.RestHash...))
-	require.Equal(t, h[:], settlement.StateRoot, "Merkle proof must verify")
+	require.Len(t, root, 32)
 	require.Equal(t, nonce, settlement.Nonce)
 }

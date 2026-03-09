@@ -2,6 +2,15 @@ package types
 
 import "fmt"
 
+// SessionPhase represents the phase of a subnet session.
+type SessionPhase uint8
+
+const (
+	PhaseActive     SessionPhase = 0
+	PhaseFinalizing SessionPhase = 1
+	PhaseSettlement SessionPhase = 2
+)
+
 // InferenceStatus represents the lifecycle state of an inference.
 type InferenceStatus uint8
 
@@ -62,7 +71,8 @@ type EscrowState struct {
 	Config      SessionConfig
 	Group       []SlotAssignment
 	Balance       uint64
-	Finalizing    bool
+	Phase         SessionPhase
+	FinalizeNonce uint64
 	Inferences    map[uint64]*InferenceRecord
 	HostStats     map[uint32]*HostStats
 	RevealedSeeds map[uint32]int64

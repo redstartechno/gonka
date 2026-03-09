@@ -429,7 +429,7 @@ func (h *Host) executeAsync(ctx context.Context, job *executeJob) {
 // maybeRevealSeed produces a MsgRevealSeed if the session is finalizing and
 // this host's address has not yet revealed. Caller must hold h.mu.
 func (h *Host) maybeRevealSeed() {
-	if !h.sm.IsFinalizing() {
+	if h.sm.Phase() != types.PhaseFinalizing {
 		return
 	}
 
@@ -479,10 +479,17 @@ func (h *Host) maybeRevealSeed() {
 	}
 	msg.ProposerSig = proposerSig
 
+	seedTx := &types.SubnetTx{Tx: &types.SubnetTx_RevealSeed{RevealSeed: msg}}
 	h.mempool.Add(MempoolEntry{
-		Tx:         &types.SubnetTx{Tx: &types.SubnetTx_RevealSeed{RevealSeed: msg}},
+		Tx:         seedTx,
 		ProposedAt: h.sm.LatestNonce(),
 	})
+
+	// Eager gossip: broadcast seed reveal to ALL peers so no host can
+	// suppress it. Uses BroadcastTxs which sends to every peer (not K random).
+	if h.gsp != nil {
+		go h.gsp.BroadcastTxs(context.Background(), []*types.SubnetTx{seedTx})
+	}
 }
 
 // AccumulateGossipSig verifies and stores a signature received via gossip.

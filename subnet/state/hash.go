@@ -12,17 +12,22 @@ import (
 	"subnet/types"
 )
 
-// ComputeStateRoot computes the two-level Merkle state hash:
+// ComputeStateRoot computes a flat commitment hash over the session state:
 //
-//	          state_root
-//	         /          \
-//	host_stats_hash    rest_hash
+//   state_root = sha256(host_stats_hash || rest_hash || phase_byte)
 //
-// host_stats_hash = sha256(proto(sorted host stats))
-// inferences_hash = sha256(proto(sorted inference records))
-// rest_hash       = sha256(balance_be || inferences_hash)
-// state_root      = sha256(host_stats_hash || rest_hash)
-func ComputeStateRoot(balance uint64, hostStats map[uint32]*types.HostStats, inferences map[uint64]*types.InferenceRecord) ([]byte, error) {
+// where:
+//   host_stats_hash = sha256(proto(sorted host stats))    -- 32 bytes
+//   rest_hash       = sha256(balance_be || inferences_hash) -- 32 bytes
+//   inferences_hash = sha256(proto(sorted inference records))
+//   phase_byte      = uint8(phase): 0x00=Active, 0x01=Finalizing, 0x02=Settlement
+//
+// All three components have fixed, known lengths (32 + 32 + 1), so the
+// concatenation is unambiguous without length prefixes.
+//
+// Mainnet settlement hardcodes phase_byte=0x02 when recomputing, rejecting
+// any pre-settlement state.
+func ComputeStateRoot(balance uint64, hostStats map[uint32]*types.HostStats, inferences map[uint64]*types.InferenceRecord, phase types.SessionPhase) ([]byte, error) {
 	hostStatsHash, err := computeHostStatsHash(hostStats)
 	if err != nil {
 		return nil, err
@@ -35,6 +40,7 @@ func ComputeStateRoot(balance uint64, hostStats map[uint32]*types.HostStats, inf
 	h := sha256.New()
 	h.Write(hostStatsHash)
 	h.Write(restHash)
+	h.Write([]byte{uint8(phase)})
 	return h.Sum(nil), nil
 }
 

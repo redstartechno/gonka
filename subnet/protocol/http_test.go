@@ -153,7 +153,7 @@ func TestHTTP_HappyPath(t *testing.T) {
 	require.NoError(t, err)
 
 	st := env.session.StateMachine().SnapshotState()
-	require.True(t, st.Finalizing)
+	require.True(t, st.Phase >= types.PhaseFinalizing)
 	require.Equal(t, 15, len(st.Inferences))
 
 	for id, rec := range st.Inferences {
@@ -506,7 +506,7 @@ func TestHTTP_Finalize(t *testing.T) {
 	require.NoError(t, err)
 
 	st := env.session.StateMachine().SnapshotState()
-	require.True(t, st.Finalizing)
+	require.True(t, st.Phase >= types.PhaseFinalizing)
 	for id, rec := range st.Inferences {
 		require.Equal(t, types.StatusFinished, rec.Status, "inference %d", id)
 	}

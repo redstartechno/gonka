@@ -5,7 +5,6 @@ package user
 import (
 	"cmp"
 	"context"
-	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
 	"runtime"
@@ -230,7 +229,7 @@ func runStress(t *testing.T, numHosts, rounds int) {
 	// --- State root at peak (pre-finalize, measures raw hashing cost at N inferences) ---
 	preFinSt := session.StateMachine().SnapshotState()
 	srStart := time.Now()
-	_, err = state.ComputeStateRoot(preFinSt.Balance, preFinSt.HostStats, preFinSt.Inferences)
+	_, err = state.ComputeStateRoot(preFinSt.Balance, preFinSt.HostStats, preFinSt.Inferences, preFinSt.Phase)
 	require.NoError(t, err)
 	srDuration := time.Since(srStart)
 
@@ -248,7 +247,7 @@ func runStress(t *testing.T, numHosts, rounds int) {
 	require.True(t, ok, "should have signatures for final nonce %d", finalNonce)
 
 	settleStart := time.Now()
-	payload, err := state.BuildSettlement(st, latestSigs, finalNonce)
+	payload, err := state.BuildSettlement("escrow-stress", st, latestSigs, finalNonce)
 	require.NoError(t, err)
 	settleDuration := time.Since(settleStart)
 
@@ -280,14 +279,10 @@ func runStress(t *testing.T, numHosts, rounds int) {
 		"expected %d signatures at final nonce, got %d", numHosts, len(latestSigs))
 	finalSignedCount := len(latestSigs)
 
-	// 5. Settlement Merkle: sha256(hostStatsHash || restHash) == stateRoot.
-	hostStatsHash, err := state.ComputeHostStatsHash(st.HostStats)
+	// 5. Settlement verification via VerifySettlement.
+	root, err := state.VerifySettlement(*payload, group, verifier)
 	require.NoError(t, err)
-	h := sha256.New()
-	h.Write(hostStatsHash)
-	h.Write(payload.RestHash)
-	expectedRoot := h.Sum(nil)
-	require.Equal(t, expectedRoot, payload.StateRoot, "Merkle proof mismatch")
+	require.Len(t, root, 32)
 
 	// 6. Balance: initialBalance - totalInf * actualCost == st.Balance.
 	expectedBalance := uint64(stressBalance) - uint64(totalInf)*actualCostPerInf

@@ -2,7 +2,6 @@ package user
 
 import (
 	"context"
-	"crypto/sha256"
 	"fmt"
 	"testing"
 
@@ -209,7 +208,7 @@ func TestUser_Finalize(t *testing.T) {
 	require.NoError(t, err)
 
 	st := session.StateMachine().SnapshotState()
-	require.True(t, st.Finalizing)
+	require.True(t, st.Phase >= types.PhaseFinalizing)
 	for id, rec := range st.Inferences {
 		require.Equal(t, types.StatusFinished, rec.Status, "inference %d should be finished", id)
 	}
@@ -415,13 +414,25 @@ func (m *mockTimeoutVerifier) VerifyTimeout(_ context.Context, inferenceID uint6
 	return true, sig, voterSlot, nil
 }
 
+// Fixed private keys for reproducible seed derivation.
+// signer[0] seed=8507102209880137399, signer[1] seed=8250581583015032772, signer[2] seed=88554756047201157.
+// With 3 hosts, 100% rate, prob=0.5 per non-executor inference:
+//   signer[0]: validates inf 1,2 (RequiredValidations=2)
+//   signer[1]: all floats >= 0.5 (RequiredValidations=0)
+//   signer[2]: all floats >= 0.5 (RequiredValidations=0)
+var settlementFixedKeys = []string{
+	"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+	"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+}
+
 func TestUser_Finalize_SeedRevealAndSettlement(t *testing.T) {
 	numHosts := 3
 	hosts := make([]*signing.Secp256k1Signer, numHosts)
 	for i := range hosts {
-		hosts[i] = testutil.MustGenerateKey(t)
+		hosts[i] = testutil.MustSignerFromHex(t, settlementFixedKeys[i])
 	}
-	userKey := testutil.MustGenerateKey(t)
+	userKey := testutil.MustSignerFromHex(t, "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd")
 	group := testutil.MakeGroup(hosts)
 	config := types.SessionConfig{
 		RefusalTimeout:   60,
@@ -478,23 +489,16 @@ func TestUser_Finalize_SeedRevealAndSettlement(t *testing.T) {
 	}
 	require.True(t, hasRequired, "at least one host should have RequiredValidations > 0")
 
-	// Build settlement and verify Merkle proof.
+	// Build settlement and verify via VerifySettlement.
 	finalNonce := session.Nonce()
 	sigs := session.Signatures()
 	latestSigs, ok := sigs[finalNonce]
 	require.True(t, ok, "should have signatures for final nonce")
 
-	payload, err := state.BuildSettlement(st, latestSigs, finalNonce)
+	payload, err := state.BuildSettlement("escrow-1", st, latestSigs, finalNonce)
 	require.NoError(t, err)
 
-	// Verify: stateRoot == sha256(hostStatsHash || restHash).
-	hostStatsHash, err := state.ComputeHostStatsHash(st.HostStats)
+	root, err := state.VerifySettlement(*payload, group, verifier)
 	require.NoError(t, err)
-
-	h := sha256.New()
-	h.Write(hostStatsHash)
-	h.Write(payload.RestHash)
-	expectedRoot := h.Sum(nil)
-
-	require.Equal(t, expectedRoot, payload.StateRoot, "stateRoot should equal sha256(hostStatsHash || restHash)")
+	require.Len(t, root, 32)
 }
