@@ -9,6 +9,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/cosmos/cosmos-sdk/crypto/keys/secp256k1"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	dcrdecdsa "github.com/decred/dcrd/dcrec/secp256k1/v4/ecdsa"
 	dcrdsecp "github.com/decred/dcrd/dcrec/secp256k1/v4"
@@ -20,9 +21,8 @@ import (
 
 // cosmosAddressFromDcrdKey derives the Cosmos bech32 address from a dcrd private key.
 func cosmosAddressFromDcrdKey(key *dcrdsecp.PrivateKey) sdk.AccAddress {
-	compressed := key.PubKey().SerializeCompressed()
-	hash := sha256.Sum256(compressed)
-	return sdk.AccAddress(hash[:20])
+	cosmosPubKey := &secp256k1.PubKey{Key: key.PubKey().SerializeCompressed()}
+	return sdk.AccAddress(cosmosPubKey.Address())
 }
 
 // signGoEthFormat signs a hash and returns the go-ethereum format [R(32)||S(32)||V(1)].
@@ -134,14 +134,14 @@ func TestVerifySubnetSettlement_HappyPath(t *testing.T) {
 	hostStats := makeHostStats(keeper.SubnetGroupSize, 100_000_000)
 	msg := buildSettlementTestData(t, escrow, keys, hostStats)
 
-	err := keeper.VerifySubnetSettlement(escrow, msg)
+	err := keeper.VerifySubnetSettlement(escrow, msg, nil)
 	require.NoError(t, err)
 }
 
 func TestVerifySubnetSettlement_AlreadySettled(t *testing.T) {
 	escrow := types.SubnetEscrow{Id: 1, Creator: "gonka1creator", Settled: true}
 	msg := &types.MsgSettleSubnetEscrow{Settler: "gonka1creator", EscrowId: 1}
-	err := keeper.VerifySubnetSettlement(escrow, msg)
+	err := keeper.VerifySubnetSettlement(escrow, msg, nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "already settled")
 }
@@ -149,7 +149,7 @@ func TestVerifySubnetSettlement_AlreadySettled(t *testing.T) {
 func TestVerifySubnetSettlement_WrongSettler(t *testing.T) {
 	escrow := types.SubnetEscrow{Id: 1, Creator: "gonka1creator"}
 	msg := &types.MsgSettleSubnetEscrow{Settler: "gonka1wrong", EscrowId: 1}
-	err := keeper.VerifySubnetSettlement(escrow, msg)
+	err := keeper.VerifySubnetSettlement(escrow, msg, nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "not the escrow creator")
 }
@@ -165,7 +165,7 @@ func TestVerifySubnetSettlement_InsufficientQuorum(t *testing.T) {
 	msg := buildSettlementTestData(t, escrow, keys, hostStats)
 	msg.Signatures = msg.Signatures[:10] // below quorum of 11
 
-	err := keeper.VerifySubnetSettlement(escrow, msg)
+	err := keeper.VerifySubnetSettlement(escrow, msg, nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "insufficient quorum")
 }
@@ -180,7 +180,7 @@ func TestVerifySubnetSettlement_CostExceedsAmount(t *testing.T) {
 	hostStats := makeHostStats(keeper.SubnetGroupSize, 1_000_000_000) // 16 GNK total > 1 GNK
 	msg := buildSettlementTestData(t, escrow, keys, hostStats)
 
-	err := keeper.VerifySubnetSettlement(escrow, msg)
+	err := keeper.VerifySubnetSettlement(escrow, msg, nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "exceeds escrow amount")
 }
@@ -201,7 +201,65 @@ func TestVerifySubnetSettlement_InvalidSignature(t *testing.T) {
 	hostStats := makeHostStats(keeper.SubnetGroupSize, 100_000_000)
 	msg := buildSettlementTestData(t, escrow, keys, hostStats)
 
-	err = keeper.VerifySubnetSettlement(escrow, msg)
+	err = keeper.VerifySubnetSettlement(escrow, msg, nil)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "recovered")
+}
+
+func TestVerifySubnetSettlement_WarmKeyAccepted(t *testing.T) {
+	sdk.GetConfig().SetBech32PrefixForAccount("gonka", "gonka")
+
+	// Generate keys for signing (these are the "warm keys")
+	warmKeys, _ := generateSubnetKeys(t, keeper.SubnetGroupSize)
+
+	// Generate different keys for the slot addresses (cold keys)
+	coldKeys, coldSlots := generateSubnetKeys(t, keeper.SubnetGroupSize)
+	_ = coldKeys // cold keys are not used for signing, only for slot addresses
+
+	escrow := types.SubnetEscrow{
+		Id: 1, Creator: "gonka1creator", Amount: 7_000_000_000, Slots: coldSlots,
+	}
+	hostStats := makeHostStats(keeper.SubnetGroupSize, 100_000_000)
+
+	// Build settlement with warm keys signing
+	msg := buildSettlementTestData(t, escrow, warmKeys, hostStats)
+
+	// Without warm key checker, should fail
+	err := keeper.VerifySubnetSettlement(escrow, msg, nil)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "recovered")
+
+	// With warm key checker that accepts all pairings, should pass
+	acceptAllWarmKeys := func(granter, grantee string) bool {
+		// Accept if grantee is one of the warm key addresses
+		for _, wk := range warmKeys {
+			if cosmosAddressFromDcrdKey(wk).String() == grantee {
+				return true
+			}
+		}
+		return false
+	}
+	err = keeper.VerifySubnetSettlement(escrow, msg, acceptAllWarmKeys)
+	require.NoError(t, err)
+}
+
+func TestVerifySubnetSettlement_WarmKeyRejected(t *testing.T) {
+	sdk.GetConfig().SetBech32PrefixForAccount("gonka", "gonka")
+
+	warmKeys, _ := generateSubnetKeys(t, keeper.SubnetGroupSize)
+	_, coldSlots := generateSubnetKeys(t, keeper.SubnetGroupSize)
+
+	escrow := types.SubnetEscrow{
+		Id: 1, Creator: "gonka1creator", Amount: 7_000_000_000, Slots: coldSlots,
+	}
+	hostStats := makeHostStats(keeper.SubnetGroupSize, 100_000_000)
+	msg := buildSettlementTestData(t, escrow, warmKeys, hostStats)
+
+	// Warm key checker that rejects all
+	rejectAll := func(granter, grantee string) bool {
+		return false
+	}
+	err := keeper.VerifySubnetSettlement(escrow, msg, rejectAll)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "recovered")
 }
@@ -231,7 +289,7 @@ func TestVerifySubnetSettlement_DuplicateSignerMultiSlot(t *testing.T) {
 	}
 	msg := buildSettlementTestData(t, escrow, keys, hostStats)
 
-	err = keeper.VerifySubnetSettlement(escrow, msg)
+	err = keeper.VerifySubnetSettlement(escrow, msg, nil)
 	require.NoError(t, err) // 16 slot votes >= 11 quorum
 }
 
@@ -282,7 +340,7 @@ func TestVerifySubnetSettlement_DuplicateSlotId(t *testing.T) {
 	}
 	msg.Signatures = dupSigs
 
-	err := keeper.VerifySubnetSettlement(escrow, msg)
+	err := keeper.VerifySubnetSettlement(escrow, msg, nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "duplicate signature for slot")
 }
@@ -308,7 +366,7 @@ func TestVerifySubnetSettlement_UnsortedHostStats(t *testing.T) {
 
 	msg := buildSettlementTestData(t, escrow, keys, hostStats)
 
-	err := keeper.VerifySubnetSettlement(escrow, msg)
+	err := keeper.VerifySubnetSettlement(escrow, msg, nil)
 	require.NoError(t, err)
 }
 
@@ -323,7 +381,7 @@ func TestVerifySubnetSettlement_ZeroCost(t *testing.T) {
 
 	msg := buildSettlementTestData(t, escrow, keys, hostStats)
 
-	err := keeper.VerifySubnetSettlement(escrow, msg)
+	err := keeper.VerifySubnetSettlement(escrow, msg, nil)
 	require.NoError(t, err)
 }
 
@@ -387,7 +445,7 @@ func TestVerifySubnetSettlement_WrongPhaseRejected(t *testing.T) {
 	msg.StateRoot = wrongRoot[:]
 	msg.Signatures = sigs
 
-	err = keeper.VerifySubnetSettlement(escrow, msg)
+	err = keeper.VerifySubnetSettlement(escrow, msg, nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "state_root mismatch")
 }

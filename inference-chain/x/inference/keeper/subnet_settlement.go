@@ -3,11 +3,14 @@ package keeper
 import (
 	"bytes"
 	"cmp"
+	"context"
 	"crypto/sha256"
 	"fmt"
 	"slices"
 
+	cosmossecp "github.com/cosmos/cosmos-sdk/crypto/keys/secp256k1"
 	sdk "github.com/cosmos/cosmos-sdk/types"
+	authztypes "github.com/cosmos/cosmos-sdk/x/authz"
 	"github.com/decred/dcrd/dcrec/secp256k1/v4/ecdsa"
 	"github.com/productscience/inference/x/inference/types"
 )
@@ -22,9 +25,12 @@ const (
 	SubnetSettlementPhase = byte(0x02)
 )
 
-// VerifySubnetSettlement verifies the settlement proof against the escrow.
-// It checks the state root, signatures, quorum, and cost constraints.
-func VerifySubnetSettlement(escrow types.SubnetEscrow, msg *types.MsgSettleSubnetEscrow) error {
+// WarmKeyChecker returns true if grantee has an authz grant from granter.
+type WarmKeyChecker func(granter, grantee string) bool
+
+// VerifySubnetSettlement verifies settlement proof: state root, signatures, quorum, cost.
+// If isWarmKey is non-nil, mismatched signatures are checked against authz grants.
+func VerifySubnetSettlement(escrow types.SubnetEscrow, msg *types.MsgSettleSubnetEscrow, isWarmKey WarmKeyChecker) error {
 	if escrow.Settled {
 		return fmt.Errorf("escrow %d already settled", escrow.Id)
 	}
@@ -81,7 +87,9 @@ func VerifySubnetSettlement(escrow types.SubnetEscrow, msg *types.MsgSettleSubne
 			return fmt.Errorf("failed to recover address for slot %d: %w", sig.SlotId, err)
 		}
 		if recovered.String() != expectedAddr {
-			return fmt.Errorf("signature for slot %d recovered %s, expected %s", sig.SlotId, recovered.String(), expectedAddr)
+			if isWarmKey == nil || !isWarmKey(expectedAddr, recovered.String()) {
+				return fmt.Errorf("signature for slot %d recovered %s, expected %s", sig.SlotId, recovered.String(), expectedAddr)
+			}
 		}
 
 		slotVotes++
@@ -147,7 +155,6 @@ func recoverCosmosAddress(hash []byte, sig []byte) (sdk.AccAddress, error) {
 		return nil, fmt.Errorf("signature must be 65 bytes, got %d", len(sig))
 	}
 
-	// Convert go-ethereum format [R(32)||S(32)||V(1)] to dcrd format [V+27(1)||R(32)||S(32)]
 	v := sig[64]
 	dcrdSig := make([]byte, 65)
 	dcrdSig[0] = v + 27
@@ -159,8 +166,15 @@ func recoverCosmosAddress(hash []byte, sig []byte) (sdk.AccAddress, error) {
 		return nil, fmt.Errorf("ecrecover failed: %w", err)
 	}
 
-	// Derive Cosmos address: SHA256(compressed_pubkey)[:20]
-	compressed := pubKey.SerializeCompressed()
-	addrHash := sha256.Sum256(compressed)
-	return sdk.AccAddress(addrHash[:20]), nil
+	cosmosPubKey := &cosmossecp.PubKey{Key: pubKey.SerializeCompressed()}
+	return sdk.AccAddress(cosmosPubKey.Address()), nil
+}
+
+func (k Keeper) HasWarmKeyGrant(ctx context.Context, granter, grantee string) bool {
+	resp, err := k.AuthzKeeper.Grants(ctx, &authztypes.QueryGrantsRequest{
+		Granter:    granter,
+		Grantee:    grantee,
+		MsgTypeUrl: sdk.MsgTypeURL(&types.MsgStartInference{}),
+	})
+	return err == nil && resp != nil && len(resp.Grants) > 0
 }

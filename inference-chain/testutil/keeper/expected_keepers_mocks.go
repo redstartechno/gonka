@@ -1188,6 +1188,21 @@ func (mr *MockAuthzKeeperMockRecorder) GranterGrants(ctx, req any) *gomock.Call 
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GranterGrants", reflect.TypeOf((*MockAuthzKeeper)(nil).GranterGrants), ctx, req)
 }
 
+// Grants mocks base method.
+func (m *MockAuthzKeeper) Grants(ctx context.Context, req *authz.QueryGrantsRequest) (*authz.QueryGrantsResponse, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Grants", ctx, req)
+	ret0, _ := ret[0].(*authz.QueryGrantsResponse)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// Grants indicates an expected call of Grants.
+func (mr *MockAuthzKeeperMockRecorder) Grants(ctx, req any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Grants", reflect.TypeOf((*MockAuthzKeeper)(nil).Grants), ctx, req)
+}
+
 // MockBlsKeeper is a mock of BlsKeeper interface.
 type MockBlsKeeper struct {
 	ctrl     *gomock.Controller

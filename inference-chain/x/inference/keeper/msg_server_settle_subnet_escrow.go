@@ -16,7 +16,10 @@ func (k msgServer) SettleSubnetEscrow(goCtx context.Context, msg *types.MsgSettl
 		return nil, fmt.Errorf("escrow %d not found", msg.EscrowId)
 	}
 
-	if err := VerifySubnetSettlement(escrow, msg); err != nil {
+	warmKeyChecker := func(granter, grantee string) bool {
+		return k.HasWarmKeyGrant(goCtx, granter, grantee)
+	}
+	if err := VerifySubnetSettlement(escrow, msg, warmKeyChecker); err != nil {
 		return nil, err
 	}
 
