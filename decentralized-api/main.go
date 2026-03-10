@@ -205,8 +205,8 @@ func main() {
 		subnetBridge := internalsubnet.NewChainBridge(recorder)
 		httpClient := pserver.NewNoRedirectClient(5 * time.Minute)
 		subnetEngine := internalsubnet.NewEngineAdapter(nodeBroker, config.GetCurrentNodeVersion(), payloadStore, chainPhaseTracker, httpClient)
-		subnetValidator := internalsubnet.NewValidationAdapter(nodeBroker, config.GetCurrentNodeVersion(), payloadStore, chainPhaseTracker, httpClient)
-		hostManager := internalsubnet.NewHostManager(subnetSigner, subnetEngine, subnetValidator, subnetBridge)
+		subnetValidator := internalsubnet.NewValidationAdapter(nodeBroker, config.GetCurrentNodeVersion(), chainPhaseTracker, httpClient, subnetBridge, recorder)
+		hostManager := internalsubnet.NewHostManager(subnetSigner, subnetEngine, subnetValidator, subnetBridge, payloadStore, recorder)
 		hostManager.Register(publicServer.SubnetGroup())
 	}
 

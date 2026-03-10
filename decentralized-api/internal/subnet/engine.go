@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"net/http"
-	"strconv"
 
 	"decentralized-api/broker"
 	"decentralized-api/chainphase"
@@ -98,9 +97,9 @@ func (e *EngineAdapter) Execute(ctx context.Context, req subnet.ExecuteRequest) 
 	}
 	promptPayload := []byte(canonicalized)
 
-	inferenceID := strconv.FormatUint(req.InferenceID, 10)
+	storageKey := SubnetPayloadKey(req.EscrowID, req.InferenceID)
 	epochID := e.currentEpochID()
-	if err := e.payloadStore.Store(ctx, inferenceID, epochID, promptPayload, bodyBytes); err != nil {
+	if err := e.payloadStore.Store(ctx, storageKey, epochID, promptPayload, bodyBytes); err != nil {
 		return nil, fmt.Errorf("store payloads: %w", err)
 	}
 
@@ -117,6 +116,17 @@ func (e *EngineAdapter) currentEpochID() uint64 {
 		return epochState.LatestEpoch.EpochIndex
 	}
 	return 0
+}
+
+// SubnetPayloadKey creates a namespaced storage key for subnet payloads.
+// Format: "subnet:<escrowID>:<inferenceID>" to prevent cross-session collisions.
+func SubnetPayloadKey(escrowID string, inferenceID uint64) string {
+	return fmt.Sprintf("subnet:%s:%d", escrowID, inferenceID)
+}
+
+// SubnetPayloadKeyFromString is like SubnetPayloadKey but takes inferenceID as string.
+func SubnetPayloadKeyFromString(escrowID string, inferenceID string) string {
+	return fmt.Sprintf("subnet:%s:%s", escrowID, inferenceID)
 }
 
 // Compile-time check.

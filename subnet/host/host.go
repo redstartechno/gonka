@@ -442,6 +442,7 @@ func (h *Host) executeAsync(ctx context.Context, job *executeJob) {
 		PromptHash:  job.promptHash,
 		InputLength: job.inputLength,
 		MaxTokens:   job.maxTokens,
+		EscrowID:    h.escrowID,
 	})
 	if err != nil {
 		logging.Error("execute failed", "subsystem", "host", "inference_id", job.inferenceID, "error", err)
@@ -552,13 +553,17 @@ func (h *Host) maybeRevealSeed() {
 
 // validateJob captures data needed to run validateAsync outside the mutex.
 type validateJob struct {
-	inferenceID   uint64
-	validatorSlot uint32
-	model         string
-	promptHash    []byte
-	responseHash  []byte
-	inputTokens   uint64
-	outputTokens  uint64
+	inferenceID     uint64
+	validatorSlot   uint32
+	model           string
+	promptHash      []byte
+	responseHash    []byte
+	inputTokens     uint64
+	outputTokens    uint64
+	escrowID        string
+	executorAddress string
+	executorPubKeys [][]byte
+	epochID         uint64
 }
 
 // collectValidationJobs finds finished inferences that this host should validate.
@@ -618,15 +623,28 @@ func (h *Host) collectValidationJobs() []validateJob {
 			break
 		}
 
+		// Collect executor pubkeys for signature verification.
+		// Include pubkeys from all slots owned by the executor address.
+		var executorPubKeys [][]byte
+		for _, slot := range h.group {
+			if slot.ValidatorAddress == executorAddr && len(slot.PublicKey) > 0 {
+				executorPubKeys = append(executorPubKeys, slot.PublicKey)
+			}
+		}
+
 		h.validating[infID] = struct{}{}
 		jobs = append(jobs, validateJob{
-			inferenceID:   infID,
-			validatorSlot: validatorSlot,
-			model:         rec.Model,
-			promptHash:    rec.PromptHash,
-			responseHash:  rec.ResponseHash,
-			inputTokens:   rec.InputTokens,
-			outputTokens:  rec.OutputTokens,
+			inferenceID:     infID,
+			validatorSlot:   validatorSlot,
+			model:           rec.Model,
+			promptHash:      rec.PromptHash,
+			responseHash:    rec.ResponseHash,
+			inputTokens:     rec.InputTokens,
+			outputTokens:    rec.OutputTokens,
+			escrowID:        h.escrowID,
+			executorAddress: executorAddr,
+			executorPubKeys: executorPubKeys,
+			epochID:         0, // ValidationAdapter will use its own phaseTracker
 		})
 	}
 
@@ -650,12 +668,16 @@ func (h *Host) hasMempoolValidation(infID uint64) bool {
 // adds it to the mempool. Called outside the mutex.
 func (h *Host) validateAsync(ctx context.Context, job validateJob) {
 	result, err := h.validator.Validate(ctx, subnet.ValidateRequest{
-		InferenceID:  job.inferenceID,
-		Model:        job.model,
-		PromptHash:   job.promptHash,
-		ResponseHash: job.responseHash,
-		InputTokens:  job.inputTokens,
-		OutputTokens: job.outputTokens,
+		InferenceID:     job.inferenceID,
+		Model:           job.model,
+		PromptHash:      job.promptHash,
+		ResponseHash:    job.responseHash,
+		InputTokens:     job.inputTokens,
+		OutputTokens:    job.outputTokens,
+		EscrowID:        job.escrowID,
+		ExecutorAddress: job.executorAddress,
+		ExecutorPubKeys: job.executorPubKeys,
+		EpochID:         job.epochID,
 	})
 	if err != nil {
 		logging.Error("validate failed", "subsystem", "host", "inference_id", job.inferenceID, "error", err)

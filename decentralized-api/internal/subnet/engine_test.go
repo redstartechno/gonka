@@ -121,3 +121,22 @@ func TestModifyRequestBody(t *testing.T) {
 	assert.Equal(t, float64(42), result["seed"])
 	assert.Equal(t, false, result["skip_special_tokens"])
 }
+
+func TestSubnetPayloadKey(t *testing.T) {
+	key := SubnetPayloadKey("escrow-123", 456)
+	assert.Equal(t, "subnet:escrow-123:456", key)
+}
+
+func TestSubnetPayloadKeyFromString(t *testing.T) {
+	key := SubnetPayloadKeyFromString("escrow-123", "456")
+	assert.Equal(t, "subnet:escrow-123:456", key)
+}
+
+func TestSubnetPayloadKey_DifferentEscrows(t *testing.T) {
+	key1 := SubnetPayloadKey("escrow-1", 100)
+	key2 := SubnetPayloadKey("escrow-2", 100)
+
+	assert.NotEqual(t, key1, key2, "same inference ID in different escrows should have different keys")
+	assert.Equal(t, "subnet:escrow-1:100", key1)
+	assert.Equal(t, "subnet:escrow-2:100", key2)
+}

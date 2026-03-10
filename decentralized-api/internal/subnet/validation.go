@@ -3,18 +3,26 @@ package subnet
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"strconv"
+	"time"
 
 	"decentralized-api/broker"
 	"decentralized-api/chainphase"
 	"decentralized-api/completionapi"
+	"decentralized-api/cosmosclient"
 	"decentralized-api/internal/validation"
-	"decentralized-api/payloadstorage"
+
+	sdk "github.com/cosmos/cosmos-sdk/types"
+	"github.com/productscience/inference/cmd/inferenced/cmd"
+	"github.com/productscience/inference/x/inference/calculations"
 
 	"subnet"
+	"subnet/bridge"
 )
 
 // ValidationAdapter implements subnet.ValidationEngine by re-executing inference
@@ -22,34 +30,41 @@ import (
 type ValidationAdapter struct {
 	broker       *broker.Broker
 	nodeVersion  string
-	payloadStore payloadstorage.PayloadStorage
 	phaseTracker *chainphase.ChainPhaseTracker
 	httpClient   *http.Client
+	bridge       bridge.MainnetBridge
+	recorder     cosmosclient.CosmosMessageClient
 }
 
 func NewValidationAdapter(
 	b *broker.Broker,
 	nodeVersion string,
-	ps payloadstorage.PayloadStorage,
 	phaseTracker *chainphase.ChainPhaseTracker,
 	httpClient *http.Client,
+	br bridge.MainnetBridge,
+	recorder cosmosclient.CosmosMessageClient,
 ) *ValidationAdapter {
 	return &ValidationAdapter{
 		broker:       b,
 		nodeVersion:  nodeVersion,
-		payloadStore: ps,
 		phaseTracker: phaseTracker,
 		httpClient:   httpClient,
+		bridge:       br,
+		recorder:     recorder,
 	}
 }
 
 func (v *ValidationAdapter) Validate(ctx context.Context, req subnet.ValidateRequest) (*subnet.ValidateResult, error) {
 	inferenceID := strconv.FormatUint(req.InferenceID, 10)
-	epochID := v.currentEpochID()
+	epochID := req.EpochID
+	if epochID == 0 {
+		epochID = v.currentEpochID()
+	}
 
-	promptPayload, responsePayload, err := v.payloadStore.Retrieve(ctx, inferenceID, epochID)
+	// Fetch payloads from executor
+	promptPayload, responsePayload, err := v.fetchPayloadsFromExecutor(ctx, req, inferenceID, epochID)
 	if err != nil {
-		return nil, fmt.Errorf("retrieve payloads: %w", err)
+		return nil, fmt.Errorf("fetch payloads from executor: %w", err)
 	}
 
 	var requestMap map[string]interface{}
@@ -132,6 +147,94 @@ func (v *ValidationAdapter) currentEpochID() uint64 {
 		return epochState.LatestEpoch.EpochIndex
 	}
 	return 0
+}
+
+// fetchPayloadsFromExecutor retrieves payloads from the executor host using subnet session endpoint.
+func (v *ValidationAdapter) fetchPayloadsFromExecutor(ctx context.Context, req subnet.ValidateRequest, inferenceID string, epochID uint64) ([]byte, []byte, error) {
+	// Resolve executor URL from bridge
+	executorInfo, err := v.bridge.GetValidatorInfo(req.ExecutorAddress)
+	if err != nil {
+		return nil, nil, fmt.Errorf("get executor info: %w", err)
+	}
+	if executorInfo.URL == "" {
+		return nil, nil, fmt.Errorf("executor has no URL")
+	}
+
+	// Build request URL for subnet session endpoint
+	requestURL, err := validation.BuildPayloadRequestURL(executorInfo.URL, fmt.Sprintf("subnet/v1/sessions/%s/payloads", req.EscrowID), inferenceID)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Sign request
+	timestamp := time.Now().UnixNano()
+	validatorAddress := v.recorder.GetAccountAddress()
+	signature, err := v.signPayloadRequest(inferenceID, timestamp, validatorAddress, epochID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("sign request: %w", err)
+	}
+
+	// Fetch payloads using shared helper
+	payloadResp, err := validation.FetchPayloadsHTTP(ctx, v.httpClient, requestURL, validatorAddress, timestamp, epochID, signature)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Base64-encode raw pubkeys for signature verification
+	encodedPubKeys := make([]string, len(req.ExecutorPubKeys))
+	for i, pk := range req.ExecutorPubKeys {
+		encodedPubKeys[i] = base64.StdEncoding.EncodeToString(pk)
+	}
+
+	// Verify executor signature
+	if err := validation.VerifyExecutorPayloadSignature(
+		inferenceID,
+		payloadResp.PromptPayload,
+		payloadResp.ResponsePayload,
+		payloadResp.ExecutorSignature,
+		req.ExecutorAddress,
+		encodedPubKeys,
+	); err != nil {
+		return nil, nil, fmt.Errorf("verify executor signature: %w", err)
+	}
+
+	// Verify hashes against ValidateRequest
+	expectedPromptHash := hex.EncodeToString(req.PromptHash)
+	expectedResponseHash := hex.EncodeToString(req.ResponseHash)
+	if err := validation.VerifyPayloadHashes(
+		payloadResp.PromptPayload,
+		payloadResp.ResponsePayload,
+		expectedPromptHash,
+		expectedResponseHash,
+		inferenceID,
+	); err != nil {
+		return nil, nil, err
+	}
+
+	return payloadResp.PromptPayload, payloadResp.ResponsePayload, nil
+}
+
+// signPayloadRequest signs the payload retrieval request.
+func (v *ValidationAdapter) signPayloadRequest(inferenceID string, timestamp int64, validatorAddress string, epochID uint64) (string, error) {
+	components := calculations.SignatureComponents{
+		Payload:         inferenceID,
+		EpochId:         epochID,
+		Timestamp:       timestamp,
+		TransferAddress: validatorAddress,
+		ExecutorAddress: "",
+	}
+
+	signerAddressStr := v.recorder.GetSignerAddress()
+	signerAddress, err := sdk.AccAddressFromBech32(signerAddressStr)
+	if err != nil {
+		return "", err
+	}
+	accountSigner := &cmd.AccountSigner{
+		Addr:    signerAddress,
+		Keyring: v.recorder.GetKeyring(),
+	}
+
+	return calculations.Sign(accountSigner, components, calculations.Developer)
 }
 
 func readBody(resp *http.Response) ([]byte, error) {
