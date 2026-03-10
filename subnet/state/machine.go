@@ -36,6 +36,35 @@ func safeAdd(a, b uint64) (uint64, bool) {
 	return result, true
 }
 
+// tokenCost computes (a + b) * price with overflow checks.
+func tokenCost(a, b, price uint64) (uint64, error) {
+	sum, ok := safeAdd(a, b)
+	if !ok {
+		return 0, types.ErrCostOverflow
+	}
+	cost, ok := safeMul(sum, price)
+	if !ok {
+		return 0, types.ErrCostOverflow
+	}
+	return cost, nil
+}
+
+// copyInferences deep-copies an inferences map.
+func copyInferences(src map[uint64]*types.InferenceRecord) map[uint64]*types.InferenceRecord {
+	dst := make(map[uint64]*types.InferenceRecord, len(src))
+	for k, v := range src {
+		cp := *v
+		if v.PromptHash != nil {
+			cp.PromptHash = append([]byte(nil), v.PromptHash...)
+		}
+		if v.ResponseHash != nil {
+			cp.ResponseHash = append([]byte(nil), v.ResponseHash...)
+		}
+		dst[k] = &cp
+	}
+	return dst
+}
+
 // WarmKeyResolver checks whether warmAddr is authorized to act on behalf of
 // coldAddr. Injected callback, wraps a cached bridge query. Called at most
 // once per slot. Set to nil when warm keys are not used.
@@ -52,6 +81,7 @@ type StateMachine struct {
 	slotToPubKey       map[uint32][]byte
 	addressInGroup     map[string]bool
 	addressToSlotCount map[string]uint32
+	addressToSlots     map[string][]uint32 // address -> sorted slot IDs
 	totalSlots         uint32
 
 	warmResolver WarmKeyResolver // optional, nil = no warm key support
@@ -93,6 +123,14 @@ func NewStateMachine(
 		hostStats[s.SlotID] = &types.HostStats{}
 	}
 
+	addrToSlots := make(map[string][]uint32, len(addrInGroup))
+	for slot, addr := range slotToAddr {
+		addrToSlots[addr] = append(addrToSlots[addr], slot)
+	}
+	for _, slots := range addrToSlots {
+		slices.Sort(slots)
+	}
+
 	sm := &StateMachine{
 		state: &types.EscrowState{
 			EscrowID:      escrowID,
@@ -110,6 +148,7 @@ func NewStateMachine(
 		slotToPubKey:       slotToPub,
 		addressInGroup:     addrInGroup,
 		addressToSlotCount: addrToSlotCount,
+		addressToSlots:     addrToSlots,
 		totalSlots:         uint32(len(group)),
 	}
 	for _, o := range opts {
@@ -258,19 +297,7 @@ func (sm *StateMachine) SnapshotState() types.EscrowState {
 	maps.Copy(s.WarmKeys, sm.state.WarmKeys)
 
 	// Deep copy Inferences.
-	s.Inferences = make(map[uint64]*types.InferenceRecord, len(sm.state.Inferences))
-	for k, v := range sm.state.Inferences {
-		cp := *v
-		if v.PromptHash != nil {
-			cp.PromptHash = make([]byte, len(v.PromptHash))
-			copy(cp.PromptHash, v.PromptHash)
-		}
-		if v.ResponseHash != nil {
-			cp.ResponseHash = make([]byte, len(v.ResponseHash))
-			copy(cp.ResponseHash, v.ResponseHash)
-		}
-		s.Inferences[k] = &cp
-	}
+	s.Inferences = copyInferences(sm.state.Inferences)
 
 	return s
 }
@@ -288,19 +315,7 @@ type mutableSnapshot struct {
 }
 
 func (sm *StateMachine) snapshotMutable() mutableSnapshot {
-	infCopy := make(map[uint64]*types.InferenceRecord, len(sm.state.Inferences))
-	for k, v := range sm.state.Inferences {
-		cp := *v
-		if v.PromptHash != nil {
-			cp.PromptHash = make([]byte, len(v.PromptHash))
-			copy(cp.PromptHash, v.PromptHash)
-		}
-		if v.ResponseHash != nil {
-			cp.ResponseHash = make([]byte, len(v.ResponseHash))
-			copy(cp.ResponseHash, v.ResponseHash)
-		}
-		infCopy[k] = &cp
-	}
+	infCopy := copyInferences(sm.state.Inferences)
 
 	hsCopy := make(map[uint32]*types.HostStats, len(sm.state.HostStats))
 	for k, v := range sm.state.HostStats {
@@ -399,13 +414,9 @@ func (sm *StateMachine) applyStartInference(msg *types.MsgStartInference) error 
 	executorSlot := sm.state.Group[msg.InferenceId%uint64(len(sm.state.Group))].SlotID
 
 	// Reserve cost: (input_length + max_tokens) * token_price
-	sum, ok := safeAdd(msg.InputLength, msg.MaxTokens)
-	if !ok {
-		return types.ErrCostOverflow
-	}
-	reservedCost, ok := safeMul(sum, sm.state.Config.TokenPrice)
-	if !ok {
-		return types.ErrCostOverflow
+	reservedCost, err := tokenCost(msg.InputLength, msg.MaxTokens, sm.state.Config.TokenPrice)
+	if err != nil {
+		return err
 	}
 	if sm.state.Balance < reservedCost {
 		return types.ErrInsufficientBalance
@@ -461,7 +472,7 @@ func (sm *StateMachine) applyConfirmStart(msg *types.MsgConfirmStart) error {
 
 	expectedAddr := sm.slotToAddress[rec.ExecutorSlot]
 	if recovered != expectedAddr {
-		if !sm.resolveWarmKey(rec.ExecutorSlot, recovered, expectedAddr) {
+		if !sm.ResolveWarmKey(rec.ExecutorSlot, recovered, expectedAddr) {
 			return fmt.Errorf("%w: expected executor %s (slot %d), got %s",
 				types.ErrInvalidExecutorSig, expectedAddr, rec.ExecutorSlot, recovered)
 		}
@@ -499,13 +510,9 @@ func (sm *StateMachine) applyFinishInference(msg *types.MsgFinishInference) erro
 	}
 
 	// Compute actual cost.
-	tokenSum, ok := safeAdd(msg.InputTokens, msg.OutputTokens)
-	if !ok {
-		return types.ErrCostOverflow
-	}
-	actualCost, ok := safeMul(tokenSum, sm.state.Config.TokenPrice)
-	if !ok {
-		return types.ErrCostOverflow
+	actualCost, err := tokenCost(msg.InputTokens, msg.OutputTokens, sm.state.Config.TokenPrice)
+	if err != nil {
+		return err
 	}
 	if actualCost > rec.ReservedCost {
 		actualCost = rec.ReservedCost
@@ -594,8 +601,8 @@ func (sm *StateMachine) applyValidation(msg *types.MsgValidation) error {
 // addressHasValidated checks if the address owning slotID has any slot bit set in ValidatedBy.
 func (sm *StateMachine) addressHasValidated(rec *types.InferenceRecord, slotID uint32) (bool, uint32) {
 	addr := sm.slotToAddress[slotID]
-	for _, slot := range slices.Sorted(maps.Keys(sm.slotToAddress)) {
-		if sm.slotToAddress[slot] == addr && rec.ValidatedBy.IsSet(slot) {
+	for _, slot := range sm.addressToSlots[addr] {
+		if rec.ValidatedBy.IsSet(slot) {
 			return true, slot
 		}
 	}
@@ -641,10 +648,8 @@ func (sm *StateMachine) applyValidationVote(msg *types.MsgValidationVote) error 
 
 	// Mark ALL slots owned by this address in ValidatedBy (unified bitmap).
 	weight := sm.addressToSlotCount[voterAddr]
-	for _, slot := range slices.Sorted(maps.Keys(sm.slotToAddress)) {
-		if sm.slotToAddress[slot] == voterAddr {
-			rec.ValidatedBy.Set(slot)
-		}
+	for _, slot := range sm.addressToSlots[voterAddr] {
+		rec.ValidatedBy.Set(slot)
 	}
 	if msg.VoteValid {
 		rec.VotesValid += weight
@@ -721,7 +726,7 @@ func (sm *StateMachine) applyTimeout(msg *types.MsgTimeoutInference) error {
 		}
 
 		if recovered != voterAddr {
-			if !sm.resolveWarmKey(vote.VoterSlot, recovered, voterAddr) {
+			if !sm.ResolveWarmKey(vote.VoterSlot, recovered, voterAddr) {
 				return fmt.Errorf("%w: vote from slot %d: expected %s, got %s",
 					types.ErrInvalidVoteSig, vote.VoterSlot, voterAddr, recovered)
 			}
@@ -780,7 +785,7 @@ func (sm *StateMachine) applyRevealSeed(msg *types.MsgRevealSeed) error {
 		return fmt.Errorf("%w: %v", types.ErrInvalidSeedSig, err)
 	}
 	if seedAddr != revealerAddr {
-		if !sm.resolveWarmKey(msg.SlotId, seedAddr, revealerAddr) {
+		if !sm.ResolveWarmKey(msg.SlotId, seedAddr, revealerAddr) {
 			return fmt.Errorf("%w: expected %s, got %s", types.ErrInvalidSeedSig, revealerAddr, seedAddr)
 		}
 	}
@@ -830,8 +835,8 @@ func (sm *StateMachine) recomputeCompliance() {
 			executorSlotCount := sm.addressToSlotCount[executorAddr]
 			if ShouldValidate(seed, infID, validatorSlotCount, executorSlotCount, sm.totalSlots, sm.state.Config.ValidationRate) {
 				requiredValidations++
-				for _, vSlot := range slices.Sorted(maps.Keys(sm.slotToAddress)) {
-					if sm.slotToAddress[vSlot] == revealerAddr && rec.ValidatedBy.IsSet(vSlot) {
+				for _, vSlot := range sm.addressToSlots[revealerAddr] {
+					if rec.ValidatedBy.IsSet(vSlot) {
 						completedValidations++
 						break
 					}
@@ -839,12 +844,10 @@ func (sm *StateMachine) recomputeCompliance() {
 			}
 		}
 
-		for _, slot := range slices.Sorted(maps.Keys(sm.slotToAddress)) {
-			if sm.slotToAddress[slot] == revealerAddr {
-				if hs, ok := sm.state.HostStats[slot]; ok {
-					hs.RequiredValidations = requiredValidations
-					hs.CompletedValidations = completedValidations
-				}
+		for _, slot := range sm.addressToSlots[revealerAddr] {
+			if hs, ok := sm.state.HostStats[slot]; ok {
+				hs.RequiredValidations = requiredValidations
+				hs.CompletedValidations = completedValidations
 			}
 		}
 	}
@@ -858,13 +861,8 @@ func (sm *StateMachine) penalizeUnrevealedSeeds() {
 		revealedAddrs[sm.slotToAddress[slot]] = true
 	}
 
-	for _, slot := range slices.Sorted(maps.Keys(sm.slotToAddress)) {
-		addr := sm.slotToAddress[slot]
+	for addr, slots := range sm.addressToSlots {
 		if revealedAddrs[addr] {
-			continue
-		}
-		hs, ok := sm.state.HostStats[slot]
-		if !ok {
 			continue
 		}
 
@@ -893,7 +891,12 @@ func (sm *StateMachine) penalizeUnrevealedSeeds() {
 			probSum += p
 		}
 
-		hs.RequiredValidations = uint32(math.Ceil(probSum))
+		required := uint32(math.Ceil(probSum))
+		for _, slot := range slots {
+			if hs, ok := sm.state.HostStats[slot]; ok {
+				hs.RequiredValidations = required
+			}
+		}
 	}
 }
 
@@ -940,7 +943,7 @@ func (sm *StateMachine) verifyProposerSig(msgWithoutSig proto.Message, sig []byt
 	}
 
 	if recovered != expectedAddress {
-		if slotID != math.MaxUint32 && sm.resolveWarmKey(slotID, recovered, expectedAddress) {
+		if slotID != math.MaxUint32 && sm.ResolveWarmKey(slotID, recovered, expectedAddress) {
 			return nil
 		}
 		return fmt.Errorf("%w: expected %s, got %s", types.ErrInvalidProposerSig, expectedAddress, recovered)
@@ -949,10 +952,10 @@ func (sm *StateMachine) verifyProposerSig(msgWithoutSig proto.Message, sig []byt
 	return nil
 }
 
-// resolveWarmKey checks if recovered is an authorized warm key for the given slot.
-// If already bound, checks the recorded address. Otherwise calls the resolver
-// callback and records the binding on success.
-func (sm *StateMachine) resolveWarmKey(slotID uint32, recovered, expected string) bool {
+// ResolveWarmKey checks if recovered is an authorized warm key for the given slot.
+// Returns true if the key is accepted (either cached or newly verified via bridge).
+// On first successful resolution the binding is cached in state.
+func (sm *StateMachine) ResolveWarmKey(slotID uint32, recovered, expected string) bool {
 	if warm, ok := sm.state.WarmKeys[slotID]; ok {
 		return warm == recovered
 	}
@@ -965,13 +968,6 @@ func (sm *StateMachine) resolveWarmKey(slotID uint32, recovered, expected string
 	}
 	sm.state.WarmKeys[slotID] = recovered
 	return true
-}
-
-// ResolveWarmKey checks if recovered is an authorized warm key for the given slot.
-// Returns true if the key is accepted (either cached or newly verified via bridge).
-// On first successful resolution the binding is cached in state.
-func (sm *StateMachine) ResolveWarmKey(slotID uint32, recovered, expected string) bool {
-	return sm.resolveWarmKey(slotID, recovered, expected)
 }
 
 // CheckWarmKey checks if warmAddr is authorized to act on behalf of coldAddr

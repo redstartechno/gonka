@@ -86,14 +86,8 @@ func WithRecovery(fetcher DiffFetcher, updater StateUpdater) GossipOption {
 	}
 }
 
-// SetSigAccumulator sets the callback for accumulating gossip signatures.
-func (g *Gossip) SetSigAccumulator(acc SigAccumulator) {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	g.sigAccumulator = acc
-}
-
-// SetRecovery configures the recovery dependencies.
+// SetRecovery configures the recovery dependencies after construction.
+// Use WithRecovery option when deps are available at construction time.
 func (g *Gossip) SetRecovery(fetcher DiffFetcher, updater StateUpdater) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -233,19 +227,9 @@ func (g *Gossip) BroadcastTxs(ctx context.Context, txs []*types.SubnetTx) {
 		return
 	}
 
-	var wg sync.WaitGroup
-	for _, p := range peers {
-		wg.Add(1)
-		go func(peer PeerClient) {
-			defer wg.Done()
-			sendCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-			defer cancel()
-			if err := peer.GossipTxs(sendCtx, newTxs); err != nil {
-				logging.Debug("broadcast txs failed", "subsystem", "gossip", "error", err)
-			}
-		}(p)
-	}
-	wg.Wait()
+	sendParallel(ctx, peers, func(ctx context.Context, peer PeerClient) error {
+		return peer.GossipTxs(ctx, newTxs)
+	})
 }
 
 // Start begins the background re-propagation and recovery loops.
@@ -418,7 +402,8 @@ func (g *Gossip) pickPeers() []PeerClient {
 	return result
 }
 
-func (g *Gossip) sendNonceToPeers(ctx context.Context, peers []PeerClient, nonce uint64, stateHash, stateSig []byte, slotID uint32) {
+// sendParallel sends to all peers in parallel with a per-peer timeout.
+func sendParallel(ctx context.Context, peers []PeerClient, fn func(context.Context, PeerClient) error) {
 	var wg sync.WaitGroup
 	for _, p := range peers {
 		wg.Add(1)
@@ -426,10 +411,16 @@ func (g *Gossip) sendNonceToPeers(ctx context.Context, peers []PeerClient, nonce
 			defer wg.Done()
 			sendCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 			defer cancel()
-			if err := peer.GossipNonce(sendCtx, nonce, stateHash, stateSig, slotID); err != nil {
-				logging.Debug("gossip nonce send failed", "subsystem", "gossip", "nonce", nonce, "error", err)
+			if err := fn(sendCtx, peer); err != nil {
+				logging.Debug("gossip send failed", "subsystem", "gossip", "error", err)
 			}
 		}(p)
 	}
 	wg.Wait()
+}
+
+func (g *Gossip) sendNonceToPeers(ctx context.Context, peers []PeerClient, nonce uint64, stateHash, stateSig []byte, slotID uint32) {
+	sendParallel(ctx, peers, func(ctx context.Context, peer PeerClient) error {
+		return peer.GossipNonce(ctx, nonce, stateHash, stateSig, slotID)
+	})
 }

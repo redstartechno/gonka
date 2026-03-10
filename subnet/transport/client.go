@@ -77,6 +77,37 @@ func NewHTTPClient(baseURL, escrowID string, signer signing.Signer, cfgs ...Clie
 	}
 }
 
+// post sends a signed POST request, marshaling req to JSON and unmarshaling into resp.
+// If resp is nil, the response body is discarded.
+func (c *HTTPClient) post(ctx context.Context, path string, timeout time.Duration, req, resp any) error {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	body, err := json.Marshal(req)
+	if err != nil {
+		return fmt.Errorf("marshal request: %w", err)
+	}
+	respBody, err := c.doPost(ctx, path, body)
+	if err != nil {
+		return err
+	}
+	if resp != nil {
+		return json.Unmarshal(respBody, resp)
+	}
+	return nil
+}
+
+// get sends a GET request and unmarshals the response into resp.
+func (c *HTTPClient) get(ctx context.Context, path string, timeout time.Duration, resp any) error {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	url := fmt.Sprintf("%s/subnet/v1%s", c.baseURL, path)
+	body, err := c.doGet(ctx, url)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(body, resp)
+}
+
 // Send implements user.HostClient.
 func (c *HTTPClient) Send(ctx context.Context, req host.HostRequest) (*host.HostResponse, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.config.InferenceTimeout)
@@ -107,57 +138,25 @@ func (c *HTTPClient) Send(ctx context.Context, req host.HostRequest) (*host.Host
 
 // GossipNonce sends a nonce notification to a peer.
 func (c *HTTPClient) GossipNonce(ctx context.Context, nonce uint64, stateHash, stateSig []byte, slotID uint32) error {
-	ctx, cancel := context.WithTimeout(ctx, c.config.GossipTimeout)
-	defer cancel()
-
-	req := GossipNonceRequest{
-		Nonce:     nonce,
-		StateHash: stateHash,
-		StateSig:  stateSig,
-		SlotID:    slotID,
-	}
-	body, err := json.Marshal(req)
-	if err != nil {
-		return fmt.Errorf("marshal: %w", err)
-	}
-	_, err = c.doPost(ctx, "/sessions/"+c.escrowID+"/gossip/nonce", body)
-	return err
+	return c.post(ctx, "/sessions/"+c.escrowID+"/gossip/nonce", c.config.GossipTimeout,
+		GossipNonceRequest{Nonce: nonce, StateHash: stateHash, StateSig: stateSig, SlotID: slotID}, nil)
 }
 
 // GossipTxs sends transactions to a peer.
 func (c *HTTPClient) GossipTxs(ctx context.Context, txs []*types.SubnetTx) error {
-	ctx, cancel := context.WithTimeout(ctx, c.config.GossipTimeout)
-	defer cancel()
-
 	txBytes, err := SubnetTxsToBytes(txs)
 	if err != nil {
 		return fmt.Errorf("encode txs: %w", err)
 	}
-	req := GossipTxsRequest{Txs: txBytes}
-	body, err := json.Marshal(req)
-	if err != nil {
-		return fmt.Errorf("marshal: %w", err)
-	}
-	_, err = c.doPost(ctx, "/sessions/"+c.escrowID+"/gossip/txs", body)
-	return err
+	return c.post(ctx, "/sessions/"+c.escrowID+"/gossip/txs", c.config.GossipTimeout,
+		GossipTxsRequest{Txs: txBytes}, nil)
 }
 
 // SendVerifyTimeout asks a peer to verify a timeout (raw transport).
 func (c *HTTPClient) SendVerifyTimeout(ctx context.Context, req VerifyTimeoutRequest) (*VerifyTimeoutResponse, error) {
-	ctx, cancel := context.WithTimeout(ctx, c.config.VerifyTimeout)
-	defer cancel()
-
-	body, err := json.Marshal(req)
-	if err != nil {
-		return nil, fmt.Errorf("marshal: %w", err)
-	}
-	respBody, err := c.doPost(ctx, "/sessions/"+c.escrowID+"/verify-timeout", body)
-	if err != nil {
-		return nil, err
-	}
 	var resp VerifyTimeoutResponse
-	if err := json.Unmarshal(respBody, &resp); err != nil {
-		return nil, fmt.Errorf("unmarshal: %w", err)
+	if err := c.post(ctx, "/sessions/"+c.escrowID+"/verify-timeout", c.config.VerifyTimeout, req, &resp); err != nil {
+		return nil, err
 	}
 	return &resp, nil
 }
@@ -211,22 +210,14 @@ func (c *HTTPClient) VerifyTimeout(ctx context.Context, inferenceID uint64, reas
 
 // GetDiffs fetches stored diffs from a peer.
 func (c *HTTPClient) GetDiffs(ctx context.Context, from, to uint64) ([]types.Diff, error) {
-	ctx, cancel := context.WithTimeout(ctx, c.config.QueryTimeout)
-	defer cancel()
-
-	url := fmt.Sprintf("%s/subnet/v1/sessions/%s/diffs?from=%d&to=%d", c.baseURL, c.escrowID, from, to)
-	respBody, err := c.doGet(ctx, url)
-	if err != nil {
-		return nil, fmt.Errorf("get diffs: %w", err)
-	}
-
 	type diffRecordJSON struct {
 		DiffJSON  `json:"diff"`
 		StateHash []byte `json:"state_hash"`
 	}
 	var records []diffRecordJSON
-	if err := json.Unmarshal(respBody, &records); err != nil {
-		return nil, fmt.Errorf("unmarshal diffs: %w", err)
+	path := fmt.Sprintf("/sessions/%s/diffs?from=%d&to=%d", c.escrowID, from, to)
+	if err := c.get(ctx, path, c.config.QueryTimeout, &records); err != nil {
+		return nil, fmt.Errorf("get diffs: %w", err)
 	}
 
 	diffs := make([]types.Diff, len(records))
@@ -242,38 +233,22 @@ func (c *HTTPClient) GetDiffs(ctx context.Context, from, to uint64) ([]types.Dif
 
 // GetSignatures fetches accumulated signatures for a nonce from a host.
 func (c *HTTPClient) GetSignatures(ctx context.Context, nonce uint64) (map[uint32][]byte, error) {
-	ctx, cancel := context.WithTimeout(ctx, c.config.QueryTimeout)
-	defer cancel()
-
-	url := fmt.Sprintf("%s/subnet/v1/sessions/%s/signatures?nonce=%d", c.baseURL, c.escrowID, nonce)
-	respBody, err := c.doGet(ctx, url)
-	if err != nil {
-		return nil, fmt.Errorf("get signatures: %w", err)
-	}
-
 	var resp SignaturesResponse
-	if err := json.Unmarshal(respBody, &resp); err != nil {
-		return nil, fmt.Errorf("unmarshal signatures: %w", err)
+	path := fmt.Sprintf("/sessions/%s/signatures?nonce=%d", c.escrowID, nonce)
+	if err := c.get(ctx, path, c.config.QueryTimeout, &resp); err != nil {
+		return nil, fmt.Errorf("get signatures: %w", err)
 	}
 	return resp.Signatures, nil
 }
 
 // GetMempool fetches the host's current mempool.
 func (c *HTTPClient) GetMempool(ctx context.Context) ([]*types.SubnetTx, error) {
-	ctx, cancel := context.WithTimeout(ctx, c.config.QueryTimeout)
-	defer cancel()
-
-	url := fmt.Sprintf("%s/subnet/v1/sessions/%s/mempool", c.baseURL, c.escrowID)
-	respBody, err := c.doGet(ctx, url)
-	if err != nil {
-		return nil, fmt.Errorf("get mempool: %w", err)
-	}
-
 	var result struct {
 		Txs [][]byte `json:"txs"`
 	}
-	if err := json.Unmarshal(respBody, &result); err != nil {
-		return nil, fmt.Errorf("unmarshal mempool: %w", err)
+	path := fmt.Sprintf("/sessions/%s/mempool", c.escrowID)
+	if err := c.get(ctx, path, c.config.QueryTimeout, &result); err != nil {
+		return nil, fmt.Errorf("get mempool: %w", err)
 	}
 	return SubnetTxsFromBytes(result.Txs)
 }

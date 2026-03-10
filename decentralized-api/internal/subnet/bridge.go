@@ -113,18 +113,9 @@ func (b *ChainBridge) GetAccountPubKey(address string) ([]byte, error) {
 	return info.PublicKey, nil
 }
 
-func (b *ChainBridge) OnEscrowCreated(_ bridge.EscrowInfo) error {
-	return bridge.ErrNotImplemented
-}
-
-func (b *ChainBridge) OnSettlementProposed(_ string, _ []byte, _ uint64) error {
-	return bridge.ErrNotImplemented
-}
-
-func (b *ChainBridge) OnSettlementFinalized(_ string) error {
-	return bridge.ErrNotImplemented
-}
-
+func (b *ChainBridge) OnEscrowCreated(_ bridge.EscrowInfo) error            { return bridge.ErrNotImplemented }
+func (b *ChainBridge) OnSettlementProposed(_ string, _ []byte, _ uint64) error { return bridge.ErrNotImplemented }
+func (b *ChainBridge) OnSettlementFinalized(_ string) error                    { return bridge.ErrNotImplemented }
 func (b *ChainBridge) SubmitDisputeState(_ string, _ []byte, _ uint64, _ map[uint32][]byte) error {
 	return bridge.ErrNotImplemented
 }

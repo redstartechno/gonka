@@ -43,28 +43,19 @@ func NewHTTPSession(cfg HTTPSessionConfig) (*Session, *state.StateMachine, error
 		state.WithWarmKeyResolver(cfg.Bridge.VerifyWarmKey),
 	)
 
-	urlForAddr := make(map[string]string, len(group))
-	for _, slot := range group {
-		if _, ok := urlForAddr[slot.ValidatorAddress]; ok {
+	clients := make([]HostClient, len(group))
+	clientCache := make(map[string]*transport.HTTPClient)
+	for i, slot := range group {
+		if c, ok := clientCache[slot.ValidatorAddress]; ok {
+			clients[i] = c
 			continue
 		}
 		info, err := cfg.Bridge.GetValidatorInfo(slot.ValidatorAddress)
 		if err != nil {
 			return nil, nil, fmt.Errorf("get validator info for %s: %w", slot.ValidatorAddress, err)
 		}
-		urlForAddr[slot.ValidatorAddress] = info.URL
-	}
-
-	clients := make([]HostClient, len(group))
-	clientCache := make(map[string]*transport.HTTPClient)
-	for i, slot := range group {
-		baseURL := urlForAddr[slot.ValidatorAddress]
-		if c, ok := clientCache[baseURL]; ok {
-			clients[i] = c
-			continue
-		}
-		c := transport.NewHTTPClient(baseURL, cfg.EscrowID, signer)
-		clientCache[baseURL] = c
+		c := transport.NewHTTPClient(info.URL, cfg.EscrowID, signer)
+		clientCache[slot.ValidatorAddress] = c
 		clients[i] = c
 	}
 

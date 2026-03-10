@@ -324,7 +324,7 @@ func (m *HostManager) getValidatorPubKeys(ctx context.Context, validatorAddress,
 // checking adjacent epochs if not found under the primary epochId.
 func (m *HostManager) retrievePayloadsWithAdjacentEpochs(ctx context.Context, escrowID string, inferenceID string, epochID uint64) ([]byte, []byte, uint64, error) {
 	// Use namespaced storage key to prevent cross-session collisions
-	storageKey := SubnetPayloadKeyFromString(escrowID, inferenceID)
+	storageKey := fmt.Sprintf("subnet:%s:%s", escrowID, inferenceID)
 	prompt, response, err := m.payloadStore.Retrieve(ctx, storageKey, epochID)
 	if err == nil {
 		return prompt, response, epochID, nil

@@ -214,13 +214,6 @@ func (s *Session) ProcessResponse(hostIdx int, resp *host.HostResponse) error {
 	return s.processResponse(hostIdx, resp)
 }
 
-// DiffsForHost returns catch-up diffs for a host. Thread-safe.
-func (s *Session) DiffsForHost(hostIdx int) []types.Diff {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.diffsForHost(hostIdx)
-}
-
 // NextDiff composes a diff with pending txs + new MsgStartInference.
 // Does NOT apply state or advance nonce (peek-only). Thread-safe.
 func (s *Session) NextDiff(params InferenceParams) (types.Diff, int, error) {

@@ -5,6 +5,8 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"maps"
+	"slices"
 	"sync"
 	"time"
 
@@ -74,9 +76,10 @@ type Host struct {
 	slotToAddr  map[uint32]string   // slotID -> validator address
 	addrToSlots map[string][]uint32 // address -> all slotIDs owned
 
-	executing  map[uint64]struct{} // inference IDs with in-flight execution
-	validating map[uint64]struct{} // inference IDs with in-flight validation
-	ownSeed    int64               // deterministic seed derived from signer + escrowID
+	sortedSlots []uint32            // deterministic slot order for this host
+	executing   map[uint64]struct{} // inference IDs with in-flight execution
+	validating  map[uint64]struct{} // inference IDs with in-flight validation
+	ownSeed     int64               // deterministic seed derived from signer + escrowID
 }
 
 func NewHost(
@@ -126,6 +129,8 @@ func NewHost(
 		return nil, fmt.Errorf("%w: %s", types.ErrHostNotInGroup, addr)
 	}
 
+	sortedSlots := slices.Sorted(maps.Keys(slotIDs))
+
 	// Derive deterministic seed from signer + escrowID.
 	seedSig, err := signer.Sign([]byte(escrowID))
 	if err != nil {
@@ -147,6 +152,7 @@ func NewHost(
 		checker:     checker,
 		slotToAddr:  slotToAddr,
 		addrToSlots: addrToSlots,
+		sortedSlots: sortedSlots,
 		executing:   make(map[uint64]struct{}),
 		validating:  make(map[uint64]struct{}),
 		ownSeed:     ownSeed,
@@ -435,6 +441,12 @@ func (h *Host) signReceipt(req HostRequest) ([]byte, int64, *executeJob, error) 
 // executeAsync runs engine.Execute, builds MsgFinishInference, and adds it to the mempool.
 // Called outside the mutex so engine.Execute doesn't block other requests.
 func (h *Host) executeAsync(ctx context.Context, job *executeJob) {
+	defer func() {
+		h.mu.Lock()
+		delete(h.executing, job.inferenceID)
+		h.mu.Unlock()
+	}()
+
 	result, err := h.engine.Execute(ctx, subnet.ExecuteRequest{
 		InferenceID: job.inferenceID,
 		Model:       job.model,
@@ -446,9 +458,6 @@ func (h *Host) executeAsync(ctx context.Context, job *executeJob) {
 	})
 	if err != nil {
 		logging.Error("execute failed", "subsystem", "host", "inference_id", job.inferenceID, "error", err)
-		h.mu.Lock()
-		delete(h.executing, job.inferenceID)
-		h.mu.Unlock()
 		return
 	}
 
@@ -460,12 +469,7 @@ func (h *Host) executeAsync(ctx context.Context, job *executeJob) {
 		ExecutorSlot: job.executorSlot,
 		EscrowId:     h.escrowID,
 	}
-	finishData, err := proto.Marshal(finishMsg)
-	if err != nil {
-		logging.Error("marshal finish msg failed", "subsystem", "host", "inference_id", job.inferenceID, "error", err)
-		return
-	}
-	proposerSig, err := h.signer.Sign(finishData)
+	proposerSig, err := h.signProposer(finishMsg)
 	if err != nil {
 		logging.Error("sign finish msg failed", "subsystem", "host", "inference_id", job.inferenceID, "error", err)
 		return
@@ -478,10 +482,6 @@ func (h *Host) executeAsync(ctx context.Context, job *executeJob) {
 		}},
 		ProposedAt: job.diffNonce,
 	})
-
-	h.mu.Lock()
-	delete(h.executing, job.inferenceID)
-	h.mu.Unlock()
 }
 
 // maybeRevealSeed produces a MsgRevealSeed if the session is finalizing and
@@ -507,12 +507,8 @@ func (h *Host) maybeRevealSeed() {
 		}
 	}
 
-	// Pick first owned slot as representative.
-	var repSlot uint32
-	for slot := range h.slotIDs {
-		repSlot = slot
-		break
-	}
+	// Pick first owned slot as representative (deterministic via sorted order).
+	repSlot := h.sortedSlots[0]
 
 	// Sign escrowID bytes to derive the seed signature.
 	seedSig, err := h.signer.Sign([]byte(h.escrowID))
@@ -526,12 +522,7 @@ func (h *Host) maybeRevealSeed() {
 		Signature: seedSig,
 		EscrowId:  h.escrowID,
 	}
-	msgData, err := proto.Marshal(msg)
-	if err != nil {
-		logging.Error("marshal reveal seed failed", "subsystem", "host", "error", err)
-		return
-	}
-	proposerSig, err := h.signer.Sign(msgData)
+	proposerSig, err := h.signProposer(msg)
 	if err != nil {
 		logging.Error("sign reveal seed failed", "subsystem", "host", "error", err)
 		return
@@ -616,12 +607,8 @@ func (h *Host) collectValidationJobs() []validateJob {
 			continue
 		}
 
-		// Pick first owned slot as the validator slot.
-		var validatorSlot uint32
-		for slot := range h.slotIDs {
-			validatorSlot = slot
-			break
-		}
+		// Pick first owned slot as the validator slot (deterministic).
+		validatorSlot := h.sortedSlots[0]
 
 		// Collect executor pubkeys for signature verification.
 		// Include pubkeys from all slots owned by the executor address.
@@ -667,6 +654,12 @@ func (h *Host) hasMempoolValidation(infID uint64) bool {
 // validateAsync runs validator.Validate, builds MsgValidation, signs it, and
 // adds it to the mempool. Called outside the mutex.
 func (h *Host) validateAsync(ctx context.Context, job validateJob) {
+	defer func() {
+		h.mu.Lock()
+		delete(h.validating, job.inferenceID)
+		h.mu.Unlock()
+	}()
+
 	result, err := h.validator.Validate(ctx, subnet.ValidateRequest{
 		InferenceID:     job.inferenceID,
 		Model:           job.model,
@@ -681,9 +674,6 @@ func (h *Host) validateAsync(ctx context.Context, job validateJob) {
 	})
 	if err != nil {
 		logging.Error("validate failed", "subsystem", "host", "inference_id", job.inferenceID, "error", err)
-		h.mu.Lock()
-		delete(h.validating, job.inferenceID)
-		h.mu.Unlock()
 		return
 	}
 
@@ -693,20 +683,9 @@ func (h *Host) validateAsync(ctx context.Context, job validateJob) {
 		Valid:         result.Valid,
 		EscrowId:      h.escrowID,
 	}
-	msgData, err := proto.Marshal(msg)
-	if err != nil {
-		logging.Error("marshal validation msg failed", "subsystem", "host", "inference_id", job.inferenceID, "error", err)
-		h.mu.Lock()
-		delete(h.validating, job.inferenceID)
-		h.mu.Unlock()
-		return
-	}
-	proposerSig, err := h.signer.Sign(msgData)
+	proposerSig, err := h.signProposer(msg)
 	if err != nil {
 		logging.Error("sign validation msg failed", "subsystem", "host", "inference_id", job.inferenceID, "error", err)
-		h.mu.Lock()
-		delete(h.validating, job.inferenceID)
-		h.mu.Unlock()
 		return
 	}
 	msg.ProposerSig = proposerSig
@@ -718,7 +697,6 @@ func (h *Host) validateAsync(ctx context.Context, job validateJob) {
 		}},
 		ProposedAt: h.sm.LatestNonce(),
 	})
-	delete(h.validating, job.inferenceID)
 	h.mu.Unlock()
 }
 
@@ -962,6 +940,15 @@ func (h *Host) signState(nonce uint64, root []byte) ([]byte, error) {
 		return nil, fmt.Errorf("marshal state sig content: %w", err)
 	}
 	return h.signer.Sign(sigData)
+}
+
+// signProposer marshals msg and signs it, returning the proposer signature.
+func (h *Host) signProposer(msg proto.Message) ([]byte, error) {
+	data, err := proto.Marshal(msg)
+	if err != nil {
+		return nil, fmt.Errorf("marshal proposer msg: %w", err)
+	}
+	return h.signer.Sign(data)
 }
 
 // VerifyPayload checks that an InferencePayload matches the expected on-chain fields.

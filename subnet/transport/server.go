@@ -33,6 +33,7 @@ type Server struct {
 	escrowID    string
 	verifier    signing.Verifier
 	group       []types.SlotAssignment
+	groupAddrs  map[string]bool     // precomputed set of group member addresses
 	userAddr    string              // session user address, allowed alongside group members
 	peerClients map[int]*HTTPClient // slot index -> client, for timeout verification
 	rateLimit   *rateLimiter        // nil = no limiting
@@ -86,13 +87,18 @@ func NewServer(
 	if err := types.ValidateGroup(group); err != nil {
 		return nil, err
 	}
+	groupAddrs := make(map[string]bool, len(group))
+	for _, slot := range group {
+		groupAddrs[slot.ValidatorAddress] = true
+	}
 	s := &Server{
-		host:     h,
-		store:    store,
-		escrowID: escrowID,
-		verifier: verifier,
-		group:    group,
-		userAddr: userAddr,
+		host:       h,
+		store:      store,
+		escrowID:   escrowID,
+		verifier:   verifier,
+		group:      group,
+		groupAddrs: groupAddrs,
+		userAddr:   userAddr,
 	}
 	for _, o := range opts {
 		o(s)
@@ -142,10 +148,8 @@ func (s *Server) isAllowedSender(addr string) bool {
 	if s.userAddr != "" && addr == s.userAddr {
 		return true
 	}
-	for _, slot := range s.group {
-		if slot.ValidatorAddress == addr {
-			return true
-		}
+	if s.groupAddrs[addr] {
+		return true
 	}
 	return s.isWarmKeySender(addr)
 }
@@ -178,12 +182,7 @@ func (s *Server) isWarmKeySender(addr string) bool {
 // isGroupMember returns true if addr is a group member (excludes the user).
 // Gossip is host-to-host; the user has no business gossiping.
 func (s *Server) isGroupMember(addr string) bool {
-	for _, slot := range s.group {
-		if slot.ValidatorAddress == addr {
-			return true
-		}
-	}
-	return false
+	return s.groupAddrs[addr]
 }
 
 // authMiddleware reads the body, verifies the signature, checks group membership,

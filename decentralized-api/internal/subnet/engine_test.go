@@ -127,11 +127,6 @@ func TestSubnetPayloadKey(t *testing.T) {
 	assert.Equal(t, "subnet:escrow-123:456", key)
 }
 
-func TestSubnetPayloadKeyFromString(t *testing.T) {
-	key := SubnetPayloadKeyFromString("escrow-123", "456")
-	assert.Equal(t, "subnet:escrow-123:456", key)
-}
-
 func TestSubnetPayloadKey_DifferentEscrows(t *testing.T) {
 	key1 := SubnetPayloadKey("escrow-1", 100)
 	key2 := SubnetPayloadKey("escrow-2", 100)

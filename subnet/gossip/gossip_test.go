@@ -221,8 +221,7 @@ func TestOnNonceReceived_NoAmplificationForKnownNonce(t *testing.T) {
 
 func TestOnNonceReceived_SigAccumulation(t *testing.T) {
 	acc := &mockSigAccumulator{}
-	g := NewGossip("escrow-1", 0, nil, nil)
-	g.SetSigAccumulator(acc)
+	g := NewGossip("escrow-1", 0, nil, nil, WithSigAccumulator(acc))
 
 	// AfterRequest stores nonce 5 in seen map.
 	g.AfterRequest(context.Background(), 5, []byte("hash5"), []byte("our-sig"))
@@ -299,8 +298,7 @@ func TestRecovery_TriggersWhenBehind(t *testing.T) {
 	updater := &mockStateUpdater{sigs: recoveredSigs}
 	peer := &mockPeer{}
 
-	g := NewGossip("escrow-1", 0, []PeerClient{peer}, nil)
-	g.SetRecovery(fetcher, updater)
+	g := NewGossip("escrow-1", 0, []PeerClient{peer}, nil, WithRecovery(fetcher, updater))
 	g.RecoveryDelay = 0 // no delay for test
 
 	// AfterRequest sets lastAfterReqNonce to 3.
@@ -445,8 +443,7 @@ func TestRecovery_UpdatesWatermark(t *testing.T) {
 	}}
 	updater := &mockStateUpdater{sigs: recoveredSigs}
 
-	g := NewGossip("escrow-1", 0, nil, nil)
-	g.SetRecovery(fetcher, updater)
+	g := NewGossip("escrow-1", 0, nil, nil, WithRecovery(fetcher, updater))
 	g.RecoveryDelay = 0
 
 	// Set initial state: applied up to 3, seen up to 5.
@@ -488,8 +485,7 @@ func TestRecovery_DoesNotTriggerWhenUpToDate(t *testing.T) {
 	fetcher := &mockDiffFetcher{}
 	updater := &mockStateUpdater{}
 
-	g := NewGossip("escrow-1", 0, nil, nil)
-	g.SetRecovery(fetcher, updater)
+	g := NewGossip("escrow-1", 0, nil, nil, WithRecovery(fetcher, updater))
 
 	// AfterRequest sets lastAfterReqNonce to 5. highestSeen is also 5.
 	g.AfterRequest(context.Background(), 5, []byte("h5"), []byte("s5"))

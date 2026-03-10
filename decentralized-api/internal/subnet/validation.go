@@ -58,7 +58,7 @@ func (v *ValidationAdapter) Validate(ctx context.Context, req subnet.ValidateReq
 	inferenceID := strconv.FormatUint(req.InferenceID, 10)
 	epochID := req.EpochID
 	if epochID == 0 {
-		epochID = v.currentEpochID()
+		epochID = currentEpochID(v.phaseTracker)
 	}
 
 	// Fetch payloads from executor
@@ -139,14 +139,6 @@ func (v *ValidationAdapter) Validate(ctx context.Context, req subnet.ValidateReq
 	result := validation.CompareLogits(originalLogits, validationLogits, base)
 
 	return &subnet.ValidateResult{Valid: result.IsSuccessful()}, nil
-}
-
-func (v *ValidationAdapter) currentEpochID() uint64 {
-	epochState := v.phaseTracker.GetCurrentEpochState()
-	if epochState != nil {
-		return epochState.LatestEpoch.EpochIndex
-	}
-	return 0
 }
 
 // fetchPayloadsFromExecutor retrieves payloads from the executor host using subnet session endpoint.

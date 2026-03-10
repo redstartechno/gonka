@@ -7,6 +7,28 @@ import (
 	"subnet/types"
 )
 
+func copySignatures(src map[uint32][]byte) map[uint32][]byte {
+	if src == nil {
+		return nil
+	}
+	dst := make(map[uint32][]byte, len(src))
+	for k, v := range src {
+		dst[k] = append([]byte(nil), v...)
+	}
+	return dst
+}
+
+func copyGroup(src []types.SlotAssignment) []types.SlotAssignment {
+	dst := make([]types.SlotAssignment, len(src))
+	for i, s := range src {
+		dst[i] = s
+		if s.PublicKey != nil {
+			dst[i].PublicKey = append([]byte(nil), s.PublicKey...)
+		}
+	}
+	return dst
+}
+
 type sessionData struct {
 	escrowID      string
 	config        types.SessionConfig
@@ -37,20 +59,10 @@ func (m *Memory) CreateSession(escrowID string, config types.SessionConfig, grou
 		return fmt.Errorf("session %s already exists", escrowID)
 	}
 
-	groupCopy := make([]types.SlotAssignment, len(group))
-	for i, sa := range group {
-		cp := sa
-		if sa.PublicKey != nil {
-			cp.PublicKey = make([]byte, len(sa.PublicKey))
-			copy(cp.PublicKey, sa.PublicKey)
-		}
-		groupCopy[i] = cp
-	}
-
 	m.sessions[escrowID] = &sessionData{
 		escrowID:     escrowID,
 		config:       config,
-		group:        groupCopy,
+		group:        copyGroup(group),
 		balance:      balance,
 		nonceToIndex: make(map[uint64]int),
 	}
@@ -66,14 +78,7 @@ func (m *Memory) AppendDiff(escrowID string, rec types.DiffRecord) error {
 		return fmt.Errorf("session %s not found", escrowID)
 	}
 
-	// Deep copy signatures map.
-	sigsCopy := make(map[uint32][]byte, len(rec.Signatures))
-	for k, v := range rec.Signatures {
-		vc := make([]byte, len(v))
-		copy(vc, v)
-		sigsCopy[k] = vc
-	}
-	rec.Signatures = sigsCopy
+	rec.Signatures = copySignatures(rec.Signatures)
 
 	s.diffs = append(s.diffs, rec)
 	s.nonceToIndex[rec.Nonce] = len(s.diffs) - 1
@@ -111,20 +116,10 @@ func (m *Memory) GetState(escrowID string) (*types.EscrowState, error) {
 		return nil, fmt.Errorf("session %s not found", escrowID)
 	}
 
-	groupCopy := make([]types.SlotAssignment, len(s.group))
-	for i, sa := range s.group {
-		cp := sa
-		if sa.PublicKey != nil {
-			cp.PublicKey = make([]byte, len(sa.PublicKey))
-			copy(cp.PublicKey, sa.PublicKey)
-		}
-		groupCopy[i] = cp
-	}
-
 	state := &types.EscrowState{
 		EscrowID: s.escrowID,
 		Config:   s.config,
-		Group:    groupCopy,
+		Group:    copyGroup(s.group),
 		Balance:  s.balance,
 	}
 
@@ -149,14 +144,7 @@ func (m *Memory) GetSignatures(escrowID string, nonce uint64) (map[uint32][]byte
 		return nil, fmt.Errorf("diff at nonce %d not found for session %s", nonce, escrowID)
 	}
 
-	sigs := s.diffs[idx].Signatures
-	result := make(map[uint32][]byte, len(sigs))
-	for k, v := range sigs {
-		vc := make([]byte, len(v))
-		copy(vc, v)
-		result[k] = vc
-	}
-	return result, nil
+	return copySignatures(s.diffs[idx].Signatures), nil
 }
 
 func (m *Memory) MarkFinalized(escrowID string, nonce uint64) error {
@@ -200,15 +188,8 @@ func (m *Memory) GetDiffs(escrowID string, fromNonce, toNonce uint64) ([]types.D
 		if d.Nonce < fromNonce || d.Nonce > toNonce {
 			continue
 		}
-		// Deep copy signatures.
-		sigsCopy := make(map[uint32][]byte, len(d.Signatures))
-		for k, v := range d.Signatures {
-			vc := make([]byte, len(v))
-			copy(vc, v)
-			sigsCopy[k] = vc
-		}
 		dc := d
-		dc.Signatures = sigsCopy
+		dc.Signatures = copySignatures(d.Signatures)
 		result = append(result, dc)
 	}
 

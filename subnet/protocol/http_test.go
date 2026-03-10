@@ -112,8 +112,7 @@ func setupHTTPEnv(t *testing.T, numHosts int, balance, grace uint64, cfgs ...typ
 			}
 			peers = append(peers, c)
 		}
-		g := gossip.NewGossip("escrow-1", uint32(i), peers, hosts[i].HostMempool())
-		g.SetSigAccumulator(hosts[i])
+		g := gossip.NewGossip("escrow-1", uint32(i), peers, hosts[i].HostMempool(), gossip.WithSigAccumulator(hosts[i]))
 		gossips[i] = g
 		srv.SetGossip(g)
 	}
