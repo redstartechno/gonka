@@ -102,7 +102,6 @@ type SlotAssignment struct {
 	SlotID           uint32
 	ValidatorAddress string
 	PublicKey        []byte
-	Weight           uint64
 }
 
 // ValidateGroup checks that group[i].SlotID == i for all entries, group size

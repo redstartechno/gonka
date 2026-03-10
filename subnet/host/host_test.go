@@ -263,7 +263,6 @@ func makeMultiSlotGroup(signers []*signing.Secp256k1Signer, dupIdx int) []types.
 		SlotID:           uint32(len(signers)),
 		ValidatorAddress: signers[dupIdx].Address(),
 		PublicKey:        signers[dupIdx].PublicKeyBytes(),
-		Weight:           1,
 	}
 	return append(group, extra)
 }

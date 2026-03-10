@@ -33,7 +33,6 @@ func BuildGroup(escrowID string, b MainnetBridge) ([]types.SlotAssignment, error
 			SlotID:           uint32(i),
 			ValidatorAddress: addr,
 			PublicKey:        info.PublicKey,
-			Weight:           info.Weight,
 		}
 	}
 

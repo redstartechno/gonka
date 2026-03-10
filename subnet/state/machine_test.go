@@ -958,7 +958,7 @@ func TestSnapshotState_DeepCopy(t *testing.T) {
 	stateCopy.Inferences[1].Status = types.StatusTimedOut
 	stateCopy.Inferences[1].PromptHash[0] = 0xFF
 	stateCopy.HostStats[0].Cost = 999
-	stateCopy.Group[0].Weight = 999
+	stateCopy.Group[0].ValidatorAddress = "mutated"
 
 	// Verify original state is unaffected.
 	original := sm.SnapshotState()
@@ -966,7 +966,7 @@ func TestSnapshotState_DeepCopy(t *testing.T) {
 	require.Equal(t, types.StatusPending, original.Inferences[1].Status)
 	require.Equal(t, byte('p'), original.Inferences[1].PromptHash[0])
 	require.Equal(t, uint64(0), original.HostStats[0].Cost)
-	require.Equal(t, uint64(1), original.Group[0].Weight)
+	require.NotEqual(t, "mutated", original.Group[0].ValidatorAddress)
 }
 
 // --- Helper for common start + confirm + finish flow ---

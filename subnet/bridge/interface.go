@@ -30,5 +30,4 @@ type ValidatorInfo struct {
 	Address   string
 	PublicKey []byte
 	URL       string
-	Weight    uint64
 }

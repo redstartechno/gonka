@@ -11,8 +11,8 @@ import (
 func TestCreateSession_GetState(t *testing.T) {
 	store := NewMemory()
 	group := []types.SlotAssignment{
-		{SlotID: 0, ValidatorAddress: "addr0", Weight: 1},
-		{SlotID: 1, ValidatorAddress: "addr1", Weight: 1},
+		{SlotID: 0, ValidatorAddress: "addr0"},
+		{SlotID: 1, ValidatorAddress: "addr1"},
 	}
 
 	err := store.CreateSession("escrow-1", types.SessionConfig{}, group, 1000)
@@ -28,7 +28,7 @@ func TestCreateSession_GetState(t *testing.T) {
 
 func TestAppendDiff_GetDiffs(t *testing.T) {
 	store := NewMemory()
-	group := []types.SlotAssignment{{SlotID: 0, ValidatorAddress: "addr0", Weight: 1}}
+	group := []types.SlotAssignment{{SlotID: 0, ValidatorAddress: "addr0"}}
 	err := store.CreateSession("escrow-1", types.SessionConfig{}, group, 1000)
 	require.NoError(t, err)
 
@@ -54,7 +54,7 @@ func TestAppendDiff_GetDiffs(t *testing.T) {
 
 func TestGetSignatures(t *testing.T) {
 	store := NewMemory()
-	group := []types.SlotAssignment{{SlotID: 0, ValidatorAddress: "addr0", Weight: 1}}
+	group := []types.SlotAssignment{{SlotID: 0, ValidatorAddress: "addr0"}}
 	err := store.CreateSession("escrow-1", types.SessionConfig{}, group, 1000)
 	require.NoError(t, err)
 
@@ -85,7 +85,7 @@ func TestGetSignatures(t *testing.T) {
 
 func TestGetSignatures_NotFound(t *testing.T) {
 	store := NewMemory()
-	group := []types.SlotAssignment{{SlotID: 0, ValidatorAddress: "addr0", Weight: 1}}
+	group := []types.SlotAssignment{{SlotID: 0, ValidatorAddress: "addr0"}}
 	err := store.CreateSession("escrow-1", types.SessionConfig{}, group, 1000)
 	require.NoError(t, err)
 
@@ -95,7 +95,7 @@ func TestGetSignatures_NotFound(t *testing.T) {
 
 func TestMarkFinalized_LastFinalized(t *testing.T) {
 	store := NewMemory()
-	group := []types.SlotAssignment{{SlotID: 0, ValidatorAddress: "addr0", Weight: 1}}
+	group := []types.SlotAssignment{{SlotID: 0, ValidatorAddress: "addr0"}}
 	err := store.CreateSession("escrow-1", types.SessionConfig{}, group, 1000)
 	require.NoError(t, err)
 
@@ -137,7 +137,7 @@ func TestMarkFinalized_SessionNotFound(t *testing.T) {
 
 func TestAddSignature(t *testing.T) {
 	store := NewMemory()
-	group := []types.SlotAssignment{{SlotID: 0, ValidatorAddress: "addr0", Weight: 1}}
+	group := []types.SlotAssignment{{SlotID: 0, ValidatorAddress: "addr0"}}
 	err := store.CreateSession("escrow-1", types.SessionConfig{}, group, 1000)
 	require.NoError(t, err)
 

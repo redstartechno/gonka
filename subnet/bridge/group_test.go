@@ -53,9 +53,9 @@ func TestBuildGroup_HappyPath(t *testing.T) {
 			Slots:    []string{"valA", "valB", "valC"},
 		},
 		validators: map[string]*ValidatorInfo{
-			"valA": {Address: "valA", PublicKey: []byte{1}, Weight: 10},
-			"valB": {Address: "valB", PublicKey: []byte{2}, Weight: 20},
-			"valC": {Address: "valC", PublicKey: []byte{3}, Weight: 30},
+			"valA": {Address: "valA", PublicKey: []byte{1}},
+			"valB": {Address: "valB", PublicKey: []byte{2}},
+			"valC": {Address: "valC", PublicKey: []byte{3}},
 		},
 	}
 
@@ -68,7 +68,7 @@ func TestBuildGroup_HappyPath(t *testing.T) {
 	}
 	assert.Equal(t, "valA", group[0].ValidatorAddress)
 	assert.Equal(t, "valC", group[2].ValidatorAddress)
-	assert.Equal(t, uint64(20), group[1].Weight)
+	assert.Equal(t, []byte{2}, group[1].PublicKey)
 }
 
 func TestBuildGroup_Deduplication(t *testing.T) {
@@ -81,8 +81,8 @@ func TestBuildGroup_Deduplication(t *testing.T) {
 			Slots: []string{"valA", "valA", "valB", "valA"},
 		},
 		validators: map[string]*ValidatorInfo{
-			"valA": {Address: "valA", PublicKey: []byte{1}, Weight: 10},
-			"valB": {Address: "valB", PublicKey: []byte{2}, Weight: 20},
+			"valA": {Address: "valA", PublicKey: []byte{1}},
+			"valB": {Address: "valB", PublicKey: []byte{2}},
 		},
 	}
 
@@ -121,7 +121,7 @@ func TestBuildGroup_ValidatorError(t *testing.T) {
 			Slots:    []string{"valA", "missing"},
 		},
 		validators: map[string]*ValidatorInfo{
-			"valA": {Address: "valA", PublicKey: []byte{1}, Weight: 10},
+			"valA": {Address: "valA", PublicKey: []byte{1}},
 		},
 	}
 	_, err := BuildGroup("1", b)
@@ -165,7 +165,7 @@ func TestBuildGroup_ValidateGroupPasses(t *testing.T) {
 			Slots:    []string{"valA"},
 		},
 		validators: map[string]*ValidatorInfo{
-			"valA": {Address: "valA", PublicKey: []byte{1}, Weight: 10},
+			"valA": {Address: "valA", PublicKey: []byte{1}},
 		},
 	}
 

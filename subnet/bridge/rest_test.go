@@ -75,7 +75,6 @@ func TestGetValidatorInfo_HappyPath(t *testing.T) {
 	assert.Equal(t, "inference1valA", info.Address)
 	assert.Equal(t, []byte{1, 2, 3}, info.PublicKey)
 	assert.Equal(t, "http://ml.example.com:8080", info.URL)
-	assert.Equal(t, uint64(100), info.Weight)
 }
 
 func TestGetValidatorInfo_NotFound(t *testing.T) {

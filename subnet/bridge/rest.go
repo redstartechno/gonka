@@ -62,7 +62,6 @@ type participantResponse struct {
 	Participant struct {
 		Index        string `json:"index"`
 		Address      string `json:"address"`
-		Weight       int32  `json:"weight"`
 		InferenceURL string `json:"inference_url"`
 		ValidatorKey string `json:"validator_key"` // base64-encoded
 	} `json:"participant"`
@@ -149,7 +148,6 @@ func (b *RESTBridge) GetValidatorInfo(validatorAddress string) (*ValidatorInfo, 
 		Address:   resp.Participant.Address,
 		PublicKey: pubKey,
 		URL:       resp.Participant.InferenceURL,
-		Weight:    uint64(resp.Participant.Weight),
 	}, nil
 }
 

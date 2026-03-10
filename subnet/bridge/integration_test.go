@@ -46,7 +46,6 @@ func TestIntegration_GetValidatorInfo(t *testing.T) {
 
 	assert.NotEmpty(t, info.Address)
 	assert.NotEmpty(t, info.URL)
-	assert.NotZero(t, info.Weight)
 }
 
 func TestIntegration_BuildGroup(t *testing.T) {
@@ -61,6 +60,5 @@ func TestIntegration_BuildGroup(t *testing.T) {
 	for i, slot := range group {
 		assert.Equal(t, uint32(i), slot.SlotID)
 		assert.NotEmpty(t, slot.ValidatorAddress)
-		assert.NotZero(t, slot.Weight)
 	}
 }
