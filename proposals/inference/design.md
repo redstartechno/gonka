@@ -107,9 +107,12 @@ EscrowState:
   config               SessionConfig
   group                []SlotAssignment                # from mainnet at creation, immutable
   balance              uint64                          # remaining escrow
-  finalizing           bool                            # set by MsgFinalizeRound, irreversible
+  phase                SessionPhase                    # Active | Finalizing | Settlement
+  finalize_nonce       uint64                          # nonce at which finalization started
   inferences           map[uint64]InferenceRecord      # keyed by inference_id
   host_stats           map[uint32]HostStats            # keyed by slot_id
+  revealed_seeds       map[uint32]int64                # keyed by slot_id, from MsgRevealSeed
+  warm_keys            map[uint32]string               # slot_id -> warm key address, lazily populated
   latest_nonce         uint64
 ```
 
@@ -182,31 +185,35 @@ Transitions and state updates:
 
 ### State Hash
 
-The state is structured as a two-level hash:
-
 ```
-           state_root
-          /          \
- host_stats_hash    rest_hash
+state_root = sha256(host_stats_hash || rest_hash || phase_byte)
 ```
 
-host_stats_hash = hash(serialize(host_stats)). rest_hash = hash(balance_bytes || inferences_hash), where inferences_hash = hash(serialize(inferences)). state_root = hash(host_stats_hash || rest_hash). Serialization is deterministic (protobuf with sorted map keys, fixed field order).
+Where:
 
-This covers the full EscrowState: host_stats on the left, balance and inferences on the right. escrow_id and latest_nonce are already bound by the signature (sign(state_root || escrow_id || nonce)) and don't need separate inclusion.
+- `host_stats_hash = sha256(proto(sorted host stats))` -- 32 bytes
+- `rest_hash = sha256(balance_be || inferences_hash || warm_keys_hash)` -- 32 bytes
+- `warm_keys_hash = sha256(sorted slot_id_be || addr_bytes)` -- lazy warm key bindings
+- `inferences_hash = sha256(proto(sorted inference records))`
+- `phase_byte = uint8(phase)`: 0x00=Active, 0x01=Finalizing, 0x02=Settlement
 
-At settlement, mainnet receives host_stats and rest_hash (the sibling). It recomputes host_stats_hash, combines with rest_hash, and checks against the signed state_root. Mainnet doesn't need to interpret rest_hash.
+All components have fixed, known lengths (32 + 32 + 1), so the concatenation is unambiguous without length prefixes. Serialization is deterministic (protobuf with sorted map keys, fixed field order).
+
+escrow_id and latest_nonce are already bound by the host signature (`sign(state_root || escrow_id || nonce)`) and don't need separate inclusion in the hash.
+
+At settlement, mainnet receives host_stats and rest_hash (the sibling). It recomputes host_stats_hash, combines with rest_hash, hardcodes `phase_byte=0x02`, and checks against the signed state_root. Mainnet doesn't need to interpret rest_hash.
 
 Every host applying the same diffs to the same nonce produces the same state_root. This is what gets signed.
 
 ### What Gets Signed
 
-User signs the diff content: `sign(hash(serialize(nonce, txs)))`. Only nonce and txs are signed -- not host signatures or state hash (those arrive later). Serialization is protobuf (deterministic). The signature authenticates the diff as coming from the user and binds the tx content to the nonce. Required for non-repudiation and equivocation detection (see Sequencing Model).
+User signs the diff content: `sign(hash(serialize(DiffContent{nonce, txs, escrow_id, post_state_root})))`. `post_state_root` is the state root after applying the diff's txs. This binds the user signature to the exact post-state claimed for that nonce. Host signatures remain outside the signed diff payload.
 
 Host signs the state: `sign(state_root || escrow_id || nonce)`. escrow_id prevents cross-session replay, nonce prevents cross-nonce replay, state_root binds to a specific state. Signing happens before execution.
 
 Executor signs the receipt: `sign(inference_id || prompt_hash || model || input_length || max_tokens || started_at)`. Attests to request content and timestamp. Delivered to other hosts via MsgConfirmStart.
 
-Host signs proposed txs: each host-proposed transaction (MsgFinishInference, MsgValidation, MsgValidationVote, MsgRevealSeed) carries the proposer's signature over the serialized tx content. The signature is not part of state -- it is verified before applying the tx and then discarded. Every participant (hosts and user) verifies it using the known public key for that slot from the group assignment. This prevents the user from forging host-proposed txs when including them in diffs.
+Host signs proposed txs: each host-proposed transaction (MsgFinishInference, MsgValidation, MsgValidationVote, MsgRevealSeed) carries the proposer's signature over the serialized tx content. Verification accepts either the validator's cold key or an authorized warm key. Once the first diff-contained warm-key signature from a slot is accepted, that warm-key binding is fixed for the session and later verified against `state.WarmKeys`. This prevents the user from forging host-proposed txs when including them in diffs.
 
 ### Diff Application
 
@@ -395,6 +402,10 @@ Verification flow:
 
 A host can sign with either its cold key (validator's own account key) or its warm key (operational key authorized via authz grant on mainnet). Both are secp256k1. Cold key signing requires no grant -- the validator is acting directly.
 
+Only diff-contained signatures (proposer_sig on host-proposed txs, executor_sig in MsgConfirmStart) introduce warm key bindings into the state root. The first diff-contained signature from a slot binds that warm key permanently for the session. A different key from the same slot is rejected. These signatures are verified inside `applyTx`, which all participants execute identically. State signatures and gossip messages verify the key against the binding but never create new ones. See [storage.md Warm Keys](./storage.md#warm-keys) for the full binding rule and replay implications.
+
+The finalized storage design persists warm-key deltas per diff so replay can reproduce the same binding decisions at the same nonces without re-querying the bridge.
+
 ```go
 type WarmKeyInfo struct {
     ValidatorAddress string
@@ -490,58 +501,32 @@ type WarmKeyInfo struct {
 
 ## Storage
 
-### Data Model
+Full storage design is in [storage.md](./storage.md). Summary of key decisions:
 
-Each escrow has a EscrowState -- the current balances, inference records, and host stats. EscrowState is a deterministic function of the ordered sequence of diffs applied from nonce 1 to latest_nonce. Each diff increments the nonce by one and contains transactions that modify state.
+Single SQLite file, WAL mode. All sessions share one `subnet.db`. Sessions are logically separated by `escrow_id`. Three tables: `sessions` (metadata), `diffs` (append-only log), `signatures` (async arrival). Write serialization via goroutine + buffered channel. Reads are concurrent.
 
-Two types represent diffs:
+EscrowState is a deterministic function of the ordered sequence of diffs applied from nonce 1 to latest_nonce. The state machine owns the in-memory state; storage persists diffs. On restart, diffs are replayed through the state machine to reconstruct state.
 
-- Diff: protocol primitive, what the user creates and signs. Contains Nonce, Txs, UserSig. UserSig covers `hash(proto_serialize(Nonce, Txs))`.
-- DiffRecord: storage representation. Embeds Diff plus computed metadata: StateHash (state_root after applying), Signatures (host state signatures, accumulated over time), CreatedAt.
-
-Storage schema:
-
-```
-escrow_state:
-  escrow_id       string (PK)
-  group           []SlotAssignment    # from mainnet at creation
-  balance         uint64              # available escrow: escrow_amount - sum(active reservations)
-  latest_nonce    uint64
-  settled         bool
-
-diff_records:                         # one row per DiffRecord
-  escrow_id       string (FK)
-  nonce           uint64 (PK with escrow_id)
-  txs             []SubnetTx          # serialized proto
-  user_sig        []byte
-  state_hash      []byte              # computed, not user-provided
-  signatures      map[slot_id][]byte  # accumulated over time
-  created_at      timestamp
-```
-
-Append-only. Signatures for a diff may arrive later (lag by 1+ rounds), so the signatures field gets updated in place.
-
-Both diffs and latest state are persisted. The state machine owns the in-memory state; storage is persistence. Diffs can be lost (recoverable from other hosts via public endpoint) but latest state cannot -- it is the checkpoint for restart and settlement.
+DiffRecord embeds Diff plus computed metadata: StateHash, Signatures (accumulated over time), WarmKeyDelta (warm key bindings from diff-contained signatures at this nonce), CreatedAt.
 
 ### Storage Interface
 
 ```go
 type Storage interface {
-    CreateSession(escrowID string, config SessionConfig, group []SlotAssignment, balance uint64) error
+    CreateSession(params CreateSessionParams) error
+    MarkSettled(escrowID string) error
+    ListActiveSessions() ([]string, error)
     AppendDiff(escrowID string, rec DiffRecord) error
-    AddSignature(escrowID string, nonce uint64, slotID uint32, sig []byte) error
-    GetState(escrowID string) (*EscrowState, error)
     GetDiffs(escrowID string, fromNonce, toNonce uint64) ([]DiffRecord, error)
+    AddSignature(escrowID string, nonce uint64, slotID uint32, sig []byte) error
+    GetSignatures(escrowID string, nonce uint64) (map[uint32][]byte, error)
+    GetSessionMeta(escrowID string) (*SessionMeta, error)
+    MarkFinalized(escrowID string, nonce uint64) error
+    LastFinalized(escrowID string) (uint64, error)
 }
 ```
 
-### Implementations
-
-Phase 1: single SQLite file, WAL mode. All writes go through a dedicated goroutine fed by a buffered channel. Reads are concurrent (WAL allows multiple readers). Total cost: 3 file descriptors (db + wal + shm) regardless of session count.
-
-Why not shard (one DB per escrow): 1000 concurrent sessions would open ~3000 file descriptors, competing with network sockets under the same ulimit. A single DB eliminates this entirely. Channel-hop latency is microseconds, and SQLite comfortably handles 1000 writes/sec with WAL. The write goroutine serializes mutations without any per-session lock management.
-
-Phase 2: PostgreSQL via `jackc/pgx/v5` (already a dapi dependency). Single `subnet_diffs` table partitioned by escrow_id or time range. Enables multi-instance dapi pointing at the same DB. Migration path: the Storage interface is the same, just swap the implementation at startup based on config.
+Phase 1: in-memory (`storage.NewMemory()`). Phase 2: SQLite. Later: PostgreSQL for multi-instance dapi.
 
 
 ## Gossip

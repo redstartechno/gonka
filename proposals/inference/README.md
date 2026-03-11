@@ -141,6 +141,8 @@ Settlement does not require all inferences to be in terminal state. Unresolved i
 
 The executor signs a receipt attesting to request content and timestamp. Other hosts verify the receipt when processing MsgConfirmStart. Signing formats for receipts and timeout votes are defined in [design.md What Gets Signed](./design.md#what-gets-signed).
 
+Executor receipts and host state signatures are different signed messages. `receipt_sig_h1` is the executor receipt; `state_sig_h1` is the state signature over `(state_root, escrow_id, nonce)`.
+
 MsgStartInference has an optional `executor_sig` field. If the user already has the receipt, it can include it directly -- the inference skips pending and enters started immediately. Otherwise, the inference enters pending and the receipt is delivered later via MsgConfirmStart.
 
 Pipelining: the user does not block on receiving the receipt before sending the next request. The user sends MsgStartInference (pending) at nonce N, gets the receipt in the executor's HTTP response, and includes MsgConfirmStart at nonce N+1 or later. Receipts lag by 1+ rounds depending on how fast the user sends requests.
@@ -218,29 +220,29 @@ Group = [h1, h2, h3, h4, h5], user sends 3 requests.
 User -> h1: POST /chat/completions (nonce 1)
   diff: [MsgStartInference(1)]
   h1: validates diff, signs state(nonce=1), starts executing
-  returns: (sig_h1, mempool=[])
+  returns: (state_sig_h1, receipt_sig_h1, mempool=[])
   inference 1: pending
 
 User -> h2: POST /chat/completions (nonce 2)
-  diff: [MsgConfirmStart(1, executor_sig=sig_h1),
+  diff: [MsgConfirmStart(1, executor_sig=receipt_sig_h1),
          MsgStartInference(2)]
-  h2: verifies sig_h1 is valid receipt for inference 1
+  h2: verifies receipt_sig_h1 is valid executor receipt for inference 1
   inference 1: pending -> started
   inference 2: pending
   h2: signs state(nonce=2), starts executing
-  returns: (sig_h2, mempool=[])
+  returns: (state_sig_h2, receipt_sig_h2, mempool=[])
 
   (meanwhile h1 finishes, creates MsgFinishInference(1))
 
 User -> h3: POST /chat/completions (nonce 3)
-  diff: [MsgConfirmStart(2, executor_sig=sig_h2),
+  diff: [MsgConfirmStart(2, executor_sig=receipt_sig_h2),
          MsgFinishInference(1),
          MsgStartInference(3)]
   inference 2: pending -> started
   inference 1: started -> finished
   inference 3: pending
   h3: signs state(nonce=3), starts executing
-  returns: (sig_h3, mempool=[])
+  returns: (state_sig_h3, receipt_sig_h3, mempool=[])
 ```
 
 State after 3 requests:
@@ -248,7 +250,7 @@ State after 3 requests:
 - inference 2: started (receipt confirmed, executing)
 - inference 3: pending (waiting for h3's receipt)
 
-Signatures lag: sig_h1 arrived at nonce 2, sig_h2 at nonce 3. Normal pipelining.
+Executor receipts lag by 1+ rounds: receipt_sig_h1 is included at nonce 2, receipt_sig_h2 at nonce 3. Normal pipelining.
 
 
 #### Executor doesn't respond (reason=refused)
@@ -296,15 +298,15 @@ h1 accepts the request but never delivers a result.
 ```
 User -> h1: POST /chat/completions (nonce 1)
   diff: [MsgStartInference(1)]
-  h1: signs state(nonce=1), returns sig_h1
+  h1: signs state(nonce=1), returns (state_sig_h1, receipt_sig_h1)
   h1: starts executing but crashes / hangs
   inference 1: pending
 
 User -> h2: POST /chat/completions (nonce 2)
-  diff: [MsgConfirmStart(1, sig_h1),
+  diff: [MsgConfirmStart(1, receipt_sig_h1),
          MsgStartInference(2)]
   inference 1: pending -> started (receipt verified, timestamp attested)
-  h2: signs state(nonce=2), returns sig_h2
+  h2: signs state(nonce=2), returns (state_sig_h2, receipt_sig_h2)
 
   ... session continues, deadline passes (started_at + T) ...
 
@@ -400,7 +402,7 @@ Validation is probabilistic, same as on mainnet. Each host independently decides
 
 On mainnet, hosts commit a seed at epoch start and reveal it at epoch end. The subnet has no epochs. Instead, the seed is derived deterministically from the host's private key and the escrow_id: `seed_i = first_8_bytes(sign(escrow_id_bytes))`. One seed per host per session. The host has no freedom to choose a different seed since signing is deterministic and the public key is known.
 
-The signing key is pinned by the host's first state signature in the session. Each host records which key other hosts used. At reveal time, the seed signature must match the pinned key. A validator with multiple warm keys cannot try different keys at reveal time to influence which inferences it must validate.
+The signing key is pinned by the host's first diff-contained signature in the session (`proposer_sig` or `executor_sig`). This binding enters `state.WarmKeys` and becomes part of the state root. At reveal time, `MsgRevealSeed` is verified against the same session binding, not against a separately learned state-signature key. A validator cannot try different keys at reveal time to influence which inferences it must validate. See [storage.md Warm Keys](./storage.md#warm-keys) for the binding rule and replay implications.
 
 During the session, each host uses its seed to decide which finished inferences to validate. If selected, host_i re-executes the inference, compares logits, and submits MsgValidation into subnet state.
 
@@ -444,9 +446,9 @@ Host: h3
     {"role": "user", "content": "Write a haiku about Seattle."}
   ],
   "diffs": [
-    {"nonce": 1, "txs": ["MsgStartInference(1)"], "sigs": ["sig_h1"]},
-    {"nonce": 2, "txs": ["MsgConfirmStart(1, sig_h1)", "MsgStartInference(2)"], "sigs": ["sig_h2"]},
-    {"nonce": 3, "txs": ["MsgConfirmStart(2, sig_h2)", "MsgFinishInference(1)", "MsgStartInference(3)"], "sigs": []}
+    {"nonce": 1, "txs": ["MsgStartInference(1)"], "state_sigs": ["state_sig_h1"]},
+    {"nonce": 2, "txs": ["MsgConfirmStart(1, receipt_sig_h1)", "MsgStartInference(2)"], "state_sigs": ["state_sig_h2"]},
+    {"nonce": 3, "txs": ["MsgConfirmStart(2, receipt_sig_h2)", "MsgFinishInference(1)", "MsgStartInference(3)"], "state_sigs": ["state_sig_h3"]}
   ],
   "state_hash": "<SHA256>"
 }
@@ -458,7 +460,7 @@ First request (to h1):
 {
   ...
   "diffs": [
-    {"nonce": 1, "txs": ["MsgStartInference(1)"], "sigs": []}
+    {"nonce": 1, "txs": ["MsgStartInference(1)"], "state_sigs": []}
   ],
   "state_hash": "<SHA256>"
 }

@@ -4,6 +4,8 @@ Phased implementation of the subnet described in [README.md](./README.md) and [d
 
 General approach: plan one phase at a time, implement, then plan the next. Test design is the priority -- tests define the contract before any implementation exists.
 
+Implementation status: the codebase is ahead of this phased plan in some areas (warm key handling exists in the state machine) and behind in others (SQLite persistence, restart recovery, and warm-key delta replay from [storage.md](./storage.md) are not yet implemented; current code uses in-memory storage and the older storage interface).
+
 Test levels:
 - Unit tests: per-package, in-process, no I/O
 - Subnet integration tests: multi-node, mock MainnetBridge, stub InferenceEngine/ValidationEngine
@@ -218,14 +220,17 @@ type SessionConfig struct {
 // Per-model pricing needs further design. Flat price sufficient for Phase 1.
 
 type EscrowState struct {
-  EscrowID    string
-  Config      SessionConfig
-  Group       []SlotAssignment              // slot assignments, immutable for the session
-  Balance     uint64
-  Finalizing  bool                          // set by MsgFinalizeRound, irreversible
-  Inferences  map[uint64]*InferenceRecord   // keyed by inference_id (= nonce of MsgStartInference)
-  HostStats   map[uint32]*HostStats         // keyed by slot_id
-  LatestNonce uint64
+  EscrowID      string
+  Config        SessionConfig
+  Group         []SlotAssignment              // slot assignments, immutable for the session
+  Balance       uint64                        // remaining escrow
+  Phase         SessionPhase                  // Active | Finalizing | Settlement
+  FinalizeNonce uint64                        // nonce at which finalization started
+  Inferences    map[uint64]*InferenceRecord   // keyed by inference_id (= nonce of MsgStartInference)
+  HostStats     map[uint32]*HostStats         // keyed by slot_id
+  RevealedSeeds map[uint32]int64              // keyed by slot_id, from MsgRevealSeed
+  WarmKeys      map[uint32]string             // slot_id -> warm key address, lazily populated
+  LatestNonce   uint64
 }
 
 type SubnetTx struct {
@@ -241,27 +246,26 @@ type SubnetTx struct {
 }
 
 // Diff is the protocol primitive: what the user creates and signs.
-// UserSig covers hash(proto_serialize(Nonce, Txs)) -- nothing else.
+// UserSig covers hash(serialize(DiffContent{nonce, txs, escrow_id, post_state_root})).
 type Diff struct {
-  Nonce      uint64
-  Txs        []SubnetTx
-  UserSig    []byte
+  Nonce         uint64
+  Txs           []SubnetTx
+  UserSig       []byte
+  PostStateRoot []byte     // claimed state root after applying this diff's txs
 }
 
 // DiffRecord is the storage representation: Diff + computed metadata.
 type DiffRecord struct {
   Diff
-  StateHash  []byte               // state_root after applying this diff
-  Signatures map[uint32][]byte    // slot_id -> state signature (accumulated over time)
-  CreatedAt  int64
+  StateHash    []byte               // state_root after applying this diff
+  Signatures   map[uint32][]byte    // slot_id -> state signature (accumulated over time)
+  WarmKeyDelta map[uint32]string    // warm key bindings introduced at this nonce (nil if none)
+  CreatedAt    int64
 }
 
 type SlotAssignment struct {
   SlotID           uint32
   ValidatorAddress string   // cold key / validator identity, used for settlement
-  SigningAddress   string   // warm key address, pinned at session start, used for sig verification
-  PublicKey        []byte
-  Weight           uint64
 }
 ```
 
@@ -281,8 +285,13 @@ type StateMachine interface {
   // Returns the computed state root after application.
   ApplyDiff(diff Diff) (stateRoot []byte, err error)
 
-  // GetState returns the current escrow state.
-  GetState() EscrowState
+  // ApplyLocal replays a previously verified diff (skip user signature verification).
+  // Used during restart recovery. Warm keys must be injected before calling this.
+  ApplyLocal(nonce uint64, txs []*SubnetTx) (stateRoot []byte, err error)
+
+  // InjectWarmKeys writes warm key bindings into state without overwriting existing ones.
+  // Used during replay to restore bindings before ApplyLocal.
+  InjectWarmKeys(delta map[uint32]string)
 
   // ComputeStateRoot returns the current state root without modifying state.
   ComputeStateRoot() []byte
@@ -290,12 +299,13 @@ type StateMachine interface {
 ```
 
 Diff application:
-1. Verify user signature on the diff (`UserSig` over `hash(proto_serialize(Nonce, Txs))`)
+1. Verify user signature on the diff (`UserSig` over `hash(serialize(DiffContent{nonce, txs, escrow_id, post_state_root}))`)
 2. Validate nonce is sequential (latest_nonce + 1)
-3. Validate at most one MsgStartInference per diff. Reject MsgStartInference if state.Finalizing == true.
-4. For each tx: verify proposer_sig on host-proposed txs (MsgFinishInference, MsgValidation, MsgValidationVote, MsgRevealSeed), validate well-formed, check preconditions, apply to EscrowState
-5. Compute state_root (two-level Merkle)
-6. Return state_root
+3. Validate at most one MsgStartInference per diff. Reject MsgStartInference if `state.Phase != Active`.
+4. For each tx: verify proposer_sig on host-proposed txs (MsgFinishInference, MsgValidation, MsgValidationVote, MsgRevealSeed), validate well-formed, check preconditions, apply to EscrowState. Warm key bindings are lazily populated via `ResolveWarmKey` during proposer sig verification.
+5. Compute state_root: `sha256(host_stats_hash || rest_hash || phase_byte)`, where rest_hash includes `warm_keys_hash`
+6. Verify computed root == `diff.PostStateRoot`. Reject if mismatch.
+7. Return state_root
 
 Transitions follow [design.md Inference Lifecycle](./design.md#inference-lifecycle) and [State Machine](./design.md#state-machine). Phase 1 deviation: any non-executor slot can validate (ShouldValidate deferred to Phase 4).
 
@@ -326,11 +336,11 @@ Message formats: see [design.md What Gets Signed](./design.md#what-gets-signed).
 
 ### 1.7 Storage
 
-Storage interface: see [design.md Storage Interface](./design.md#storage-interface).
+Storage interface: see [storage.md](./storage.md#storage-interface) for the full interface and [design.md](./design.md#storage-interface) for a summary.
 
-All writes are persistent immediately. `GetState` returns persisted state, not an in-memory cache. On restart, the state machine replays from stored diffs if needed.
+No `GetState` on the storage interface. Live state only exists in the state machine's memory. `GetSessionMeta` returns immutable session metadata (creator address, config, group, initial balance). Any caller that needs live state must replay diffs.
 
-Phase 1 implementation: in-memory map protected by mutex (persistence semantics hold -- state is never stale within a process lifetime).
+Phase 1 implementation: in-memory map protected by mutex (persistence semantics hold -- state is never stale within a process lifetime). SQLite implementation is Phase 2 (see [storage.md](./storage.md)).
 
 ### 1.8 Test Plan
 
@@ -401,7 +411,7 @@ TestApplyDiff_MultipleMsgStartInference
   - Diff with 2 MsgStartInference, verify rejection
 
 TestApplyDiff_FinalizeRound
-  - MsgFinalizeRound sets state.Finalizing = true
+  - MsgFinalizeRound sets state.Phase = Finalizing, records FinalizeNonce
   - MsgStartInference after MsgFinalizeRound, verify rejection
   - Second MsgFinalizeRound, verify rejection (already finalizing)
   - Host-proposed txs (MsgFinishInference, MsgRevealSeed) still accepted after finalization
@@ -451,8 +461,8 @@ TestVerify_TamperedMessage
 **Storage tests** (`storage/memory_test.go`):
 
 ```
-TestCreateSession_GetState
-  - Create, retrieve, verify fields
+TestCreateSession_GetSessionMeta
+  - Create session, retrieve via GetSessionMeta, verify fields
 
 TestAppendDiff_GetDiffs
   - Append 5 diffs, retrieve range, verify order and content
@@ -483,7 +493,7 @@ Phase 1 INCLUDES:
 - executor_slot match verification (MsgFinishInference)
 - validator_slot != executor_slot check (MsgValidation)
 - At most one MsgStartInference per diff enforcement
-- MsgFinalizeRound: sets Finalizing flag, blocks further MsgStartInference
+- MsgFinalizeRound: sets Phase = Finalizing, records FinalizeNonce, blocks further MsgStartInference
 
 Phase 1 does NOT include:
 - Networking, HTTP handlers, gossip
@@ -609,79 +619,73 @@ Goal: support warm keys (operator keys authorized via authz grants) so hosts can
 
 On mainnet, hosts sign with warm keys -- operator keys authorized via on-chain authz grants. The dapi config separates `account_public_key` (cold/validator key) from `signer_key_name` (warm key loaded from keyring). The warm key address differs from the validator address.
 
-The subnet currently assumes a single key per slot. `SlotAssignment.PublicKey` and `SlotAssignment.ValidatorAddress` are used for both identity and signature verification. This breaks with warm keys because:
-- `verifyProposerSig()` recovers a signer address and compares it against ValidatorAddress
-- Host startup matches `signer.Address()` against ValidatorAddress to find its own slot
-- Seed reveal verification uses the same address check
-
-With warm keys, the signing address and the validator address are different. The validator address identifies the slot for settlement; the signing address proves the host controls an authorized key.
+The subnet needs to accept signatures from both cold keys (validator's own) and warm keys (authorized operator keys). The validator address identifies the slot for settlement; the signing address proves the host controls an authorized key.
 
 ### Design
 
-Add `SigningAddress` to `SlotAssignment`, pinned at session start. When building the group from escrow data, each slot gets both:
-- `ValidatorAddress` -- the validator/cold key identity, used for on-chain settlement
-- `SigningAddress` -- the warm key address that will sign all messages for this slot
+Warm key bindings are lazily discovered and permanently cached in `state.WarmKeys` (part of `EscrowState`). No eager pinning at session start -- `SlotAssignment` contains only `SlotID` and `ValidatorAddress`.
 
-SigningAddress is determined during session setup. The host's first interaction pins which key it uses. Once pinned, the host must use the same key for all signatures in that session.
+Binding rule: only diff-contained signatures (proposer_sig on host-proposed txs, executor_sig in MsgConfirmStart) can introduce a warm key binding into state. The first diff-contained signature from a slot binds that warm key permanently for the session. A different key from the same slot is rejected.
 
-Rule: if host X uses warm key A in any message during a session, it must use A for all subsequent messages. A different key from the same host is rejected.
+When `verifyProposerSig` or `applyConfirmStart` processes a signature, `ResolveWarmKey` is called. On first encounter it queries the bridge to verify the authz grant, then caches the binding in `state.WarmKeys`. Subsequent calls hit the cache. All participants process the same diffs in the same order, so the same bindings appear at the same nonces across all nodes.
 
-SigningAddress is trusted because it was verified at session setup. Before populating SigningAddress, the session initiator calls VerifyWarmKey on the MainnetBridge to confirm the warm key has a valid authz grant from the validator. Once verified, the grant is cached for the session lifetime -- no re-verification during the session. If the grant is revoked mid-session, the session continues (grant revocation takes effect on next session). Phase 6 tests skip this verification (SigningAddress set directly in test group). Real verification is Phase 7.
+`state.WarmKeys` is part of the state root via `computeWarmKeysHash`. See [storage.md Warm Keys](./storage.md#warm-keys) for the full binding rule, storage format, and replay implications.
+
+State signatures, gossip messages, and discovery endpoints verify the warm key against an existing binding (or use `CheckWarmKey`, non-mutating) but never create new bindings.
 
 ### State Machine Changes
 
-Signature verification switches from ValidatorAddress to SigningAddress:
-- `verifyProposerSig()` recovers address, compares against `group[slot].SigningAddress`
-- Host slot lookup on startup: match `signer.Address()` against SigningAddress
-- Seed reveal: verify signature against SigningAddress
-- Settlement: use ValidatorAddress to identify the recipient on chain
+Signature verification accepts either the validator's cold key or an authorized warm key:
+- `verifyProposerSig()` recovers address, checks against `ValidatorAddress` or `WarmKeys[slot]`
+- Seed reveal: verify signature against `WarmKeys[slot]` (or cold key if no warm key was ever used)
+- Settlement: use `ValidatorAddress` to identify the recipient on chain
 
-No change to state hashing -- SigningAddress is session metadata, not part of EscrowState. Host stats and settlement data reference slots, which map to ValidatorAddress for on-chain distribution.
+`WarmKeys` is part of the state root. The state hash formula includes `warm_keys_hash`.
 
-### Host Changes
+### Storage Changes
 
-Host startup uses SigningAddress instead of ValidatorAddress to find its slot:
-```go
-for i, slot := range group {
-    if slot.SigningAddress == signer.Address() {
-        mySlot = i
-    }
-}
-```
+Warm key deltas are persisted per diff in `DiffRecord.WarmKeyDelta`. During replay, deltas are injected via `InjectWarmKeys` before `ApplyLocal` so warm keys are cached without bridge calls. See [storage.md Replay](./storage.md#replay).
 
 ### Test Plan
 
 ```
-TestWarmKey_AcceptValidSigningAddress
-  - Group with SigningAddress != ValidatorAddress
-  - Host signs with warm key matching SigningAddress
-  - Verify signature accepted
+TestWarmKey_LazyBinding
+  - Host signs first tx with warm key
+  - Verify WarmKeys[slot] is populated after ApplyDiff
+  - Verify state root includes the binding
 
-TestWarmKey_RejectWrongSigningKey
-  - Host signs with key matching neither SigningAddress nor ValidatorAddress
-  - Verify rejection
+TestWarmKey_RejectConflictingKey
+  - Host signs first tx with warm key A, then a later tx with warm key B
+  - Verify second signature is rejected
 
-TestWarmKey_HostFindsSlotBySigningAddress
-  - Host signer address matches SigningAddress but not ValidatorAddress
-  - Verify host correctly identifies its slot
+TestWarmKey_ColdKeyAccepted
+  - Host signs with cold key (ValidatorAddress)
+  - Verify signature accepted, no warm key binding created
 
-TestWarmKey_SettlementUsesValidatorAddress
-  - Session with warm keys settles
-  - Settlement payload maps costs to ValidatorAddress, not SigningAddress
+TestWarmKey_ReplayWithDeltas
+  - Apply several diffs with warm key bindings
+  - Record WarmKeyDeltas
+  - Replay via InjectWarmKeys + ApplyLocal
+  - Verify state roots match at every nonce
 
 TestWarmKey_SeedRevealWithWarmKey
   - Host reveals seed signed with warm key
   - Verify seed derivation and ShouldValidate use the warm key signature
+  - Verify MsgRevealSeed is checked against the bound warm key
+
+TestWarmKey_SettlementUsesValidatorAddress
+  - Session with warm keys settles
+  - Settlement payload maps costs to ValidatorAddress, not the warm key
 ```
 
 ### Scope Boundary
 
 Phase 6 does NOT include:
-- Mid-session key rotation (warm key is pinned for the entire session)
-- VerifyWarmKey bridge call during session (authz grant verification happens at session setup, not on every signature)
+- Mid-session key rotation (warm key is permanently bound for the session)
 - Discovery of warm key addresses (that is Phase 7 via /v1/identity)
+- State signature or gossip-based warm key binding (these are out-of-state events)
 
-Warm key authorization (verifying authz grants on chain) belongs to Phase 7 (MainnetBridge). Phase 6 only adds the SigningAddress field and updates signature verification to use it. In Phase 6 tests, SigningAddress is set directly in the test group.
+Bridge-based warm key verification (`VerifyWarmKey`) is called lazily on first diff-contained signature from each slot. Subsequent signatures use the cached binding.
 
 
 ## Phase 7: Chain Adapter (MainnetBridge) [PARTIAL]
@@ -697,11 +701,10 @@ Implemented:
 
 Deferred:
 - /v1/identity endpoint and DelegateTAs discovery (needs dapi endpoint extension)
-- SigningAddress population from warm key discovery (depends on Phase 6)
+- Warm key verification on first contact (VerifyWarmKey bridge call, depends on Phase 6)
 - Event subscription for escrow creation/settlement (OnEscrowCreated, OnSettlementProposed, OnSettlementFinalized)
 - SubmitDisputeState (needs tx submission)
 - GetSlotsFromSorted port (unnecessary -- chain stores pre-computed slots in SubnetEscrow)
-- Warm key cache (session-scoped, deferred until SigningAddress is wired)
 - Slot assignment derivation from (app_hash, escrow_id, validator_weights) -- chain does this at escrow creation
 
 ### Scope Boundary
