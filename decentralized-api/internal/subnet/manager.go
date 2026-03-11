@@ -1,6 +1,7 @@
 package subnet
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 
 	"decentralized-api/cosmosclient"
 	"decentralized-api/internal/validation"
+	"decentralized-api/logging"
 	"decentralized-api/payloadstorage"
 	"decentralized-api/utils"
 
@@ -71,6 +73,11 @@ func NewHostManager(
 		payloadStore: payloadStore,
 		recorder:     recorder,
 	}
+}
+
+// Close releases the underlying storage resources.
+func (m *HostManager) Close() error {
+	return m.store.Close()
 }
 
 func (m *HostManager) getOrCreate(escrowID string) (*sessionEntry, error) {
@@ -155,56 +162,65 @@ func (m *HostManager) RecoverSessions() error {
 	defer m.mu.Unlock()
 
 	for _, escrowID := range escrowIDs {
-		meta, err := m.store.GetSessionMeta(escrowID)
-		if err != nil {
-			return fmt.Errorf("get session meta %s: %w", escrowID, err)
+		if err := m.recoverSession(escrowID); err != nil {
+			logging.Error("skipping corrupt session", inferenceTypes.System,
+				"escrow_id", escrowID, "error", err)
 		}
-		if meta.LatestNonce == 0 {
-			continue // no diffs to replay
-		}
-
-		records, err := m.store.GetDiffs(escrowID, 1, meta.LatestNonce)
-		if err != nil {
-			return fmt.Errorf("get diffs %s: %w", escrowID, err)
-		}
-
-		sm := state.NewStateMachine(
-			escrowID, meta.Config, meta.Group, meta.InitialBalance,
-			meta.CreatorAddr, m.verifier,
-			state.WithWarmKeyResolver(m.bridge.VerifyWarmKey),
-		)
-
-		for _, rec := range records {
-			sm.InjectWarmKeys(rec.WarmKeyDelta)
-			root, applyErr := sm.ApplyLocal(rec.Nonce, rec.Txs)
-			if applyErr != nil {
-				return fmt.Errorf("replay diff %s nonce %d: %w", escrowID, rec.Nonce, applyErr)
-			}
-			if len(rec.StateHash) > 0 && len(root) > 0 {
-				if string(root) != string(rec.StateHash) {
-					return fmt.Errorf("state root mismatch %s nonce %d", escrowID, rec.Nonce)
-				}
-			}
-		}
-
-		h, err := host.NewHost(sm, m.signer, m.engine, escrowID, meta.Group, nil,
-			host.WithValidator(m.validator),
-			host.WithStorage(m.store),
-		)
-		if err != nil {
-			return fmt.Errorf("recover host %s: %w", escrowID, err)
-		}
-
-		srv, err := transport.NewServer(h, m.store, escrowID, m.verifier, meta.Group, meta.CreatorAddr,
-			transport.WithBridge(m.bridge),
-		)
-		if err != nil {
-			return fmt.Errorf("recover server %s: %w", escrowID, err)
-		}
-
-		m.sessions[escrowID] = &sessionEntry{server: srv, host: h}
 	}
 
+	return nil
+}
+
+// recoverSession replays a single session from storage. Caller must hold m.mu.
+func (m *HostManager) recoverSession(escrowID string) error {
+	meta, err := m.store.GetSessionMeta(escrowID)
+	if err != nil {
+		return fmt.Errorf("get session meta: %w", err)
+	}
+	if meta.LatestNonce == 0 {
+		return nil // no diffs to replay
+	}
+
+	records, err := m.store.GetDiffs(escrowID, 1, meta.LatestNonce)
+	if err != nil {
+		return fmt.Errorf("get diffs: %w", err)
+	}
+
+	sm := state.NewStateMachine(
+		escrowID, meta.Config, meta.Group, meta.InitialBalance,
+		meta.CreatorAddr, m.verifier,
+		state.WithWarmKeyResolver(m.bridge.VerifyWarmKey),
+	)
+
+	for _, rec := range records {
+		sm.InjectWarmKeys(rec.WarmKeyDelta)
+		root, applyErr := sm.ApplyLocal(rec.Nonce, rec.Txs)
+		if applyErr != nil {
+			return fmt.Errorf("replay nonce %d: %w", rec.Nonce, applyErr)
+		}
+		if len(rec.StateHash) > 0 && len(root) > 0 {
+			if !bytes.Equal(root, rec.StateHash) {
+				return fmt.Errorf("state root mismatch at nonce %d", rec.Nonce)
+			}
+		}
+	}
+
+	h, err := host.NewHost(sm, m.signer, m.engine, escrowID, meta.Group, nil,
+		host.WithValidator(m.validator),
+		host.WithStorage(m.store),
+	)
+	if err != nil {
+		return fmt.Errorf("create host: %w", err)
+	}
+
+	srv, err := transport.NewServer(h, m.store, escrowID, m.verifier, meta.Group, meta.CreatorAddr,
+		transport.WithBridge(m.bridge),
+	)
+	if err != nil {
+		return fmt.Errorf("create server: %w", err)
+	}
+
+	m.sessions[escrowID] = &sessionEntry{server: srv, host: h}
 	return nil
 }
 

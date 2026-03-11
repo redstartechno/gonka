@@ -10,8 +10,10 @@ import (
 
 	"subnet"
 	"subnet/host"
+	"subnet/logging"
 	"subnet/signing"
 	"subnet/state"
+	"subnet/storage"
 	"subnet/types"
 )
 
@@ -62,6 +64,16 @@ type Session struct {
 	pendingTxs    []*types.SubnetTx            // from host mempools, for next diff
 	pendingTxKeys map[string]struct{}           // dedup set keyed by tx_type:id
 	signatures    map[uint64]map[uint32][]byte // nonce -> slotID -> sig
+	store         storage.Storage              // optional persistent storage
+}
+
+// SessionOption configures optional Session behavior.
+type SessionOption func(*Session)
+
+// WithStorage sets a persistent storage backend for the session.
+// When set, diffs and signatures are persisted on each state transition.
+func WithStorage(s storage.Storage) SessionOption {
+	return func(sess *Session) { sess.store = s }
 }
 
 // NewSession creates a user session. clients must match group length.
@@ -72,6 +84,7 @@ func NewSession(
 	group []types.SlotAssignment,
 	clients []HostClient,
 	verifier signing.Verifier,
+	opts ...SessionOption,
 ) (*Session, error) {
 	if err := types.ValidateGroup(group); err != nil {
 		return nil, err
@@ -84,7 +97,7 @@ func NewSession(
 	for _, s := range group {
 		addrToSlots[s.ValidatorAddress] = append(addrToSlots[s.ValidatorAddress], s.SlotID)
 	}
-	return &Session{
+	sess := &Session{
 		sm:            sm,
 		signer:        signer,
 		verifier:      verifier,
@@ -95,7 +108,11 @@ func NewSession(
 		hostSyncNonce: make(map[int]uint64),
 		pendingTxKeys: make(map[string]struct{}),
 		signatures:    make(map[uint64]map[uint32][]byte),
-	}, nil
+	}
+	for _, opt := range opts {
+		opt(sess)
+	}
+	return sess, nil
 }
 
 // composeDiffTxs builds the txs for the next diff (no side effects).
@@ -185,6 +202,12 @@ func (s *Session) processResponse(hostIdx int, resp *host.HostResponse) error {
 		}
 		for _, slot := range s.addrToSlots[expectedAddr] {
 			s.signatures[resp.Nonce][slot] = resp.StateSig
+			if s.store != nil {
+				if sigErr := s.store.AddSignature(s.escrowID, resp.Nonce, slot, resp.StateSig); sigErr != nil {
+					logging.Warn("failed to persist signature",
+						"escrow_id", s.escrowID, "nonce", resp.Nonce, "slot", slot, "error", sigErr)
+				}
+			}
 		}
 	}
 
@@ -265,6 +288,15 @@ func (s *Session) PrepareInference(params InferenceParams) (*preparedInference, 
 	s.diffs = append(s.diffs, diff)
 	s.nonce = diff.Nonce
 	s.clearPendingTxs()
+
+	if s.store != nil {
+		if err := s.store.AppendDiff(s.escrowID, types.DiffRecord{
+			Diff:      diff,
+			StateHash: postStateRoot,
+		}); err != nil {
+			return nil, fmt.Errorf("persist diff: %w", err)
+		}
+	}
 
 	catchUp := s.diffsForHost(hostIdx)
 
@@ -574,6 +606,14 @@ func (s *Session) PendingTxs() []*types.SubnetTx {
 }
 
 func (s *Session) StateMachine() *state.StateMachine { return s.sm }
+
+// Close releases the underlying storage, if any. Safe to call multiple times.
+func (s *Session) Close() error {
+	if s.store != nil {
+		return s.store.Close()
+	}
+	return nil
+}
 
 // TimeoutVerifier contacts a host for timeout verification votes.
 type TimeoutVerifier interface {

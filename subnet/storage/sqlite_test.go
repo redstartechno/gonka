@@ -397,3 +397,80 @@ func TestSQLite_ReadsDuringWrite(t *testing.T) {
 
 	require.Equal(t, int64(0), readErrors.Load(), "readers should not get errors during write tx")
 }
+
+func TestSQLite_StressMultiSessionRecovery(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping stress test in short mode")
+	}
+
+	const numSessions = 50
+	const diffsPerSession = 200
+
+	dbPath := filepath.Join(t.TempDir(), "stress.db")
+
+	// Phase 1: populate.
+	db1, err := NewSQLite(dbPath)
+	require.NoError(t, err)
+
+	for s := 0; s < numSessions; s++ {
+		escrowID := fmt.Sprintf("escrow-%d", s)
+		params := CreateSessionParams{
+			EscrowID:       escrowID,
+			CreatorAddr:    fmt.Sprintf("creator-%d", s),
+			Config:         types.SessionConfig{TokenPrice: 1},
+			Group:          defaultGroup(),
+			InitialBalance: 1000,
+		}
+		require.NoError(t, db1.CreateSession(params))
+
+		for i := uint64(1); i <= diffsPerSession; i++ {
+			warmDelta := map[uint32]string{uint32(i % 5): fmt.Sprintf("warm-%d-%d", s, i)}
+			rec := types.DiffRecord{
+				Diff: types.Diff{
+					Nonce:   i,
+					UserSig: []byte(fmt.Sprintf("sig-%d-%d", s, i)),
+				},
+				StateHash:    []byte{byte(i % 256)},
+				Signatures:   map[uint32][]byte{0: {byte(i % 256)}, 1: {byte((i + 1) % 256)}},
+				WarmKeyDelta: warmDelta,
+				CreatedAt:    int64(i),
+			}
+			require.NoError(t, db1.AppendDiff(escrowID, rec))
+		}
+
+		require.NoError(t, db1.MarkFinalized(escrowID, diffsPerSession/2))
+	}
+
+	require.NoError(t, db1.Close())
+
+	// Phase 2: reopen and verify all data.
+	db2, err := NewSQLite(dbPath)
+	require.NoError(t, err)
+	defer db2.Close()
+
+	active, err := db2.ListActiveSessions()
+	require.NoError(t, err)
+	require.Len(t, active, numSessions)
+
+	for s := 0; s < numSessions; s++ {
+		escrowID := fmt.Sprintf("escrow-%d", s)
+
+		meta, err := db2.GetSessionMeta(escrowID)
+		require.NoError(t, err)
+		require.Equal(t, uint64(diffsPerSession), meta.LatestNonce, "session %s", escrowID)
+		require.Equal(t, uint64(diffsPerSession/2), meta.LastFinalized, "session %s", escrowID)
+		require.Equal(t, "active", meta.Status)
+
+		diffs, err := db2.GetDiffs(escrowID, 1, diffsPerSession)
+		require.NoError(t, err)
+		require.Len(t, diffs, diffsPerSession, "session %s", escrowID)
+
+		for i, d := range diffs {
+			nonce := uint64(i + 1)
+			require.Equal(t, nonce, d.Nonce)
+			require.Equal(t, []byte{byte(nonce % 256)}, d.StateHash)
+			require.Len(t, d.Signatures, 2, "session %s nonce %d", escrowID, nonce)
+			require.NotNil(t, d.WarmKeyDelta)
+		}
+	}
+}

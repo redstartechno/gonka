@@ -6,6 +6,7 @@ import (
 	"subnet/bridge"
 	"subnet/signing"
 	"subnet/state"
+	"subnet/storage"
 	"subnet/transport"
 	"subnet/types"
 )
@@ -15,6 +16,7 @@ type HTTPSessionConfig struct {
 	PrivateKeyHex string
 	EscrowID      string
 	Bridge        bridge.MainnetBridge
+	StoragePath   string // optional: path to SQLite DB for session persistence
 }
 
 // NewHTTPSession creates a user Session wired with HTTP clients to real dapi hosts.
@@ -59,7 +61,39 @@ func NewHTTPSession(cfg HTTPSessionConfig) (*Session, *state.StateMachine, error
 		clients[i] = c
 	}
 
-	session, err := NewSession(sm, signer, cfg.EscrowID, group, clients, verifier)
+	var opts []SessionOption
+	if cfg.StoragePath != "" {
+		sqlStore, storeErr := storage.NewSQLite(cfg.StoragePath)
+		if storeErr != nil {
+			return nil, nil, fmt.Errorf("open storage: %w", storeErr)
+		}
+		opts = append(opts, WithStorage(sqlStore))
+
+		// Check if there are existing diffs to recover from.
+		meta, metaErr := sqlStore.GetSessionMeta(cfg.EscrowID)
+		if metaErr == nil && meta.LatestNonce > 0 {
+			session, recSM, recErr := RecoverSession(sqlStore, signer, verifier, cfg.EscrowID, group, clients)
+			if recErr != nil {
+				sqlStore.Close()
+				return nil, nil, fmt.Errorf("recover session: %w", recErr)
+			}
+			return session, recSM, nil
+		}
+
+		// First run: create the session row so AppendDiff works later.
+		if createErr := sqlStore.CreateSession(storage.CreateSessionParams{
+			EscrowID:       cfg.EscrowID,
+			CreatorAddr:    escrow.CreatorAddress,
+			Config:         config,
+			Group:          group,
+			InitialBalance: escrow.Amount,
+		}); createErr != nil {
+			sqlStore.Close()
+			return nil, nil, fmt.Errorf("create storage session: %w", createErr)
+		}
+	}
+
+	session, err := NewSession(sm, signer, cfg.EscrowID, group, clients, verifier, opts...)
 	if err != nil {
 		return nil, nil, fmt.Errorf("create session: %w", err)
 	}

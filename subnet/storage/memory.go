@@ -217,6 +217,8 @@ func (m *Memory) LastFinalized(escrowID string) (uint64, error) {
 	return s.lastFinalized, nil
 }
 
+func (m *Memory) Close() error { return nil }
+
 func (m *Memory) GetDiffs(escrowID string, fromNonce, toNonce uint64) ([]types.DiffRecord, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

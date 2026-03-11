@@ -14,6 +14,7 @@ type Storage interface {
 	GetSessionMeta(escrowID string) (*SessionMeta, error)
 	MarkFinalized(escrowID string, nonce uint64) error
 	LastFinalized(escrowID string) (uint64, error)
+	Close() error
 }
 
 // CreateSessionParams holds all parameters for creating a new session.

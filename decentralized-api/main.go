@@ -207,12 +207,18 @@ func main() {
 		httpClient := pserver.NewNoRedirectClient(5 * time.Minute)
 		subnetEngine := internalsubnet.NewEngineAdapter(nodeBroker, config.GetCurrentNodeVersion(), payloadStore, chainPhaseTracker, httpClient)
 		subnetValidator := internalsubnet.NewValidationAdapter(nodeBroker, config.GetCurrentNodeVersion(), chainPhaseTracker, httpClient, subnetBridge, recorder)
-		subnetStore := subnetstorage.NewMemory()
-		hostManager := internalsubnet.NewHostManager(subnetStore, subnetSigner, subnetEngine, subnetValidator, subnetBridge, payloadStore, recorder)
-		if err := hostManager.RecoverSessions(); err != nil {
-			logging.Error("subnet recovery failed", types.System, "error", err)
+		// TODO: move to SubnetConfig when config consolidation happens.
+		subnetStore, storeErr := subnetstorage.NewSQLite("/root/.dapi/data/subnet.db")
+		if storeErr != nil {
+			logging.Error("subnet storage init failed", types.System, "error", storeErr)
+		} else {
+			defer subnetStore.Close()
+			hostManager := internalsubnet.NewHostManager(subnetStore, subnetSigner, subnetEngine, subnetValidator, subnetBridge, payloadStore, recorder)
+			if err := hostManager.RecoverSessions(); err != nil {
+				logging.Error("subnet recovery failed", types.System, "error", err)
+			}
+			hostManager.Register(publicServer.SubnetGroup())
 		}
-		hostManager.Register(publicServer.SubnetGroup())
 	}
 
 	publicServer.Start(addr)

@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"google.golang.org/protobuf/proto"
 
@@ -132,7 +133,8 @@ func (s *SQLite) CreateSession(params CreateSessionParams) error {
 
 func (s *SQLite) MarkSettled(escrowID string) error {
 	res, err := s.writeDB.Exec(
-		`UPDATE sessions SET status = 'settled' WHERE escrow_id = ?`, escrowID,
+		`UPDATE sessions SET status = 'settled', settled_at = ? WHERE escrow_id = ?`,
+		time.Now().Unix(), escrowID,
 	)
 	if err != nil {
 		return err
