@@ -173,20 +173,25 @@ func (b *RESTBridge) VerifyWarmKey(warmAddress, validatorAddress string) (bool, 
 	return found, nil
 }
 
-type inferenceParticipantResponse struct {
-	Pubkey string `json:"pubkey"` // base64-encoded secp256k1 pubkey
+// accountResponse matches the Cosmos auth /accounts/{address} REST response.
+type accountResponse struct {
+	Account struct {
+		PubKey *struct {
+			Key string `json:"key"` // base64-encoded compressed secp256k1 pubkey
+		} `json:"pub_key"`
+	} `json:"account"`
 }
 
 func (b *RESTBridge) GetAccountPubKey(address string) ([]byte, error) {
-	u := fmt.Sprintf("%s/productscience/inference/inference_participant/%s", b.baseURL, address)
-	resp, err := doGet[inferenceParticipantResponse](b.client, u)
+	u := fmt.Sprintf("%s/cosmos/auth/v1beta1/accounts/%s", b.baseURL, address)
+	resp, err := doGet[accountResponse](b.client, u)
 	if err != nil {
 		return nil, err
 	}
-	if resp == nil || resp.Pubkey == "" {
+	if resp == nil || resp.Account.PubKey == nil || resp.Account.PubKey.Key == "" {
 		return nil, fmt.Errorf("no public key for %s", address)
 	}
-	pubKey, err := base64.StdEncoding.DecodeString(resp.Pubkey)
+	pubKey, err := base64.StdEncoding.DecodeString(resp.Account.PubKey.Key)
 	if err != nil {
 		return nil, fmt.Errorf("decode account pubkey: %w", err)
 	}
