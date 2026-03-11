@@ -144,7 +144,7 @@ func (v *ValidationAdapter) Validate(ctx context.Context, req subnet.ValidateReq
 // fetchPayloadsFromExecutor retrieves payloads from the executor host using subnet session endpoint.
 func (v *ValidationAdapter) fetchPayloadsFromExecutor(ctx context.Context, req subnet.ValidateRequest, inferenceID string, epochID uint64) ([]byte, []byte, error) {
 	// Resolve executor URL from bridge
-	executorInfo, err := v.bridge.GetValidatorInfo(req.ExecutorAddress)
+	executorInfo, err := v.bridge.GetHostInfo(req.ExecutorAddress)
 	if err != nil {
 		return nil, nil, fmt.Errorf("get executor info: %w", err)
 	}

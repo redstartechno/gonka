@@ -14,8 +14,8 @@ import (
 
 // warmCacheKey is the key for the warm key verification cache.
 type warmCacheKey struct {
-	validator string
-	warm      string
+	host string
+	warm string
 }
 
 // RESTBridge implements MainnetBridge query methods via the chain's grpc-gateway REST API.
@@ -125,8 +125,8 @@ func (b *RESTBridge) GetEscrow(escrowID string) (*EscrowInfo, error) {
 	}, nil
 }
 
-func (b *RESTBridge) GetValidatorInfo(validatorAddress string) (*ValidatorInfo, error) {
-	u := fmt.Sprintf("%s/productscience/inference/inference/participant/%s", b.baseURL, validatorAddress)
+func (b *RESTBridge) GetHostInfo(address string) (*HostInfo, error) {
+	u := fmt.Sprintf("%s/productscience/inference/inference/participant/%s", b.baseURL, address)
 
 	resp, err := doGet[participantResponse](b.client, u)
 	if err != nil {
@@ -136,25 +136,16 @@ func (b *RESTBridge) GetValidatorInfo(validatorAddress string) (*ValidatorInfo, 
 		return nil, ErrParticipantNotFound
 	}
 
-	var pubKey []byte
-	if resp.Participant.ValidatorKey != "" {
-		pubKey, err = base64.StdEncoding.DecodeString(resp.Participant.ValidatorKey)
-		if err != nil {
-			return nil, fmt.Errorf("decode validator_key: %w", err)
-		}
-	}
-
-	return &ValidatorInfo{
-		Address:   resp.Participant.Address,
-		PublicKey: pubKey,
-		URL:       resp.Participant.InferenceURL,
+	return &HostInfo{
+		Address: resp.Participant.Address,
+		URL:     resp.Participant.InferenceURL,
 	}, nil
 }
 
 const warmKeyMsgType = "/inference.inference.MsgStartInference"
 
 func (b *RESTBridge) VerifyWarmKey(warmAddress, validatorAddress string) (bool, error) {
-	key := warmCacheKey{validator: validatorAddress, warm: warmAddress}
+	key := warmCacheKey{host: validatorAddress, warm: warmAddress}
 	if cached, ok := b.warmCache.Load(key); ok {
 		return cached.(bool), nil
 	}
@@ -182,15 +173,24 @@ func (b *RESTBridge) VerifyWarmKey(warmAddress, validatorAddress string) (bool, 
 	return found, nil
 }
 
+type inferenceParticipantResponse struct {
+	Pubkey string `json:"pubkey"` // base64-encoded secp256k1 pubkey
+}
+
 func (b *RESTBridge) GetAccountPubKey(address string) ([]byte, error) {
-	info, err := b.GetValidatorInfo(address)
+	u := fmt.Sprintf("%s/productscience/inference/inference_participant/%s", b.baseURL, address)
+	resp, err := doGet[inferenceParticipantResponse](b.client, u)
 	if err != nil {
 		return nil, err
 	}
-	if len(info.PublicKey) == 0 {
+	if resp == nil || resp.Pubkey == "" {
 		return nil, fmt.Errorf("no public key for %s", address)
 	}
-	return info.PublicKey, nil
+	pubKey, err := base64.StdEncoding.DecodeString(resp.Pubkey)
+	if err != nil {
+		return nil, fmt.Errorf("decode account pubkey: %w", err)
+	}
+	return pubKey, nil
 }
 
 // -- stubs --

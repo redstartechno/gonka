@@ -10,31 +10,32 @@ import (
 
 // mockBridge implements MainnetBridge for testing BuildGroup.
 type mockBridge struct {
-	escrow     *EscrowInfo
-	escrowErr  error
-	validators map[string]*ValidatorInfo
-	validErr   error
+	escrow    *EscrowInfo
+	escrowErr error
+	hosts     map[string]*HostInfo
+	hostErr   error
+	pubkeys   map[string][]byte
 }
 
 func (m *mockBridge) GetEscrow(_ string) (*EscrowInfo, error) {
 	return m.escrow, m.escrowErr
 }
-func (m *mockBridge) GetValidatorInfo(addr string) (*ValidatorInfo, error) {
-	if m.validErr != nil {
-		return nil, m.validErr
+func (m *mockBridge) GetHostInfo(addr string) (*HostInfo, error) {
+	if m.hostErr != nil {
+		return nil, m.hostErr
 	}
-	info, ok := m.validators[addr]
+	info, ok := m.hosts[addr]
 	if !ok {
 		return nil, ErrParticipantNotFound
 	}
 	return info, nil
 }
 func (m *mockBridge) GetAccountPubKey(addr string) ([]byte, error) {
-	info, ok := m.validators[addr]
+	pk, ok := m.pubkeys[addr]
 	if !ok {
 		return nil, ErrParticipantNotFound
 	}
-	return info.PublicKey, nil
+	return pk, nil
 }
 func (m *mockBridge) VerifyWarmKey(_, _ string) (bool, error) {
 	return false, ErrNotImplemented
@@ -52,10 +53,10 @@ func TestBuildGroup_HappyPath(t *testing.T) {
 			EscrowID: "1",
 			Slots:    []string{"valA", "valB", "valC"},
 		},
-		validators: map[string]*ValidatorInfo{
-			"valA": {Address: "valA", PublicKey: []byte{1}},
-			"valB": {Address: "valB", PublicKey: []byte{2}},
-			"valC": {Address: "valC", PublicKey: []byte{3}},
+		pubkeys: map[string][]byte{
+			"valA": {1},
+			"valB": {2},
+			"valC": {3},
 		},
 	}
 
@@ -80,9 +81,9 @@ func TestBuildGroup_Deduplication(t *testing.T) {
 			// valA appears in slots 0, 1, and 3
 			Slots: []string{"valA", "valA", "valB", "valA"},
 		},
-		validators: map[string]*ValidatorInfo{
-			"valA": {Address: "valA", PublicKey: []byte{1}},
-			"valB": {Address: "valB", PublicKey: []byte{2}},
+		pubkeys: map[string][]byte{
+			"valA": {1},
+			"valB": {2},
 		},
 	}
 
@@ -114,21 +115,21 @@ func TestBuildGroup_EscrowError(t *testing.T) {
 	assert.ErrorIs(t, err, ErrEscrowNotFound)
 }
 
-func TestBuildGroup_ValidatorError(t *testing.T) {
+func TestBuildGroup_PubKeyError(t *testing.T) {
 	b := &mockBridge{
 		escrow: &EscrowInfo{
 			EscrowID: "1",
 			Slots:    []string{"valA", "missing"},
 		},
-		validators: map[string]*ValidatorInfo{
-			"valA": {Address: "valA", PublicKey: []byte{1}},
+		pubkeys: map[string][]byte{
+			"valA": {1},
 		},
 	}
 	_, err := BuildGroup("1", b)
 	assert.ErrorIs(t, err, ErrParticipantNotFound)
 }
 
-// queryCountBridge wraps a MainnetBridge to count GetValidatorInfo calls.
+// queryCountBridge wraps a MainnetBridge to count GetAccountPubKey calls.
 type queryCountBridge struct {
 	inner  MainnetBridge
 	counts map[string]int
@@ -137,11 +138,11 @@ type queryCountBridge struct {
 func (q *queryCountBridge) GetEscrow(id string) (*EscrowInfo, error) {
 	return q.inner.GetEscrow(id)
 }
-func (q *queryCountBridge) GetValidatorInfo(addr string) (*ValidatorInfo, error) {
-	q.counts[addr]++
-	return q.inner.GetValidatorInfo(addr)
+func (q *queryCountBridge) GetHostInfo(addr string) (*HostInfo, error) {
+	return q.inner.GetHostInfo(addr)
 }
 func (q *queryCountBridge) GetAccountPubKey(addr string) ([]byte, error) {
+	q.counts[addr]++
 	return q.inner.GetAccountPubKey(addr)
 }
 func (q *queryCountBridge) VerifyWarmKey(w, v string) (bool, error) {
@@ -164,8 +165,8 @@ func TestBuildGroup_ValidateGroupPasses(t *testing.T) {
 			EscrowID: "1",
 			Slots:    []string{"valA"},
 		},
-		validators: map[string]*ValidatorInfo{
-			"valA": {Address: "valA", PublicKey: []byte{1}},
+		pubkeys: map[string][]byte{
+			"valA": {1},
 		},
 	}
 

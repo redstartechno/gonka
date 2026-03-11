@@ -5,7 +5,7 @@ import (
 	"subnet/types"
 )
 
-// BuildGroup fetches escrow data and validator info to construct a session group.
+// BuildGroup fetches escrow data and host info to construct a session group.
 // Slots come from the chain (stored in SubnetEscrow), no re-derivation needed.
 func BuildGroup(escrowID string, b MainnetBridge) ([]types.SlotAssignment, error) {
 	escrow, err := b.GetEscrow(escrowID)
@@ -14,25 +14,24 @@ func BuildGroup(escrowID string, b MainnetBridge) ([]types.SlotAssignment, error
 	}
 
 	// Deduplicate addresses to avoid redundant queries.
-	infoCache := make(map[string]*ValidatorInfo)
+	pubKeyCache := make(map[string][]byte)
 	for _, addr := range escrow.Slots {
-		if _, ok := infoCache[addr]; ok {
+		if _, ok := pubKeyCache[addr]; ok {
 			continue
 		}
-		info, err := b.GetValidatorInfo(addr)
+		pk, err := b.GetAccountPubKey(addr)
 		if err != nil {
-			return nil, fmt.Errorf("get validator info for %s: %w", addr, err)
+			return nil, fmt.Errorf("get account pubkey for %s: %w", addr, err)
 		}
-		infoCache[addr] = info
+		pubKeyCache[addr] = pk
 	}
 
 	group := make([]types.SlotAssignment, len(escrow.Slots))
 	for i, addr := range escrow.Slots {
-		info := infoCache[addr]
 		group[i] = types.SlotAssignment{
 			SlotID:           uint32(i),
 			ValidatorAddress: addr,
-			PublicKey:        info.PublicKey,
+			PublicKey:        pubKeyCache[addr],
 		}
 	}
 

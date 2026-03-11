@@ -33,15 +33,15 @@ func TestIntegration_GetEscrow(t *testing.T) {
 	assert.NotEmpty(t, info.Slots)
 }
 
-func TestIntegration_GetValidatorInfo(t *testing.T) {
+func TestIntegration_GetHostInfo(t *testing.T) {
 	b := NewRESTBridge(chainURL(t))
 
-	// First get an escrow to find a real validator address
+	// First get an escrow to find a real host address
 	escrow, err := b.GetEscrow("1")
 	require.NoError(t, err)
 	require.NotEmpty(t, escrow.Slots)
 
-	info, err := b.GetValidatorInfo(escrow.Slots[0])
+	info, err := b.GetHostInfo(escrow.Slots[0])
 	require.NoError(t, err)
 
 	assert.NotEmpty(t, info.Address)

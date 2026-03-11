@@ -279,7 +279,7 @@ func (h *Host) HandleRequest(ctx context.Context, req HostRequest) (*HostRespons
 
 	// (g) Validate other hosts' inferences outside mutex.
 	for _, vj := range validationJobs {
-		go h.validateAsync(ctx, vj)
+		go h.validateAsync(context.Background(), vj)
 	}
 
 	return &HostResponse{

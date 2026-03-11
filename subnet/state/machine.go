@@ -78,7 +78,6 @@ type StateMachine struct {
 
 	// Lookup maps derived from group at construction time.
 	slotToAddress      map[uint32]string
-	slotToPubKey       map[uint32][]byte
 	addressInGroup     map[string]bool
 	addressToSlotCount map[string]uint32
 	addressToSlots     map[string][]uint32 // address -> sorted slot IDs
@@ -105,12 +104,10 @@ func NewStateMachine(
 	opts ...SMOption,
 ) *StateMachine {
 	slotToAddr := make(map[uint32]string, len(group))
-	slotToPub := make(map[uint32][]byte, len(group))
 	addrInGroup := make(map[string]bool, len(group))
 	addrToSlotCount := make(map[string]uint32, len(group))
 	for _, s := range group {
 		slotToAddr[s.SlotID] = s.ValidatorAddress
-		slotToPub[s.SlotID] = s.PublicKey
 		addrInGroup[s.ValidatorAddress] = true
 		addrToSlotCount[s.ValidatorAddress]++
 	}
@@ -145,7 +142,6 @@ func NewStateMachine(
 		verifier:           verifier,
 		userAddress:        userAddress,
 		slotToAddress:      slotToAddr,
-		slotToPubKey:       slotToPub,
 		addressInGroup:     addrInGroup,
 		addressToSlotCount: addrToSlotCount,
 		addressToSlots:     addrToSlots,

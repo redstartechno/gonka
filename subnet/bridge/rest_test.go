@@ -53,7 +53,7 @@ func TestGetEscrow_NotFound(t *testing.T) {
 	assert.ErrorIs(t, err, ErrEscrowNotFound)
 }
 
-func TestGetValidatorInfo_HappyPath(t *testing.T) {
+func TestGetHostInfo_HappyPath(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "/productscience/inference/inference/participant/valA", r.URL.Path)
 		json.NewEncoder(w).Encode(map[string]any{
@@ -62,29 +62,28 @@ func TestGetValidatorInfo_HappyPath(t *testing.T) {
 				"address":       "inference1valA",
 				"weight":        100,
 				"inference_url": "http://ml.example.com:8080",
-				"validator_key": "AQID", // base64 of []byte{1, 2, 3}
+				"validator_key": "AQID",
 			},
 		})
 	}))
 	defer srv.Close()
 
 	b := NewRESTBridge(srv.URL)
-	info, err := b.GetValidatorInfo("valA")
+	info, err := b.GetHostInfo("valA")
 	require.NoError(t, err)
 
 	assert.Equal(t, "inference1valA", info.Address)
-	assert.Equal(t, []byte{1, 2, 3}, info.PublicKey)
 	assert.Equal(t, "http://ml.example.com:8080", info.URL)
 }
 
-func TestGetValidatorInfo_NotFound(t *testing.T) {
+func TestGetHostInfo_NotFound(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 	}))
 	defer srv.Close()
 
 	b := NewRESTBridge(srv.URL)
-	_, err := b.GetValidatorInfo("missing")
+	_, err := b.GetHostInfo("missing")
 	assert.ErrorIs(t, err, ErrParticipantNotFound)
 }
 

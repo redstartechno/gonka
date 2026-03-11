@@ -86,7 +86,7 @@ class SubnetTests : TestermintTest() {
         assertThat(result.parsed.hostStats).isNotEmpty()
         assertThat(result.parsed.signatures).isNotEmpty()
         val totalCompletedValidations = result.parsed.hostStats.sumOf { it.completedValidations }
-//        assertThat(totalCompletedValidations).isGreaterThan(0)
+        assertThat(totalCompletedValidations).isGreaterThan(0)
 
         logSection("Submitting settlement from user account")
         val settleResp = genesis.settleSubnetEscrow(result.rawJson, from = userKeyName)

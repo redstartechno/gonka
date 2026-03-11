@@ -2,7 +2,6 @@ package subnet
 
 import (
 	"context"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"net/http"
@@ -294,15 +293,17 @@ func (m *HostManager) findGranterInGroup(validatorAddress string, group []types.
 // the validator represents (may be the same as validatorAddress for direct members).
 func (m *HostManager) getValidatorPubKeys(ctx context.Context, validatorAddress, granterAddress string) ([]string, error) {
 	var pubkeys []string
+	queryClient := m.recorder.NewInferenceQueryClient()
 
-	// Cold key from bridge
-	info, err := m.bridge.GetValidatorInfo(granterAddress)
-	if err == nil && len(info.PublicKey) > 0 {
-		pubkeys = append(pubkeys, base64.StdEncoding.EncodeToString(info.PublicKey))
+	// Account pubkey (secp256k1) -- the key used for signing payload requests
+	participant, err := queryClient.InferenceParticipant(ctx, &inferenceTypes.QueryInferenceParticipantRequest{
+		Address: granterAddress,
+	})
+	if err == nil && participant.Pubkey != "" {
+		pubkeys = append(pubkeys, participant.Pubkey)
 	}
 
 	// Warm keys via grantees query
-	queryClient := m.recorder.NewInferenceQueryClient()
 	grantees, err := queryClient.GranteesByMessageType(ctx, &inferenceTypes.QueryGranteesByMessageTypeRequest{
 		GranterAddress: granterAddress,
 		MessageTypeUrl: "/inference.inference.MsgStartInference",

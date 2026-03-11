@@ -10,7 +10,7 @@ type MainnetBridge interface {
 
 	// Queries: subnet -> mainnet
 	GetEscrow(escrowID string) (*EscrowInfo, error)
-	GetValidatorInfo(validatorAddress string) (*ValidatorInfo, error)
+	GetHostInfo(address string) (*HostInfo, error)
 	GetAccountPubKey(address string) ([]byte, error)
 	VerifyWarmKey(warmAddress, validatorAddress string) (bool, error)
 
@@ -23,11 +23,10 @@ type EscrowInfo struct {
 	Amount         uint64
 	CreatorAddress string
 	AppHash []byte
-	Slots          []string // validator addresses, len == SubnetGroupSize
+	Slots          []string // host addresses, len == SubnetGroupSize
 }
 
-type ValidatorInfo struct {
-	Address   string
-	PublicKey []byte
-	URL       string
+type HostInfo struct {
+	Address string
+	URL     string
 }

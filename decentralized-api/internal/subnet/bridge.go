@@ -54,29 +54,18 @@ func (b *ChainBridge) GetEscrow(escrowID string) (*bridge.EscrowInfo, error) {
 	}, nil
 }
 
-func (b *ChainBridge) GetValidatorInfo(validatorAddress string) (*bridge.ValidatorInfo, error) {
+func (b *ChainBridge) GetHostInfo(address string) (*bridge.HostInfo, error) {
 	ctx := context.Background()
 	qc := b.client.NewInferenceQueryClient()
 
-	resp, err := qc.Participant(ctx, &types.QueryGetParticipantRequest{Index: validatorAddress})
+	resp, err := qc.Participant(ctx, &types.QueryGetParticipantRequest{Index: address})
 	if err != nil {
 		return nil, fmt.Errorf("query participant: %w", err)
 	}
 
-	p := resp.Participant
-	var pubKey []byte
-	if p.ValidatorKey != "" {
-		pubKey, err = base64.StdEncoding.DecodeString(p.ValidatorKey)
-		if err != nil {
-			return nil, fmt.Errorf("decode validator_key: %w", err)
-		}
-	}
-
-	return &bridge.ValidatorInfo{
-		Address:   p.Address,
-		PublicKey: pubKey,
-		URL:       p.InferenceUrl,
-		Weight:    uint64(p.Weight),
+	return &bridge.HostInfo{
+		Address: resp.Participant.Address,
+		URL:     resp.Participant.InferenceUrl,
 	}, nil
 }
 
@@ -103,19 +92,30 @@ func (b *ChainBridge) VerifyWarmKey(warmAddress, validatorAddress string) (bool,
 }
 
 func (b *ChainBridge) GetAccountPubKey(address string) ([]byte, error) {
-	info, err := b.GetValidatorInfo(address)
+	ctx := context.Background()
+	qc := b.client.NewInferenceQueryClient()
+
+	resp, err := qc.InferenceParticipant(ctx, &types.QueryInferenceParticipantRequest{
+		Address: address,
+	})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("query inference participant: %w", err)
 	}
-	if len(info.PublicKey) == 0 {
+	if resp.Pubkey == "" {
 		return nil, fmt.Errorf("no public key for %s", address)
 	}
-	return info.PublicKey, nil
+	pubKey, err := base64.StdEncoding.DecodeString(resp.Pubkey)
+	if err != nil {
+		return nil, fmt.Errorf("decode account pubkey: %w", err)
+	}
+	return pubKey, nil
 }
 
-func (b *ChainBridge) OnEscrowCreated(_ bridge.EscrowInfo) error            { return bridge.ErrNotImplemented }
-func (b *ChainBridge) OnSettlementProposed(_ string, _ []byte, _ uint64) error { return bridge.ErrNotImplemented }
-func (b *ChainBridge) OnSettlementFinalized(_ string) error                    { return bridge.ErrNotImplemented }
+func (b *ChainBridge) OnEscrowCreated(_ bridge.EscrowInfo) error { return bridge.ErrNotImplemented }
+func (b *ChainBridge) OnSettlementProposed(_ string, _ []byte, _ uint64) error {
+	return bridge.ErrNotImplemented
+}
+func (b *ChainBridge) OnSettlementFinalized(_ string) error { return bridge.ErrNotImplemented }
 func (b *ChainBridge) SubmitDisputeState(_ string, _ []byte, _ uint64, _ map[uint32][]byte) error {
 	return bridge.ErrNotImplemented
 }

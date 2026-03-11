@@ -50,9 +50,9 @@ func NewHTTPSession(cfg HTTPSessionConfig) (*Session, *state.StateMachine, error
 			clients[i] = c
 			continue
 		}
-		info, err := cfg.Bridge.GetValidatorInfo(slot.ValidatorAddress)
+		info, err := cfg.Bridge.GetHostInfo(slot.ValidatorAddress)
 		if err != nil {
-			return nil, nil, fmt.Errorf("get validator info for %s: %w", slot.ValidatorAddress, err)
+			return nil, nil, fmt.Errorf("get host info for %s: %w", slot.ValidatorAddress, err)
 		}
 		c := transport.NewHTTPClient(info.URL, cfg.EscrowID, signer)
 		clientCache[slot.ValidatorAddress] = c
