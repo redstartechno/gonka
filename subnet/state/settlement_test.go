@@ -102,7 +102,7 @@ func buildSignedSettlement(t *testing.T, numHosts int) (SettlementPayload, []typ
 func TestVerifySettlement_Success(t *testing.T) {
 	payload, group, verifier := buildSignedSettlement(t, 3)
 
-	root, err := VerifySettlement(payload, group, verifier)
+	root, err := VerifySettlement(payload, group, verifier, nil)
 	require.NoError(t, err)
 	require.Len(t, root, 32)
 
@@ -127,7 +127,7 @@ func TestVerifySettlement_InsufficientSigs(t *testing.T) {
 		}
 	}
 
-	_, err := VerifySettlement(payload, group, verifier)
+	_, err := VerifySettlement(payload, group, verifier, nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "insufficient quorum")
 }
@@ -143,7 +143,7 @@ func TestVerifySettlement_InvalidSig(t *testing.T) {
 		break
 	}
 
-	_, err := VerifySettlement(payload, group, verifier)
+	_, err := VerifySettlement(payload, group, verifier, nil)
 	require.Error(t, err)
 }
 
@@ -200,6 +200,125 @@ func TestVerifySettlement_WrongPhase(t *testing.T) {
 
 	// Verification should fail: recovered addresses won't match group members
 	// because VerifySettlement recomputes state root with PhaseSettlement (0x02).
-	_, err = VerifySettlement(*payload, group, verifier)
+	_, err = VerifySettlement(*payload, group, verifier, nil)
 	require.Error(t, err)
+}
+
+func TestVerifySettlement_WarmKeySignatures(t *testing.T) {
+	// 3 cold signers, 1 warm key for slot 1.
+	coldSigners := make([]*signing.Secp256k1Signer, 3)
+	for i := range coldSigners {
+		coldSigners[i] = testutil.MustGenerateKey(t)
+	}
+	warmSigner := testutil.MustGenerateKey(t)
+	group := testutil.MakeGroup(coldSigners)
+	verifier := signing.NewSecp256k1Verifier()
+
+	hostStats := map[uint32]*types.HostStats{
+		0: {Cost: 100},
+		1: {Cost: 200},
+		2: {Cost: 150},
+	}
+	inferences := map[uint64]*types.InferenceRecord{
+		1: {Status: types.StatusFinished, ExecutorSlot: 0, ActualCost: 100},
+	}
+	st := types.EscrowState{Balance: 9900, HostStats: hostStats, Inferences: inferences}
+
+	escrowID := "escrow-warm"
+	nonce := uint64(5)
+	payload, err := BuildSettlement(escrowID, st, nil, nonce)
+	require.NoError(t, err)
+
+	// Recompute state root for signing.
+	hostStatsHash, err := ComputeHostStatsHash(hostStats)
+	require.NoError(t, err)
+	h := sha256.New()
+	h.Write(hostStatsHash)
+	h.Write(payload.RestHash)
+	h.Write([]byte{uint8(types.PhaseSettlement)})
+	stateRoot := h.Sum(nil)
+
+	sigContent := &types.StateSignatureContent{
+		StateRoot: stateRoot,
+		EscrowId:  escrowID,
+		Nonce:     nonce,
+	}
+	sigData, err := proto.Marshal(sigContent)
+	require.NoError(t, err)
+
+	// Sign slot 0 and 2 with cold keys, slot 1 with warm key.
+	sigs := make(map[uint32][]byte, 3)
+	sig0, err := coldSigners[0].Sign(sigData)
+	require.NoError(t, err)
+	sigs[0] = sig0
+	sig1, err := warmSigner.Sign(sigData)
+	require.NoError(t, err)
+	sigs[1] = sig1
+	sig2, err := coldSigners[2].Sign(sigData)
+	require.NoError(t, err)
+	sigs[2] = sig2
+	payload.Signatures = sigs
+
+	warmKeys := map[uint32]string{1: warmSigner.Address()}
+	root, err := VerifySettlement(*payload, group, verifier, warmKeys)
+	require.NoError(t, err)
+	require.Len(t, root, 32)
+}
+
+func TestVerifySettlement_WarmKey_NotInMap(t *testing.T) {
+	// Sign slot 1 with warm key but pass empty warmKeys -- should fail.
+	coldSigners := make([]*signing.Secp256k1Signer, 3)
+	for i := range coldSigners {
+		coldSigners[i] = testutil.MustGenerateKey(t)
+	}
+	warmSigner := testutil.MustGenerateKey(t)
+	group := testutil.MakeGroup(coldSigners)
+	verifier := signing.NewSecp256k1Verifier()
+
+	hostStats := map[uint32]*types.HostStats{
+		0: {Cost: 100},
+		1: {Cost: 200},
+		2: {Cost: 150},
+	}
+	inferences := map[uint64]*types.InferenceRecord{
+		1: {Status: types.StatusFinished, ExecutorSlot: 0, ActualCost: 100},
+	}
+	st := types.EscrowState{Balance: 9900, HostStats: hostStats, Inferences: inferences}
+
+	escrowID := "escrow-warm"
+	nonce := uint64(5)
+	payload, err := BuildSettlement(escrowID, st, nil, nonce)
+	require.NoError(t, err)
+
+	hostStatsHash, err := ComputeHostStatsHash(hostStats)
+	require.NoError(t, err)
+	hh := sha256.New()
+	hh.Write(hostStatsHash)
+	hh.Write(payload.RestHash)
+	hh.Write([]byte{uint8(types.PhaseSettlement)})
+	stateRoot := hh.Sum(nil)
+
+	sigContent := &types.StateSignatureContent{
+		StateRoot: stateRoot,
+		EscrowId:  escrowID,
+		Nonce:     nonce,
+	}
+	sigData, err := proto.Marshal(sigContent)
+	require.NoError(t, err)
+
+	sigs := make(map[uint32][]byte, 3)
+	for i, s := range coldSigners {
+		sig, err := s.Sign(sigData)
+		require.NoError(t, err)
+		sigs[uint32(i)] = sig
+	}
+	// Replace slot 1 sig with warm key sig.
+	warmSig, err := warmSigner.Sign(sigData)
+	require.NoError(t, err)
+	sigs[1] = warmSig
+	payload.Signatures = sigs
+
+	_, err = VerifySettlement(*payload, group, verifier, nil)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "not in group")
 }

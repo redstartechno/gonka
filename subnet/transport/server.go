@@ -179,10 +179,14 @@ func (s *Server) isWarmKeySender(addr string) bool {
 	return false
 }
 
-// isGroupMember returns true if addr is a group member (excludes the user).
-// Gossip is host-to-host; the user has no business gossiping.
+// isGroupMember returns true if addr is a group member or a warm key for
+// a group member (excludes the user). Gossip is host-to-host; the user has
+// no business gossiping.
 func (s *Server) isGroupMember(addr string) bool {
-	return s.groupAddrs[addr]
+	if s.groupAddrs[addr] {
+		return true
+	}
+	return s.isWarmKeySender(addr)
 }
 
 // authMiddleware reads the body, verifies the signature, checks group membership,
@@ -432,8 +436,13 @@ func (s *Server) HandleGossipNonce(c echo.Context) error {
 		return errJSON(c, http.StatusInternalServerError, "marshal sig content")
 	}
 	addr, err := s.verifier.RecoverAddress(sigData, req.StateSig)
-	if err != nil || addr != expectedAddr {
+	if err != nil {
 		return errJSON(c, http.StatusBadRequest, "invalid gossip state signature")
+	}
+	if addr != expectedAddr {
+		if !s.host.IsWarmKeyForSlot(addr, req.SlotID) {
+			return errJSON(c, http.StatusBadRequest, "invalid gossip state signature")
+		}
 	}
 
 	if s.gossip != nil {

@@ -2730,3 +2730,194 @@ func TestWarmKey_IsWarmKeyAddress(t *testing.T) {
 	require.True(t, sm.IsWarmKeyAddress(warmSigner.Address()))
 	require.False(t, sm.IsWarmKeyAddress(testutil.MustGenerateKey(t).Address()), "unrelated address should be false")
 }
+
+func TestInjectWarmKeys(t *testing.T) {
+	hosts := []*signing.Secp256k1Signer{testutil.MustGenerateKey(t), testutil.MustGenerateKey(t), testutil.MustGenerateKey(t)}
+	sm, _ := newTestSM(t, hosts, 10000)
+
+	// Inject warm keys.
+	sm.InjectWarmKeys(map[uint32]string{0: "warm-0", 1: "warm-1"})
+	wk := sm.WarmKeys()
+	require.Equal(t, "warm-0", wk[0])
+	require.Equal(t, "warm-1", wk[1])
+
+	// Inject conflicting key for same slot: original preserved.
+	sm.InjectWarmKeys(map[uint32]string{0: "warm-0-different"})
+	wk = sm.WarmKeys()
+	require.Equal(t, "warm-0", wk[0], "original binding should be preserved")
+
+	// Inject for new slot: accepted.
+	sm.InjectWarmKeys(map[uint32]string{2: "warm-2"})
+	wk = sm.WarmKeys()
+	require.Equal(t, "warm-2", wk[2])
+}
+
+func TestApplyLocal_WithInjectedWarmKeys(t *testing.T) {
+	hosts := []*signing.Secp256k1Signer{testutil.MustGenerateKey(t), testutil.MustGenerateKey(t), testutil.MustGenerateKey(t)}
+	warmSigner := testutil.MustGenerateKey(t)
+	executorIdx := 1
+
+	resolver := func(warmAddr, coldAddr string) (bool, error) {
+		return warmAddr == warmSigner.Address() && coldAddr == hosts[executorIdx].Address(), nil
+	}
+
+	// SM1: apply normally with resolver (warm keys resolved via bridge).
+	sm1, user := newTestSMWithWarmKey(t, hosts, 10000, resolver)
+	applyStartConfirmWithWarmKey(t, sm1, user, hosts, warmSigner, 1, executorIdx)
+
+	warmBefore := sm1.WarmKeys()
+	root1, err := sm1.ComputeStateRoot()
+	require.NoError(t, err)
+	require.NotNil(t, warmBefore)
+	require.Equal(t, warmSigner.Address(), warmBefore[uint32(executorIdx)])
+
+	// SM2: replay with injected warm keys (no resolver).
+	group := testutil.MakeGroup(hosts)
+	config := testutil.DefaultConfig(len(hosts))
+	verifier := signing.NewSecp256k1Verifier()
+	sm2 := NewStateMachine("escrow-1", config, group, 10000, user.Address(), verifier)
+
+	// Inject the warm keys that were captured from SM1.
+	sm2.InjectWarmKeys(warmBefore)
+
+	// Replay the same txs via ApplyLocal.
+	startTx := txStart(&types.MsgStartInference{
+		InferenceId: 1, PromptHash: []byte("prompt"), Model: "llama",
+		InputLength: 100, MaxTokens: 50, StartedAt: 1000,
+	})
+	_, err = sm2.ApplyLocal(1, []*types.SubnetTx{startTx})
+	require.NoError(t, err)
+
+	execSig := testutil.SignExecutorReceipt(t, warmSigner, "escrow-1", 1, []byte("prompt"), "llama", 100, 50, 1000, 1000)
+	confirmTx := txConfirm(&types.MsgConfirmStart{InferenceId: 1, ExecutorSig: execSig, ConfirmedAt: 1000})
+	_, err = sm2.ApplyLocal(2, []*types.SubnetTx{confirmTx})
+	require.NoError(t, err)
+
+	root2, err := sm2.ComputeStateRoot()
+	require.NoError(t, err)
+
+	require.Equal(t, root1, root2, "state roots must match after replay with injected warm keys")
+}
+
+func TestApplyDiff_RevealSeed_NoNewWarmKeyBinding(t *testing.T) {
+	// Seed signed by an unbound warm key should be rejected even if
+	// the warm key resolver would accept it -- applyRevealSeed must
+	// not create new bindings.
+	hosts := []*signing.Secp256k1Signer{testutil.MustGenerateKey(t), testutil.MustGenerateKey(t), testutil.MustGenerateKey(t)}
+	warmSigner := testutil.MustGenerateKey(t)
+	revealerIdx := 0
+
+	resolver := func(warmAddr, coldAddr string) (bool, error) {
+		return warmAddr == warmSigner.Address() && coldAddr == hosts[revealerIdx].Address(), nil
+	}
+	sm, user := newTestSMWithWarmKey(t, hosts, 10000, resolver)
+
+	// Enter finalizing.
+	nonce := sm.LatestNonce() + 1
+	diff := testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{txFinalize()})
+	_, err := sm.ApplyDiff(diff)
+	require.NoError(t, err)
+
+	// Sign seed and proposer_sig with the COLD key,
+	// but replace the seed signature with the warm key.
+	// The proposer_sig is cold -> no warm key binding created.
+	seedSig, err := warmSigner.Sign([]byte("escrow-1"))
+	require.NoError(t, err)
+	seedMsg := &types.MsgRevealSeed{
+		SlotId:    0,
+		Signature: seedSig,
+		EscrowId:  "escrow-1",
+	}
+	// Sign proposer with cold key (no ResolveWarmKey trigger).
+	seedMsg.ProposerSig = testutil.SignProposerTx(t, hosts[revealerIdx], seedMsg)
+
+	nonce++
+	diff = testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{txRevealSeed(seedMsg)})
+	_, err = sm.ApplyDiff(diff)
+	require.ErrorIs(t, err, types.ErrInvalidSeedSig, "should reject unbound warm key seed signature")
+
+	// Verify no warm key binding was created.
+	wk := sm.WarmKeys()
+	require.Nil(t, wk, "no warm key binding should exist")
+}
+
+func TestApplyDiff_RevealSeed_UsesExistingBinding(t *testing.T) {
+	hosts := []*signing.Secp256k1Signer{testutil.MustGenerateKey(t), testutil.MustGenerateKey(t), testutil.MustGenerateKey(t)}
+	warmSigner := testutil.MustGenerateKey(t)
+	revealerIdx := 0
+
+	resolver := func(warmAddr, coldAddr string) (bool, error) {
+		return warmAddr == warmSigner.Address() && coldAddr == hosts[revealerIdx].Address(), nil
+	}
+	sm, user := newTestSMWithWarmKey(t, hosts, 100000, resolver)
+
+	// Create warm key binding via ConfirmStart.
+	// inference_id must equal nonce, and inference_id % 3 must = 0 for executor = slot 0.
+	// nonce=3: inference 3 % 3 = 0 -> executor = slot 0 = hosts[revealerIdx].
+	// Burn nonces 1,2 first.
+	nonce := sm.LatestNonce() + 1
+	diff := testutil.SignDiff(t, user, "escrow-1", nonce, nil)
+	_, err := sm.ApplyDiff(diff)
+	require.NoError(t, err)
+	nonce++
+	diff = testutil.SignDiff(t, user, "escrow-1", nonce, nil)
+	_, err = sm.ApplyDiff(diff)
+	require.NoError(t, err)
+
+	nonce++
+	diff = testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{txStart(&types.MsgStartInference{
+		InferenceId: 3, PromptHash: []byte("prompt"), Model: "llama",
+		InputLength: 100, MaxTokens: 50, StartedAt: 1000,
+	})})
+	_, err = sm.ApplyDiff(diff)
+	require.NoError(t, err)
+
+	// ConfirmStart with warm key -> creates binding for slot 0.
+	execSig := testutil.SignExecutorReceipt(t, warmSigner, "escrow-1", 3, []byte("prompt"), "llama", 100, 50, 1000, 1000)
+	nonce++
+	diff = testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{txConfirm(&types.MsgConfirmStart{
+		InferenceId: 3, ExecutorSig: execSig, ConfirmedAt: 1000,
+	})})
+	_, err = sm.ApplyDiff(diff)
+	require.NoError(t, err)
+
+	// Verify warm key binding exists.
+	wkBefore := sm.WarmKeys()
+	require.Equal(t, warmSigner.Address(), wkBefore[uint32(revealerIdx)])
+
+	// Finish the inference so state is clean.
+	finishMsg := &types.MsgFinishInference{
+		InferenceId: 3, ResponseHash: []byte("resp"), InputTokens: 80,
+		OutputTokens: 40, ExecutorSlot: 0, EscrowId: "escrow-1",
+	}
+	finishMsg.ProposerSig = testutil.SignProposerTx(t, warmSigner, finishMsg)
+	nonce++
+	diff = testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{txFinish(finishMsg)})
+	_, err = sm.ApplyDiff(diff)
+	require.NoError(t, err)
+
+	// Finalize.
+	nonce++
+	diff = testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{txFinalize()})
+	_, err = sm.ApplyDiff(diff)
+	require.NoError(t, err)
+
+	// Reveal seed signed with warm key -- should succeed using existing binding.
+	seedSig, err := warmSigner.Sign([]byte("escrow-1"))
+	require.NoError(t, err)
+	seedMsg := &types.MsgRevealSeed{
+		SlotId:    0,
+		Signature: seedSig,
+		EscrowId:  "escrow-1",
+	}
+	seedMsg.ProposerSig = testutil.SignProposerTx(t, warmSigner, seedMsg)
+
+	nonce++
+	diff = testutil.SignDiff(t, user, "escrow-1", nonce, []*types.SubnetTx{txRevealSeed(seedMsg)})
+	_, err = sm.ApplyDiff(diff)
+	require.NoError(t, err, "should accept seed from bound warm key")
+
+	// Verify WarmKeys map was not modified.
+	wkAfter := sm.WarmKeys()
+	require.Equal(t, wkBefore, wkAfter, "warm keys should not change during seed reveal")
+}

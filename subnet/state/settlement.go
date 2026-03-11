@@ -42,6 +42,7 @@ func VerifySettlement(
 	payload SettlementPayload,
 	group []types.SlotAssignment,
 	verifier signing.Verifier,
+	warmKeys map[uint32]string,
 ) ([]byte, error) {
 	if len(group) == 0 {
 		return nil, fmt.Errorf("empty group")
@@ -70,32 +71,43 @@ func VerifySettlement(
 		return nil, fmt.Errorf("marshal signature content: %w", err)
 	}
 
-	// Build address -> total slot count for multi-slot validators.
+	// Build slot_id -> cold address and cold address -> total slot count.
+	slotToAddr := make(map[uint32]string, len(group))
 	addressSlots := make(map[string]uint32, len(group))
-	addressInGroup := make(map[string]bool, len(group))
 	for _, sa := range group {
+		slotToAddr[sa.SlotID] = sa.ValidatorAddress
 		addressSlots[sa.ValidatorAddress]++
-		addressInGroup[sa.ValidatorAddress] = true
 	}
 
 	// 3. Verify each signature and accumulate weight.
-	// One signature per address counts for all slots owned by that address.
+	// One signature per cold address counts for all slots owned by that address.
 	verified := make(map[string]bool, len(payload.Signatures))
 	totalWeight := uint32(0)
 
-	for _, sig := range payload.Signatures {
+	for slotID, sig := range payload.Signatures {
 		addr, err := verifier.RecoverAddress(sigData, sig)
 		if err != nil {
 			return nil, fmt.Errorf("recover address: %w", err)
 		}
-		if !addressInGroup[addr] {
-			return nil, fmt.Errorf("signer %s not in group", addr)
+
+		coldAddr, ok := slotToAddr[slotID]
+		if !ok {
+			return nil, fmt.Errorf("slot %d not in group", slotID)
 		}
-		if verified[addr] {
-			continue // already counted
+
+		// Accept if recovered address matches cold key or warm key for this slot.
+		if addr != coldAddr {
+			if warmKeys == nil || warmKeys[slotID] != addr {
+				return nil, fmt.Errorf("signer %s not in group", addr)
+			}
 		}
-		verified[addr] = true
-		totalWeight += addressSlots[addr]
+
+		// Track by cold address for multi-slot dedup.
+		if verified[coldAddr] {
+			continue
+		}
+		verified[coldAddr] = true
+		totalWeight += addressSlots[coldAddr]
 	}
 
 	// 4. Quorum check: total weight >= 2*len(group)/3 + 1.

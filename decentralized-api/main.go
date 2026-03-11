@@ -24,6 +24,7 @@ import (
 	"google.golang.org/grpc/reflection"
 
 	internalsubnet "decentralized-api/internal/subnet"
+	subnetstorage "subnet/storage"
 	"decentralized-api/internal/validation"
 	"decentralized-api/logging"
 	"decentralized-api/participant"
@@ -206,7 +207,11 @@ func main() {
 		httpClient := pserver.NewNoRedirectClient(5 * time.Minute)
 		subnetEngine := internalsubnet.NewEngineAdapter(nodeBroker, config.GetCurrentNodeVersion(), payloadStore, chainPhaseTracker, httpClient)
 		subnetValidator := internalsubnet.NewValidationAdapter(nodeBroker, config.GetCurrentNodeVersion(), chainPhaseTracker, httpClient, subnetBridge, recorder)
-		hostManager := internalsubnet.NewHostManager(subnetSigner, subnetEngine, subnetValidator, subnetBridge, payloadStore, recorder)
+		subnetStore := subnetstorage.NewMemory()
+		hostManager := internalsubnet.NewHostManager(subnetStore, subnetSigner, subnetEngine, subnetValidator, subnetBridge, payloadStore, recorder)
+		if err := hostManager.RecoverSessions(); err != nil {
+			logging.Error("subnet recovery failed", types.System, "error", err)
+		}
 		hostManager.Register(publicServer.SubnetGroup())
 	}
 

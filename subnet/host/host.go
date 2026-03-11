@@ -234,6 +234,19 @@ func (h *Host) IsWarmKeyAddress(addr string) bool {
 	return h.sm.IsWarmKeyAddress(addr)
 }
 
+// IsWarmKeyForSlot returns true if addr is an authorized warm key for the
+// given slot, either via existing state bindings or via the bridge resolver.
+func (h *Host) IsWarmKeyForSlot(addr string, slotID uint32) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	warmKeys := h.sm.WarmKeys()
+	if warmKeys[slotID] == addr {
+		return true
+	}
+	expected, ok := h.slotToAddr[slotID]
+	return ok && h.sm.CheckWarmKey(addr, expected)
+}
+
 func (h *Host) Signer() signing.Signer { return h.signer }
 
 func (h *Host) HandleRequest(ctx context.Context, req HostRequest) (*HostResponse, error) {
@@ -292,12 +305,14 @@ func (h *Host) HandleRequest(ctx context.Context, req HostRequest) (*HostRespons
 }
 
 // applyAndPersist applies a diff, removes included txs from mempool, and persists.
+// Captures WarmKeyDelta (new warm key bindings introduced by this diff) for replay.
 // Caller must hold h.mu.
 func (h *Host) applyAndPersist(diff types.Diff) error {
 	currentNonce := h.sm.LatestNonce()
 	if diff.Nonce <= currentNonce {
 		return nil
 	}
+	warmBefore := h.sm.WarmKeys()
 	root, err := h.sm.ApplyDiff(diff)
 	if err != nil {
 		return fmt.Errorf("apply diff nonce %d: %w", diff.Nonce, err)
@@ -305,12 +320,31 @@ func (h *Host) applyAndPersist(diff types.Diff) error {
 	h.mempool.RemoveIncluded(diff.Txs)
 
 	if h.store != nil {
-		rec := types.DiffRecord{Diff: diff, StateHash: root}
+		warmAfter := h.sm.WarmKeys()
+		delta := computeWarmKeyDelta(warmBefore, warmAfter)
+		rec := types.DiffRecord{Diff: diff, StateHash: root, WarmKeyDelta: delta}
 		if err := h.store.AppendDiff(h.escrowID, rec); err != nil {
 			return fmt.Errorf("persist diff nonce %d: %w", diff.Nonce, err)
 		}
 	}
 	return nil
+}
+
+// computeWarmKeyDelta returns entries in after that are not in before.
+func computeWarmKeyDelta(before, after map[uint32]string) map[uint32]string {
+	if len(after) == 0 {
+		return nil
+	}
+	var delta map[uint32]string
+	for slotID, addr := range after {
+		if before[slotID] != addr {
+			if delta == nil {
+				delta = make(map[uint32]string)
+			}
+			delta[slotID] = addr
+		}
+	}
+	return delta
 }
 
 // signIfAccepted computes state root, checks acceptance, signs if allowed,
@@ -718,7 +752,10 @@ func (h *Host) AccumulateGossipSig(nonce uint64, stateHash, sig []byte, senderSl
 		return fmt.Errorf("recover address: %w", err)
 	}
 	if addr != expected {
-		return fmt.Errorf("sig from slot %d: expected %s, got %s", senderSlot, expected, addr)
+		warmKeys := h.sm.WarmKeys()
+		if warmKeys[senderSlot] != addr && !h.sm.CheckWarmKey(addr, expected) {
+			return fmt.Errorf("sig from slot %d: expected %s, got %s", senderSlot, expected, addr)
+		}
 	}
 
 	// Verify stateHash matches stored record.
@@ -730,8 +767,12 @@ func (h *Host) AccumulateGossipSig(nonce uint64, stateHash, sig []byte, senderSl
 		return fmt.Errorf("state hash mismatch at nonce %d: stored %x, gossip %x", nonce, records[0].StateHash, stateHash)
 	}
 
-	// Store sig for all slots owned by this validator address.
-	for _, slot := range h.addrToSlots[addr] {
+	// Store sig for all slots owned by this validator address (use cold address for lookup).
+	storeAddr := addr
+	if addr != expected {
+		storeAddr = expected
+	}
+	for _, slot := range h.addrToSlots[storeAddr] {
 		if err := h.store.AddSignature(h.escrowID, nonce, slot, sig); err != nil {
 			return err
 		}

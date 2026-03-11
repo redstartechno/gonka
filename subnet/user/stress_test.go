@@ -276,7 +276,7 @@ func runStress(t *testing.T, numHosts, rounds int) {
 	finalSignedCount := len(latestSigs)
 
 	// 5. Settlement verification via VerifySettlement.
-	root, err := state.VerifySettlement(*payload, group, verifier)
+	root, err := state.VerifySettlement(*payload, group, verifier, nil)
 	require.NoError(t, err)
 	require.Len(t, root, 32)
 

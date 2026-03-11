@@ -675,7 +675,7 @@ func TestProtocol_Settlement_EndToEnd(t *testing.T) {
 	require.NotNil(t, settlement)
 
 	// Verify settlement via VerifySettlement.
-	root, err := state.VerifySettlement(*settlement, env.group, signing.NewSecp256k1Verifier())
+	root, err := state.VerifySettlement(*settlement, env.group, signing.NewSecp256k1Verifier(), nil)
 	require.NoError(t, err)
 	require.Len(t, root, 32)
 	require.Equal(t, nonce, settlement.Nonce)

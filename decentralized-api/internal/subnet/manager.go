@@ -34,7 +34,6 @@ import (
 type sessionEntry struct {
 	server *transport.Server
 	host   *host.Host
-	store  storage.Storage
 }
 
 // HostManager manages per-escrow subnet sessions with lazy creation.
@@ -42,6 +41,7 @@ type HostManager struct {
 	mu       sync.RWMutex
 	sessions map[string]*sessionEntry
 
+	store        storage.Storage
 	signer       *signing.Secp256k1Signer
 	verifier     signing.Verifier
 	engine       subnetpkg.InferenceEngine
@@ -52,6 +52,7 @@ type HostManager struct {
 }
 
 func NewHostManager(
+	store storage.Storage,
 	signer *signing.Secp256k1Signer,
 	engine subnetpkg.InferenceEngine,
 	validator subnetpkg.ValidationEngine,
@@ -61,6 +62,7 @@ func NewHostManager(
 ) *HostManager {
 	return &HostManager{
 		sessions:     make(map[string]*sessionEntry),
+		store:        store,
 		signer:       signer,
 		verifier:     signing.NewSecp256k1Verifier(),
 		engine:       engine,
@@ -102,8 +104,13 @@ func (m *HostManager) createLocked(escrowID string) (*sessionEntry, error) {
 
 	config := types.DefaultSessionConfig(len(group))
 
-	store := storage.NewMemory()
-	if err := store.CreateSession(escrowID, config, group, escrow.Amount); err != nil {
+	if err := m.store.CreateSession(storage.CreateSessionParams{
+		EscrowID:       escrowID,
+		CreatorAddr:    creatorAddr,
+		Config:         config,
+		Group:          group,
+		InitialBalance: escrow.Amount,
+	}); err != nil {
 		return nil, fmt.Errorf("init storage session: %w", err)
 	}
 
@@ -113,13 +120,13 @@ func (m *HostManager) createLocked(escrowID string) (*sessionEntry, error) {
 
 	h, err := host.NewHost(sm, m.signer, m.engine, escrowID, group, nil,
 		host.WithValidator(m.validator),
-		host.WithStorage(store),
+		host.WithStorage(m.store),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("create host: %w", err)
 	}
 
-	srv, err := transport.NewServer(h, store, escrowID, m.verifier, group, creatorAddr,
+	srv, err := transport.NewServer(h, m.store, escrowID, m.verifier, group, creatorAddr,
 		transport.WithBridge(m.bridge),
 	)
 	if err != nil {
@@ -129,10 +136,76 @@ func (m *HostManager) createLocked(escrowID string) (*sessionEntry, error) {
 	entry := &sessionEntry{
 		server: srv,
 		host:   h,
-		store:  store,
 	}
 	m.sessions[escrowID] = entry
 	return entry, nil
+}
+
+// RecoverSessions rebuilds in-memory sessions from the shared store.
+// For each active session, it replays all diffs through a fresh StateMachine,
+// injecting warm key deltas from the stored DiffRecords. Call this on startup
+// after constructing the HostManager.
+func (m *HostManager) RecoverSessions() error {
+	escrowIDs, err := m.store.ListActiveSessions()
+	if err != nil {
+		return fmt.Errorf("list active sessions: %w", err)
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for _, escrowID := range escrowIDs {
+		meta, err := m.store.GetSessionMeta(escrowID)
+		if err != nil {
+			return fmt.Errorf("get session meta %s: %w", escrowID, err)
+		}
+		if meta.LatestNonce == 0 {
+			continue // no diffs to replay
+		}
+
+		records, err := m.store.GetDiffs(escrowID, 1, meta.LatestNonce)
+		if err != nil {
+			return fmt.Errorf("get diffs %s: %w", escrowID, err)
+		}
+
+		sm := state.NewStateMachine(
+			escrowID, meta.Config, meta.Group, meta.InitialBalance,
+			meta.CreatorAddr, m.verifier,
+			state.WithWarmKeyResolver(m.bridge.VerifyWarmKey),
+		)
+
+		for _, rec := range records {
+			sm.InjectWarmKeys(rec.WarmKeyDelta)
+			root, applyErr := sm.ApplyLocal(rec.Nonce, rec.Txs)
+			if applyErr != nil {
+				return fmt.Errorf("replay diff %s nonce %d: %w", escrowID, rec.Nonce, applyErr)
+			}
+			if len(rec.StateHash) > 0 && len(root) > 0 {
+				if string(root) != string(rec.StateHash) {
+					return fmt.Errorf("state root mismatch %s nonce %d", escrowID, rec.Nonce)
+				}
+			}
+		}
+
+		h, err := host.NewHost(sm, m.signer, m.engine, escrowID, meta.Group, nil,
+			host.WithValidator(m.validator),
+			host.WithStorage(m.store),
+		)
+		if err != nil {
+			return fmt.Errorf("recover host %s: %w", escrowID, err)
+		}
+
+		srv, err := transport.NewServer(h, m.store, escrowID, m.verifier, meta.Group, meta.CreatorAddr,
+			transport.WithBridge(m.bridge),
+		)
+		if err != nil {
+			return fmt.Errorf("recover server %s: %w", escrowID, err)
+		}
+
+		m.sessions[escrowID] = &sessionEntry{server: srv, host: h}
+	}
+
+	return nil
 }
 
 // Register mounts subnet session routes on the given echo group.

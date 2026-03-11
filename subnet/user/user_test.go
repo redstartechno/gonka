@@ -498,7 +498,7 @@ func TestUser_Finalize_SeedRevealAndSettlement(t *testing.T) {
 	payload, err := state.BuildSettlement("escrow-1", st, latestSigs, finalNonce)
 	require.NoError(t, err)
 
-	root, err := state.VerifySettlement(*payload, group, verifier)
+	root, err := state.VerifySettlement(*payload, group, verifier, nil)
 	require.NoError(t, err)
 	require.Len(t, root, 32)
 }

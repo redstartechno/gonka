@@ -774,8 +774,10 @@ func (sm *StateMachine) applyRevealSeed(msg *types.MsgRevealSeed) error {
 		return fmt.Errorf("%w: %v", types.ErrInvalidSeedSig, err)
 	}
 	if seedAddr != revealerAddr {
-		if !sm.ResolveWarmKey(msg.SlotId, seedAddr, revealerAddr) {
-			return fmt.Errorf("%w: expected %s, got %s", types.ErrInvalidSeedSig, revealerAddr, seedAddr)
+		boundWarm, ok := sm.state.WarmKeys[msg.SlotId]
+		if !ok || boundWarm != seedAddr {
+			return fmt.Errorf("%w: expected %s or bound warm key, got %s",
+				types.ErrInvalidSeedSig, revealerAddr, seedAddr)
 		}
 	}
 
@@ -957,6 +959,17 @@ func (sm *StateMachine) ResolveWarmKey(slotID uint32, recovered, expected string
 	}
 	sm.state.WarmKeys[slotID] = recovered
 	return true
+}
+
+// InjectWarmKeys adds warm key bindings to state without calling the resolver.
+// Used during replay to restore bindings that were discovered during the original run.
+// Existing bindings are not overwritten.
+func (sm *StateMachine) InjectWarmKeys(delta map[uint32]string) {
+	for slotID, addr := range delta {
+		if _, exists := sm.state.WarmKeys[slotID]; !exists {
+			sm.state.WarmKeys[slotID] = addr
+		}
+	}
 }
 
 // CheckWarmKey checks if warmAddr is authorized to act on behalf of coldAddr

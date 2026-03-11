@@ -173,7 +173,7 @@ func (s *Session) processResponse(hostIdx int, resp *host.HostResponse) error {
 			return fmt.Errorf("%w: host %d: %v", types.ErrInvalidStateSig, hostIdx, err)
 		}
 		if addr != expectedAddr {
-			if !s.sm.ResolveWarmKey(s.group[hostIdx].SlotID, addr, expectedAddr) {
+			if !s.sm.CheckWarmKey(addr, expectedAddr) {
 				return fmt.Errorf("%w: host %d: expected %s, got %s",
 					types.ErrInvalidStateSig, hostIdx, expectedAddr, addr)
 			}

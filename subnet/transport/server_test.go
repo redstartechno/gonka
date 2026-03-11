@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"context"
 	"encoding/hex"
 	"fmt"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 	json "github.com/goccy/go-json"
 	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 
 	"subnet/host"
 	"subnet/internal/testutil"
@@ -43,7 +45,7 @@ func setupServerEnv(t *testing.T) *serverTestEnv {
 	sm := state.NewStateMachine("escrow-1", config, group, 100000, userSigner.Address(), verifier)
 	engine := stub.NewInferenceEngine()
 	store := storage.NewMemory()
-	require.NoError(t, store.CreateSession("escrow-1", config, group, 100000))
+	require.NoError(t, store.CreateSession(storage.CreateSessionParams{EscrowID: "escrow-1", Config: config, Group: group, InitialBalance: 100000}))
 
 	h, err := host.NewHost(sm, hostSigner, engine, "escrow-1", group, nil, host.WithGrace(100), host.WithStorage(store))
 	require.NoError(t, err)
@@ -241,4 +243,93 @@ func TestServer_RateLimit(t *testing.T) {
 	// Second request should be rate limited.
 	code = doReq()
 	require.Equal(t, http.StatusTooManyRequests, code)
+}
+
+func TestHandleGossipNonce_WarmKey(t *testing.T) {
+	// Set up: host signer at slot 0, warm key for slot 0.
+	hostSigner := testutil.MustGenerateKey(t)
+	warmSigner := testutil.MustGenerateKey(t)
+	userSigner := testutil.MustGenerateKey(t)
+	group := testutil.MakeGroup([]*signing.Secp256k1Signer{hostSigner})
+	config := testutil.DefaultConfig(1)
+	verifier := signing.NewSecp256k1Verifier()
+
+	resolver := func(warmAddr, coldAddr string) (bool, error) {
+		return warmAddr == warmSigner.Address() && coldAddr == hostSigner.Address(), nil
+	}
+
+	sm := state.NewStateMachine("escrow-1", config, group, 100000, userSigner.Address(), verifier, state.WithWarmKeyResolver(resolver))
+
+	// Create warm key binding via confirm start.
+	diff1 := testutil.SignDiff(t, userSigner, "escrow-1", 1, []*types.SubnetTx{testutil.StartTx(1)})
+	_, err := sm.ApplyDiff(diff1)
+	require.NoError(t, err)
+
+	// inference 1 % 1 = 0, executor = slot 0.
+	execSig := testutil.SignExecutorReceipt(t, warmSigner, "escrow-1", 1, testutil.TestPromptHash[:], "llama", 100, 50, 1000, 1000)
+	confirmTx := &types.SubnetTx{Tx: &types.SubnetTx_ConfirmStart{ConfirmStart: &types.MsgConfirmStart{
+		InferenceId: 1, ExecutorSig: execSig, ConfirmedAt: 1000,
+	}}}
+	diff2 := testutil.SignDiff(t, userSigner, "escrow-1", 2, []*types.SubnetTx{confirmTx})
+	_, err = sm.ApplyDiff(diff2)
+	require.NoError(t, err)
+
+	store := storage.NewMemory()
+	require.NoError(t, store.CreateSession(storage.CreateSessionParams{EscrowID: "escrow-1", Config: config, Group: group, InitialBalance: 100000}))
+
+	// Rebuild SM from scratch for host (host needs nonce 0 start).
+	sm2 := state.NewStateMachine("escrow-1", config, group, 100000, userSigner.Address(), verifier, state.WithWarmKeyResolver(resolver))
+	engine := stub.NewInferenceEngine()
+	h, err := host.NewHost(sm2, hostSigner, engine, "escrow-1", group, nil, host.WithGrace(100), host.WithStorage(store), host.WithVerifier(verifier))
+	require.NoError(t, err)
+
+	srv, err := NewServer(h, store, "escrow-1", verifier, group, userSigner.Address())
+	require.NoError(t, err)
+
+	e := echo.New()
+	g := e.Group("/subnet/v1")
+	srv.Register(g)
+
+	// Apply diffs through the host to populate storage.
+	_, err = h.HandleRequest(context.Background(), host.HostRequest{Diffs: []types.Diff{diff1, diff2}})
+	require.NoError(t, err)
+
+	// Compute state root for signing.
+	stateRoot, err := h.StateRoot()
+	require.NoError(t, err)
+
+	// Sign state with warm key.
+	sigContent := &types.StateSignatureContent{
+		StateRoot: stateRoot,
+		EscrowId:  "escrow-1",
+		Nonce:     2,
+	}
+	sigData, merr := proto.Marshal(sigContent)
+	require.NoError(t, merr)
+	warmStateSig, err := warmSigner.Sign(sigData)
+	require.NoError(t, err)
+
+	// Build gossip nonce request.
+	nonceReq := GossipNonceRequest{
+		Nonce:     2,
+		StateHash: stateRoot,
+		StateSig:  warmStateSig,
+		SlotID:    0,
+	}
+	body, err := json.Marshal(nonceReq)
+	require.NoError(t, err)
+
+	// Sign the HTTP request with warm key (warm key is a group member via bridge).
+	ts := time.Now().Unix()
+	sig, err := SignRequest(warmSigner, "escrow-1", body, ts)
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/subnet/v1/sessions/escrow-1/gossip/nonce", strings.NewReader(string(body)))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(HeaderSignature, hex.EncodeToString(sig))
+	req.Header.Set(HeaderTimestamp, fmt.Sprintf("%d", ts))
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code, "warm key gossip nonce should succeed, got: %s", rec.Body.String())
 }

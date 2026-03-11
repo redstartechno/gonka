@@ -28,7 +28,7 @@ func setupClientTestEnv(t *testing.T) (*HTTPClient, *httptest.Server, *signing.S
 	sm := state.NewStateMachine("escrow-1", config, group, 100000, userSigner.Address(), verifier)
 	engine := stub.NewInferenceEngine()
 	store := storage.NewMemory()
-	require.NoError(t, store.CreateSession("escrow-1", config, group, 100000))
+	require.NoError(t, store.CreateSession(storage.CreateSessionParams{EscrowID: "escrow-1", Config: config, Group: group, InitialBalance: 100000}))
 
 	h, err := host.NewHost(sm, hostSigner, engine, "escrow-1", group, nil, host.WithGrace(100), host.WithStorage(store))
 	require.NoError(t, err)

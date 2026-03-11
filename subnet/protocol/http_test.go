@@ -62,7 +62,7 @@ func setupHTTPEnv(t *testing.T, numHosts int, balance, grace uint64, cfgs ...typ
 		sm := state.NewStateMachine("escrow-1", config, group, balance, userSigner.Address(), verifier)
 		engine := stub.NewInferenceEngine()
 		store := storage.NewMemory()
-		require.NoError(t, store.CreateSession("escrow-1", config, group, balance))
+		require.NoError(t, store.CreateSession(storage.CreateSessionParams{EscrowID: "escrow-1", Config: config, Group: group, InitialBalance: balance}))
 		stores[i] = store
 
 		h, err := host.NewHost(sm, hostSigners[i], engine, "escrow-1", group, nil,

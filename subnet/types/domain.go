@@ -91,9 +91,10 @@ type Diff struct {
 // DiffRecord is the storage representation: Diff + computed metadata.
 type DiffRecord struct {
 	Diff
-	StateHash  []byte
-	Signatures map[uint32][]byte
-	CreatedAt  int64
+	StateHash    []byte
+	Signatures   map[uint32][]byte
+	WarmKeyDelta map[uint32]string // warm key bindings introduced at this nonce
+	CreatedAt    int64
 }
 
 // SlotAssignment maps a slot to a validator in the session group.

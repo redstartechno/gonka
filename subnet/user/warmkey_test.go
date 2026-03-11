@@ -74,12 +74,20 @@ func setupWarmKeySession(t *testing.T, n int) (*Session, []*signing.Secp256k1Sig
 func TestProcessResponse_WarmKey_Accepted(t *testing.T) {
 	session, _, _ := setupWarmKeySession(t, 3)
 
-	_, err := session.SendInference(context.Background(), defaultParams)
+	ctx := context.Background()
+	_, err := session.SendInference(ctx, defaultParams)
 	require.NoError(t, err, "warm key should be accepted by resolver")
 	require.NotEmpty(t, session.Signatures())
 
+	// State sig verification uses CheckWarmKey (non-mutating), so the
+	// user's SM won't have warm keys cached yet. They'll be cached when
+	// the next diff applies a tx signed by a warm key (e.g. MsgConfirmStart).
+	// Send a second inference to include the receipt from the first.
+	_, err = session.SendInference(ctx, defaultParams)
+	require.NoError(t, err)
+
 	wk := session.StateMachine().WarmKeys()
-	require.NotEmpty(t, wk, "warm key binding should be cached")
+	require.NotEmpty(t, wk, "warm key binding should be cached after applying confirm")
 }
 
 func TestProcessResponse_WarmKey_Rejected(t *testing.T) {
