@@ -121,7 +121,7 @@ func (s *SQLite) CreateSession(params CreateSessionParams) error {
 	}
 
 	_, err = s.writeDB.Exec(
-		`INSERT INTO sessions (escrow_id, creator_addr, config_json, group_json, initial_balance)
+		`INSERT OR IGNORE INTO sessions (escrow_id, creator_addr, config_json, group_json, initial_balance)
 		 VALUES (?, ?, ?, ?, ?)`,
 		params.EscrowID, params.CreatorAddr, string(configJSON), string(groupJSON), params.InitialBalance,
 	)
@@ -263,7 +263,7 @@ func (s *SQLite) GetSessionMeta(escrowID string) (*SessionMeta, error) {
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("session %s not found", escrowID)
+			return nil, fmt.Errorf("%w: %s", ErrSessionNotFound, escrowID)
 		}
 		return nil, err
 	}

@@ -97,6 +97,23 @@ type DiffRecord struct {
 	CreatedAt    int64
 }
 
+// ComputeWarmKeyDelta returns entries in after that are not in before.
+func ComputeWarmKeyDelta(before, after map[uint32]string) map[uint32]string {
+	if len(after) == 0 {
+		return nil
+	}
+	var delta map[uint32]string
+	for slotID, addr := range after {
+		if before[slotID] != addr {
+			if delta == nil {
+				delta = make(map[uint32]string)
+			}
+			delta[slotID] = addr
+		}
+	}
+	return delta
+}
+
 // SlotAssignment maps a slot to a validator in the session group.
 // SlotIDs must be compact indices 0..len(group)-1 (required by Bitmap128).
 type SlotAssignment struct {

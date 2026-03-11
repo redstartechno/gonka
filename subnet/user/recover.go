@@ -14,6 +14,7 @@ import (
 // It loads session metadata and diffs, replays them through a fresh
 // StateMachine, and restores nonce, signatures, and diff history.
 // The group parameter must match the stored group; a mismatch returns an error.
+// Optional SMOptions (e.g. WithWarmKeyResolver) are forwarded to NewStateMachine.
 func RecoverSession(
 	store storage.Storage,
 	signer signing.Signer,
@@ -21,6 +22,7 @@ func RecoverSession(
 	escrowID string,
 	group []types.SlotAssignment,
 	clients []HostClient,
+	smOpts ...state.SMOption,
 ) (*Session, *state.StateMachine, error) {
 	meta, err := store.GetSessionMeta(escrowID)
 	if err != nil {
@@ -39,6 +41,7 @@ func RecoverSession(
 	sm := state.NewStateMachine(
 		escrowID, meta.Config, meta.Group, meta.InitialBalance,
 		meta.CreatorAddr, verifier,
+		smOpts...,
 	)
 
 	sess, err := NewSession(sm, signer, escrowID, meta.Group, clients, verifier, WithStorage(store))
@@ -56,6 +59,7 @@ func RecoverSession(
 	}
 
 	for _, rec := range records {
+		sm.InjectWarmKeys(rec.WarmKeyDelta)
 		root, applyErr := sm.ApplyLocal(rec.Nonce, rec.Txs)
 		if applyErr != nil {
 			return nil, nil, fmt.Errorf("replay nonce %d: %w", rec.Nonce, applyErr)

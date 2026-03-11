@@ -177,30 +177,28 @@ func (m *HostManager) recoverSession(escrowID string) error {
 	if err != nil {
 		return fmt.Errorf("get session meta: %w", err)
 	}
-	if meta.LatestNonce == 0 {
-		return nil // no diffs to replay
-	}
-
-	records, err := m.store.GetDiffs(escrowID, 1, meta.LatestNonce)
-	if err != nil {
-		return fmt.Errorf("get diffs: %w", err)
-	}
-
 	sm := state.NewStateMachine(
 		escrowID, meta.Config, meta.Group, meta.InitialBalance,
 		meta.CreatorAddr, m.verifier,
 		state.WithWarmKeyResolver(m.bridge.VerifyWarmKey),
 	)
 
-	for _, rec := range records {
-		sm.InjectWarmKeys(rec.WarmKeyDelta)
-		root, applyErr := sm.ApplyLocal(rec.Nonce, rec.Txs)
-		if applyErr != nil {
-			return fmt.Errorf("replay nonce %d: %w", rec.Nonce, applyErr)
+	if meta.LatestNonce > 0 {
+		records, err := m.store.GetDiffs(escrowID, 1, meta.LatestNonce)
+		if err != nil {
+			return fmt.Errorf("get diffs: %w", err)
 		}
-		if len(rec.StateHash) > 0 && len(root) > 0 {
-			if !bytes.Equal(root, rec.StateHash) {
-				return fmt.Errorf("state root mismatch at nonce %d", rec.Nonce)
+
+		for _, rec := range records {
+			sm.InjectWarmKeys(rec.WarmKeyDelta)
+			root, applyErr := sm.ApplyLocal(rec.Nonce, rec.Txs)
+			if applyErr != nil {
+				return fmt.Errorf("replay nonce %d: %w", rec.Nonce, applyErr)
+			}
+			if len(rec.StateHash) > 0 && len(root) > 0 {
+				if !bytes.Equal(root, rec.StateHash) {
+					return fmt.Errorf("state root mismatch at nonce %d", rec.Nonce)
+				}
 			}
 		}
 	}

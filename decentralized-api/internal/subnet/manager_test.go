@@ -97,8 +97,6 @@ func newManagerTestStore(t *testing.T) *storage.SQLite {
 	return db
 }
 
-// populateStore creates a session and appends diffs using a real state machine
-// so that replay produces consistent state hashes.
 // populateStore creates a session and appends diffs. Returns group, user signer,
 // and the first host signer (for use as HostManager signer -- must be in group).
 func populateStore(t *testing.T, store storage.Storage, numDiffs int) ([]types.SlotAssignment, *signing.Secp256k1Signer, *signing.Secp256k1Signer) {
@@ -170,6 +168,56 @@ func TestRecoverSessions_HappyPath(t *testing.T) {
 	require.True(t, ok, "session should exist after recovery")
 	require.NotNil(t, entry.host)
 	require.NotNil(t, entry.server)
+}
+
+func TestRecoverSessions_Nonce0(t *testing.T) {
+	store := newManagerTestStore(t)
+	hosts := make([]*signing.Secp256k1Signer, 3)
+	for i := range hosts {
+		hosts[i] = mustGenerateKey(t)
+	}
+	user := mustGenerateKey(t)
+	group := makeGroup(hosts)
+
+	// Create a session with no diffs (nonce 0).
+	require.NoError(t, store.CreateSession(storage.CreateSessionParams{
+		EscrowID:       "escrow-1",
+		CreatorAddr:    user.Address(),
+		Config:         defaultConfig(3),
+		Group:          group,
+		InitialBalance: 100000,
+	}))
+
+	addresses := make([]string, len(group))
+	for i, s := range group {
+		addresses[i] = s.ValidatorAddress
+	}
+
+	br := &mockBridge{
+		escrow: &bridge.EscrowInfo{
+			EscrowID:       "escrow-1",
+			Amount:         100000,
+			CreatorAddress: user.Address(),
+			Slots:          addresses,
+		},
+	}
+
+	mgr := NewHostManager(store, hosts[0], stub.NewInferenceEngine(), stub.NewValidationEngine(), br, nil, nil)
+	err := mgr.RecoverSessions()
+	require.NoError(t, err)
+
+	// Session must be registered despite nonce 0.
+	mgr.mu.RLock()
+	entry, ok := mgr.sessions["escrow-1"]
+	mgr.mu.RUnlock()
+	require.True(t, ok, "nonce-0 session must be registered after recovery")
+	require.NotNil(t, entry.host)
+	require.NotNil(t, entry.server)
+
+	// Subsequent getOrCreate must return the same entry without error.
+	entry2, err := mgr.getOrCreate("escrow-1")
+	require.NoError(t, err)
+	require.Equal(t, entry, entry2)
 }
 
 func TestRecoverSessions_EmptyStore(t *testing.T) {

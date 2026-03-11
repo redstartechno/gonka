@@ -64,7 +64,7 @@ func (m *Memory) CreateSession(params CreateSessionParams) error {
 	defer m.mu.Unlock()
 
 	if _, exists := m.sessions[params.EscrowID]; exists {
-		return fmt.Errorf("session %s already exists", params.EscrowID)
+		return nil
 	}
 
 	m.sessions[params.EscrowID] = &sessionData{
@@ -153,7 +153,7 @@ func (m *Memory) GetSessionMeta(escrowID string) (*SessionMeta, error) {
 
 	s, ok := m.sessions[escrowID]
 	if !ok {
-		return nil, fmt.Errorf("session %s not found", escrowID)
+		return nil, fmt.Errorf("%w: %s", ErrSessionNotFound, escrowID)
 	}
 
 	meta := &SessionMeta{

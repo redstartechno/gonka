@@ -276,6 +276,8 @@ func (s *Session) PrepareInference(params InferenceParams) (*preparedInference, 
 	}
 
 	// Apply locally to compute post_state_root, then sign.
+	// Snapshot warm keys before/after to capture delta for replay.
+	warmBefore := s.sm.WarmKeys()
 	postStateRoot, err := s.sm.ApplyLocal(nonce, txs)
 	if err != nil {
 		return nil, fmt.Errorf("local apply: %w", err)
@@ -290,9 +292,12 @@ func (s *Session) PrepareInference(params InferenceParams) (*preparedInference, 
 	s.clearPendingTxs()
 
 	if s.store != nil {
+		warmAfter := s.sm.WarmKeys()
+		delta := types.ComputeWarmKeyDelta(warmBefore, warmAfter)
 		if err := s.store.AppendDiff(s.escrowID, types.DiffRecord{
-			Diff:      diff,
-			StateHash: postStateRoot,
+			Diff:         diff,
+			StateHash:    postStateRoot,
+			WarmKeyDelta: delta,
 		}); err != nil {
 			return nil, fmt.Errorf("persist diff: %w", err)
 		}

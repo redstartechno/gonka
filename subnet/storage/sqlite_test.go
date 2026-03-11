@@ -27,6 +27,10 @@ func TestSQLite_CreateSession_GetSessionMeta(t *testing.T) {
 	runCreateSession_GetSessionMeta(t, newTestSQLite(t))
 }
 
+func TestSQLite_CreateSession_Idempotent(t *testing.T) {
+	runCreateSession_Idempotent(t, newTestSQLite(t))
+}
+
 func TestSQLite_AppendDiff_GetDiffs(t *testing.T) {
 	runAppendDiff_GetDiffs(t, newTestSQLite(t))
 }

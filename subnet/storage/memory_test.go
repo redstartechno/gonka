@@ -6,6 +6,10 @@ func TestMemory_CreateSession_GetSessionMeta(t *testing.T) {
 	runCreateSession_GetSessionMeta(t, NewMemory())
 }
 
+func TestMemory_CreateSession_Idempotent(t *testing.T) {
+	runCreateSession_Idempotent(t, NewMemory())
+}
+
 func TestMemory_AppendDiff_GetDiffs(t *testing.T) {
 	runAppendDiff_GetDiffs(t, NewMemory())
 }

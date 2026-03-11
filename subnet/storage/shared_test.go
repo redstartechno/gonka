@@ -52,6 +52,23 @@ func runCreateSession_GetSessionMeta(t *testing.T, store Storage) {
 	require.Equal(t, "active", meta.Status)
 }
 
+func runCreateSession_Idempotent(t *testing.T, store Storage) {
+	t.Helper()
+
+	err := store.CreateSession(defaultParams())
+	require.NoError(t, err)
+
+	// Second call with same params must not error.
+	err = store.CreateSession(defaultParams())
+	require.NoError(t, err)
+
+	// Data from first call must be intact.
+	meta, err := store.GetSessionMeta("escrow-1")
+	require.NoError(t, err)
+	require.Equal(t, "escrow-1", meta.EscrowID)
+	require.Equal(t, uint64(1000), meta.InitialBalance)
+}
+
 func runAppendDiff_GetDiffs(t *testing.T, store Storage) {
 	t.Helper()
 

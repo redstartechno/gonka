@@ -1,6 +1,7 @@
 package user
 
 import (
+	"errors"
 	"fmt"
 
 	"subnet/bridge"
@@ -69,15 +70,21 @@ func NewHTTPSession(cfg HTTPSessionConfig) (*Session, *state.StateMachine, error
 		}
 		opts = append(opts, WithStorage(sqlStore))
 
-		// Check if there are existing diffs to recover from.
-		meta, metaErr := sqlStore.GetSessionMeta(cfg.EscrowID)
-		if metaErr == nil && meta.LatestNonce > 0 {
-			session, recSM, recErr := RecoverSession(sqlStore, signer, verifier, cfg.EscrowID, group, clients)
+		// Check if there is an existing session to recover from.
+		_, metaErr := sqlStore.GetSessionMeta(cfg.EscrowID)
+		if metaErr == nil {
+			session, recSM, recErr := RecoverSession(sqlStore, signer, verifier, cfg.EscrowID, group, clients,
+				state.WithWarmKeyResolver(cfg.Bridge.VerifyWarmKey),
+			)
 			if recErr != nil {
 				sqlStore.Close()
 				return nil, nil, fmt.Errorf("recover session: %w", recErr)
 			}
 			return session, recSM, nil
+		}
+		if !errors.Is(metaErr, storage.ErrSessionNotFound) {
+			sqlStore.Close()
+			return nil, nil, fmt.Errorf("check existing session: %w", metaErr)
 		}
 
 		// First run: create the session row so AppendDiff works later.

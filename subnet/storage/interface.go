@@ -1,6 +1,13 @@
 package storage
 
-import "subnet/types"
+import (
+	"errors"
+
+	"subnet/types"
+)
+
+// ErrSessionNotFound is returned when a session does not exist in storage.
+var ErrSessionNotFound = errors.New("session not found")
 
 // Storage persists subnet session state and diffs.
 type Storage interface {

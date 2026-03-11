@@ -321,30 +321,13 @@ func (h *Host) applyAndPersist(diff types.Diff) error {
 
 	if h.store != nil {
 		warmAfter := h.sm.WarmKeys()
-		delta := computeWarmKeyDelta(warmBefore, warmAfter)
+		delta := types.ComputeWarmKeyDelta(warmBefore, warmAfter)
 		rec := types.DiffRecord{Diff: diff, StateHash: root, WarmKeyDelta: delta}
 		if err := h.store.AppendDiff(h.escrowID, rec); err != nil {
 			return fmt.Errorf("persist diff nonce %d: %w", diff.Nonce, err)
 		}
 	}
 	return nil
-}
-
-// computeWarmKeyDelta returns entries in after that are not in before.
-func computeWarmKeyDelta(before, after map[uint32]string) map[uint32]string {
-	if len(after) == 0 {
-		return nil
-	}
-	var delta map[uint32]string
-	for slotID, addr := range after {
-		if before[slotID] != addr {
-			if delta == nil {
-				delta = make(map[uint32]string)
-			}
-			delta[slotID] = addr
-		}
-	}
-	return delta
 }
 
 // signIfAccepted computes state root, checks acceptance, signs if allowed,
