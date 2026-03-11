@@ -28,10 +28,9 @@ type ValidateRequest struct {
 	OutputTokens uint64
 
 	// Fields for remote payload retrieval (subnet validation)
-	EscrowID        string   // Session escrow ID for building the payload URL path
-	EpochID         uint64   // Epoch when the executor stored the payload
-	ExecutorAddress string   // Executor's validator address for signature verification
-	ExecutorPubKeys [][]byte // Executor's raw pubkeys (cold key + warm keys) for signature verification
+	EscrowID        string // Session escrow ID for building the payload URL path
+	EpochID         uint64 // Epoch when the executor stored the payload
+	ExecutorAddress string // Executor's validator address for signature verification
 }
 
 // ValidateResult contains the outcome of a validation.

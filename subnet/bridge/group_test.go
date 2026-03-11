@@ -14,7 +14,6 @@ type mockBridge struct {
 	escrowErr error
 	hosts     map[string]*HostInfo
 	hostErr   error
-	pubkeys   map[string][]byte
 }
 
 func (m *mockBridge) GetEscrow(_ string) (*EscrowInfo, error) {
@@ -29,13 +28,6 @@ func (m *mockBridge) GetHostInfo(addr string) (*HostInfo, error) {
 		return nil, ErrParticipantNotFound
 	}
 	return info, nil
-}
-func (m *mockBridge) GetAccountPubKey(addr string) ([]byte, error) {
-	pk, ok := m.pubkeys[addr]
-	if !ok {
-		return nil, ErrParticipantNotFound
-	}
-	return pk, nil
 }
 func (m *mockBridge) VerifyWarmKey(_, _ string) (bool, error) {
 	return false, ErrNotImplemented
@@ -53,11 +45,6 @@ func TestBuildGroup_HappyPath(t *testing.T) {
 			EscrowID: "1",
 			Slots:    []string{"valA", "valB", "valC"},
 		},
-		pubkeys: map[string][]byte{
-			"valA": {1},
-			"valB": {2},
-			"valC": {3},
-		},
 	}
 
 	group, err := BuildGroup("1", b)
@@ -69,34 +56,20 @@ func TestBuildGroup_HappyPath(t *testing.T) {
 	}
 	assert.Equal(t, "valA", group[0].ValidatorAddress)
 	assert.Equal(t, "valC", group[2].ValidatorAddress)
-	assert.Equal(t, []byte{2}, group[1].PublicKey)
 }
 
-func TestBuildGroup_Deduplication(t *testing.T) {
-	queriedAddrs := make(map[string]int)
-
+func TestBuildGroup_DuplicateAddresses(t *testing.T) {
 	b := &mockBridge{
 		escrow: &EscrowInfo{
 			EscrowID: "1",
 			// valA appears in slots 0, 1, and 3
 			Slots: []string{"valA", "valA", "valB", "valA"},
 		},
-		pubkeys: map[string][]byte{
-			"valA": {1},
-			"valB": {2},
-		},
 	}
 
-	// Wrap to count queries
-	wrapper := &queryCountBridge{inner: b, counts: queriedAddrs}
-
-	group, err := BuildGroup("1", wrapper)
+	group, err := BuildGroup("1", b)
 	require.NoError(t, err)
 	require.Len(t, group, 4)
-
-	// valA should only be queried once despite appearing 3 times
-	assert.Equal(t, 1, queriedAddrs["valA"])
-	assert.Equal(t, 1, queriedAddrs["valB"])
 
 	// All slots should have correct SlotID
 	for i, slot := range group {
@@ -115,58 +88,11 @@ func TestBuildGroup_EscrowError(t *testing.T) {
 	assert.ErrorIs(t, err, ErrEscrowNotFound)
 }
 
-func TestBuildGroup_PubKeyError(t *testing.T) {
-	b := &mockBridge{
-		escrow: &EscrowInfo{
-			EscrowID: "1",
-			Slots:    []string{"valA", "missing"},
-		},
-		pubkeys: map[string][]byte{
-			"valA": {1},
-		},
-	}
-	_, err := BuildGroup("1", b)
-	assert.ErrorIs(t, err, ErrParticipantNotFound)
-}
-
-// queryCountBridge wraps a MainnetBridge to count GetAccountPubKey calls.
-type queryCountBridge struct {
-	inner  MainnetBridge
-	counts map[string]int
-}
-
-func (q *queryCountBridge) GetEscrow(id string) (*EscrowInfo, error) {
-	return q.inner.GetEscrow(id)
-}
-func (q *queryCountBridge) GetHostInfo(addr string) (*HostInfo, error) {
-	return q.inner.GetHostInfo(addr)
-}
-func (q *queryCountBridge) GetAccountPubKey(addr string) ([]byte, error) {
-	q.counts[addr]++
-	return q.inner.GetAccountPubKey(addr)
-}
-func (q *queryCountBridge) VerifyWarmKey(w, v string) (bool, error) {
-	return q.inner.VerifyWarmKey(w, v)
-}
-func (q *queryCountBridge) OnEscrowCreated(e EscrowInfo) error { return q.inner.OnEscrowCreated(e) }
-func (q *queryCountBridge) OnSettlementProposed(id string, sr []byte, n uint64) error {
-	return q.inner.OnSettlementProposed(id, sr, n)
-}
-func (q *queryCountBridge) OnSettlementFinalized(id string) error {
-	return q.inner.OnSettlementFinalized(id)
-}
-func (q *queryCountBridge) SubmitDisputeState(id string, sr []byte, n uint64, sigs map[uint32][]byte) error {
-	return q.inner.SubmitDisputeState(id, sr, n, sigs)
-}
-
 func TestBuildGroup_ValidateGroupPasses(t *testing.T) {
 	b := &mockBridge{
 		escrow: &EscrowInfo{
 			EscrowID: "1",
 			Slots:    []string{"valA"},
-		},
-		pubkeys: map[string][]byte{
-			"valA": {1},
 		},
 	}
 

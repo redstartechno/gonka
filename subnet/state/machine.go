@@ -268,14 +268,7 @@ func (sm *StateMachine) SnapshotState() types.EscrowState {
 
 	// Deep copy Group.
 	s.Group = make([]types.SlotAssignment, len(sm.state.Group))
-	for i, sa := range sm.state.Group {
-		cp := sa
-		if sa.PublicKey != nil {
-			cp.PublicKey = make([]byte, len(sa.PublicKey))
-			copy(cp.PublicKey, sa.PublicKey)
-		}
-		s.Group[i] = cp
-	}
+	copy(s.Group, sm.state.Group)
 
 	// Deep copy HostStats.
 	s.HostStats = make(map[uint32]*types.HostStats, len(sm.state.HostStats))

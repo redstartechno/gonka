@@ -1,7 +1,6 @@
 package bridge
 
 import (
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -171,31 +170,6 @@ func (b *RESTBridge) VerifyWarmKey(warmAddress, validatorAddress string) (bool, 
 	}
 	b.warmCache.Store(key, found)
 	return found, nil
-}
-
-// accountResponse matches the Cosmos auth /accounts/{address} REST response.
-type accountResponse struct {
-	Account struct {
-		PubKey *struct {
-			Key string `json:"key"` // base64-encoded compressed secp256k1 pubkey
-		} `json:"pub_key"`
-	} `json:"account"`
-}
-
-func (b *RESTBridge) GetAccountPubKey(address string) ([]byte, error) {
-	u := fmt.Sprintf("%s/cosmos/auth/v1beta1/accounts/%s", b.baseURL, address)
-	resp, err := doGet[accountResponse](b.client, u)
-	if err != nil {
-		return nil, err
-	}
-	if resp == nil || resp.Account.PubKey == nil || resp.Account.PubKey.Key == "" {
-		return nil, fmt.Errorf("no public key for %s", address)
-	}
-	pubKey, err := base64.StdEncoding.DecodeString(resp.Account.PubKey.Key)
-	if err != nil {
-		return nil, fmt.Errorf("decode account pubkey: %w", err)
-	}
-	return pubKey, nil
 }
 
 // -- stubs --

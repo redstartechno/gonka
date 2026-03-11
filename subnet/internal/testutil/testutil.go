@@ -38,7 +38,6 @@ func MakeGroup(signers []*signing.Secp256k1Signer) []types.SlotAssignment {
 		group[i] = types.SlotAssignment{
 			SlotID:           uint32(i),
 			ValidatorAddress: s.Address(),
-			PublicKey:        s.PublicKeyBytes(),
 		}
 	}
 	return group
@@ -132,7 +131,6 @@ func MakeMultiSlotGroup(signers []*signing.Secp256k1Signer, slotsPerSigner []int
 			group = append(group, types.SlotAssignment{
 				SlotID:           slotID,
 				ValidatorAddress: s.Address(),
-				PublicKey:        s.PublicKeyBytes(),
 			})
 			slotID++
 		}

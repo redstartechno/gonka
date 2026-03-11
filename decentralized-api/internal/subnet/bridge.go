@@ -2,7 +2,6 @@ package subnet
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"strconv"
@@ -89,26 +88,6 @@ func (b *ChainBridge) VerifyWarmKey(warmAddress, validatorAddress string) (bool,
 		}
 	}
 	return false, nil
-}
-
-func (b *ChainBridge) GetAccountPubKey(address string) ([]byte, error) {
-	ctx := context.Background()
-	qc := b.client.NewInferenceQueryClient()
-
-	resp, err := qc.InferenceParticipant(ctx, &types.QueryInferenceParticipantRequest{
-		Address: address,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("query inference participant: %w", err)
-	}
-	if resp.Pubkey == "" {
-		return nil, fmt.Errorf("no public key for %s", address)
-	}
-	pubKey, err := base64.StdEncoding.DecodeString(resp.Pubkey)
-	if err != nil {
-		return nil, fmt.Errorf("decode account pubkey: %w", err)
-	}
-	return pubKey, nil
 }
 
 func (b *ChainBridge) OnEscrowCreated(_ bridge.EscrowInfo) error { return bridge.ErrNotImplemented }

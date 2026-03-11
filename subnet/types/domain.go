@@ -101,7 +101,6 @@ type DiffRecord struct {
 type SlotAssignment struct {
 	SlotID           uint32
 	ValidatorAddress string
-	PublicKey        []byte
 }
 
 // ValidateGroup checks that group[i].SlotID == i for all entries, group size

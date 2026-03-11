@@ -3,7 +3,6 @@ package subnet
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -20,6 +19,7 @@ import (
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/productscience/inference/cmd/inferenced/cmd"
 	"github.com/productscience/inference/x/inference/calculations"
+	chaintypes "github.com/productscience/inference/x/inference/types"
 
 	"subnet"
 	"subnet/bridge"
@@ -172,10 +172,10 @@ func (v *ValidationAdapter) fetchPayloadsFromExecutor(ctx context.Context, req s
 		return nil, nil, err
 	}
 
-	// Base64-encode raw pubkeys for signature verification
-	encodedPubKeys := make([]string, len(req.ExecutorPubKeys))
-	for i, pk := range req.ExecutorPubKeys {
-		encodedPubKeys[i] = base64.StdEncoding.EncodeToString(pk)
+	// Resolve executor pubkeys from chain (cold key + warm keys)
+	encodedPubKeys, err := v.resolveExecutorPubKeys(ctx, req.ExecutorAddress)
+	if err != nil {
+		return nil, nil, fmt.Errorf("resolve executor pubkeys: %w", err)
 	}
 
 	// Verify executor signature
@@ -204,6 +204,37 @@ func (v *ValidationAdapter) fetchPayloadsFromExecutor(ctx context.Context, req s
 	}
 
 	return payloadResp.PromptPayload, payloadResp.ResponsePayload, nil
+}
+
+// resolveExecutorPubKeys queries InferenceParticipant (cold key) and
+// GranteesByMessageType (warm keys) to collect all pubkeys that the executor
+// might use to sign payloads. Returns base64-encoded pubkey strings.
+func (v *ValidationAdapter) resolveExecutorPubKeys(ctx context.Context, executorAddress string) ([]string, error) {
+	qc := v.recorder.NewInferenceQueryClient()
+
+	grantees, err := qc.GranteesByMessageType(ctx, &chaintypes.QueryGranteesByMessageTypeRequest{
+		GranterAddress: executorAddress,
+		MessageTypeUrl: "/inference.inference.MsgStartInference",
+	})
+	if err != nil {
+		return nil, fmt.Errorf("query executor grantees: %w", err)
+	}
+	pubkeys := make([]string, 0, len(grantees.Grantees)+1)
+	for _, g := range grantees.Grantees {
+		pubkeys = append(pubkeys, g.PubKey)
+	}
+
+	participant, err := qc.InferenceParticipant(ctx, &chaintypes.QueryInferenceParticipantRequest{
+		Address: executorAddress,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("query executor participant: %w", err)
+	}
+	if participant.Pubkey != "" {
+		pubkeys = append(pubkeys, participant.Pubkey)
+	}
+
+	return pubkeys, nil
 }
 
 // signPayloadRequest signs the payload retrieval request.

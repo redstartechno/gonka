@@ -553,7 +553,6 @@ type validateJob struct {
 	outputTokens    uint64
 	escrowID        string
 	executorAddress string
-	executorPubKeys [][]byte
 	epochID         uint64
 }
 
@@ -610,15 +609,6 @@ func (h *Host) collectValidationJobs() []validateJob {
 		// Pick first owned slot as the validator slot (deterministic).
 		validatorSlot := h.sortedSlots[0]
 
-		// Collect executor pubkeys for signature verification.
-		// Include pubkeys from all slots owned by the executor address.
-		var executorPubKeys [][]byte
-		for _, slot := range h.group {
-			if slot.ValidatorAddress == executorAddr && len(slot.PublicKey) > 0 {
-				executorPubKeys = append(executorPubKeys, slot.PublicKey)
-			}
-		}
-
 		h.validating[infID] = struct{}{}
 		jobs = append(jobs, validateJob{
 			inferenceID:     infID,
@@ -630,7 +620,6 @@ func (h *Host) collectValidationJobs() []validateJob {
 			outputTokens:    rec.OutputTokens,
 			escrowID:        h.escrowID,
 			executorAddress: executorAddr,
-			executorPubKeys: executorPubKeys,
 			epochID:         0, // ValidationAdapter will use its own phaseTracker
 		})
 	}
@@ -669,7 +658,6 @@ func (h *Host) validateAsync(ctx context.Context, job validateJob) {
 		OutputTokens:    job.outputTokens,
 		EscrowID:        job.escrowID,
 		ExecutorAddress: job.executorAddress,
-		ExecutorPubKeys: job.executorPubKeys,
 		EpochID:         job.epochID,
 	})
 	if err != nil {

@@ -20,12 +20,7 @@ func copySignatures(src map[uint32][]byte) map[uint32][]byte {
 
 func copyGroup(src []types.SlotAssignment) []types.SlotAssignment {
 	dst := make([]types.SlotAssignment, len(src))
-	for i, s := range src {
-		dst[i] = s
-		if s.PublicKey != nil {
-			dst[i].PublicKey = append([]byte(nil), s.PublicKey...)
-		}
-	}
+	copy(dst, src)
 	return dst
 }
 
