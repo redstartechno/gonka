@@ -12,6 +12,10 @@ import (
 )
 
 func (k msgServer) CreateSubnetEscrow(goCtx context.Context, msg *types.MsgCreateSubnetEscrow) (*types.MsgCreateSubnetEscrowResponse, error) {
+	if err := k.CheckPermission(goCtx, msg, NoPermission); err != nil {
+		return nil, err
+	}
+
 	ctx := sdk.UnwrapSDKContext(goCtx)
 
 	ep := k.GetSubnetEscrowParams(goCtx)

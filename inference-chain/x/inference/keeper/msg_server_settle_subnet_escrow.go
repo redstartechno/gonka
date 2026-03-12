@@ -9,6 +9,10 @@ import (
 )
 
 func (k msgServer) SettleSubnetEscrow(goCtx context.Context, msg *types.MsgSettleSubnetEscrow) (*types.MsgSettleSubnetEscrowResponse, error) {
+	if err := k.CheckPermission(goCtx, msg, NoPermission); err != nil {
+		return nil, err
+	}
+
 	ctx := sdk.UnwrapSDKContext(goCtx)
 
 	escrow, found := k.GetSubnetEscrow(goCtx, msg.EscrowId)

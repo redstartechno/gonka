@@ -17,6 +17,7 @@ import (
 	"decentralized-api/payloadstorage"
 	"decentralized-api/poc"
 	"decentralized-api/poc/artifacts"
+	"decentralized-api/statsstorage"
 	"net"
 
 	"github.com/productscience/inference/api/inference/inference"
@@ -150,12 +151,33 @@ func main() {
 	// Start periodic config auto-flush of dynamic data to DB
 	config.StartAutoFlush(ctx, 60*time.Second)
 
+	// Optional off-chain inference stats storage (PostgreSQL-backed when PGHOST is configured).
+	statsStore, err := statsstorage.NewStatsStorage(ctx)
+	if err != nil {
+		logging.Error("Failed to initialize stats storage", types.System, "error", err)
+		return
+	}
+	if statsStore != nil {
+		defer statsStore.Close()
+	}
+
 	training.NewAssigner(recorder, &tendermintClient, ctx)
 	trainingExecutor := training.NewExecutor(ctx, nodeBroker, recorder)
 
 	validator := validation.NewInferenceValidator(nodeBroker, config, recorder, chainPhaseTracker)
 	blsManager := bls.NewBlsManager(*recorder)
-	listener := event_listener.NewEventListener(config, pocOrchestrator, nodeBroker, validator, *recorder, trainingExecutor, chainPhaseTracker, cancel, blsManager)
+	listener := event_listener.NewEventListener(
+		config,
+		pocOrchestrator,
+		nodeBroker,
+		validator,
+		*recorder,
+		trainingExecutor,
+		chainPhaseTracker,
+		cancel,
+		blsManager,
+		event_listener.WithStatsStorage(statsStore),
+	)
 	// TODO: propagate trainingExecutor
 	go listener.Start(ctx)
 
@@ -200,7 +222,17 @@ func main() {
 		logging.Error("subnet signer init failed", types.System, "error", subnetSignerErr)
 	}
 
-	publicServer := pserver.NewServer(nodeBroker, config, recorder, trainingExecutor, blockQueue, chainPhaseTracker, payloadStore, pserver.WithArtifactStore(artifactStore))
+	publicServer := pserver.NewServer(
+		nodeBroker,
+		config,
+		recorder,
+		trainingExecutor,
+		blockQueue,
+		chainPhaseTracker,
+		payloadStore,
+		pserver.WithArtifactStore(artifactStore),
+		pserver.WithStatsStorage(statsStore),
+	)
 
 	if subnetSigner != nil {
 		subnetBridge := internalsubnet.NewChainBridge(recorder)
@@ -220,7 +252,6 @@ func main() {
 			hostManager.Register(publicServer.SubnetGroup())
 		}
 	}
-
 	publicServer.Start(addr)
 
 	addr = fmt.Sprintf(":%v", config.GetApiConfig().MLServerPort)

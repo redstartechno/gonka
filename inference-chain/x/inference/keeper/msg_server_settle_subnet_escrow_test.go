@@ -67,9 +67,11 @@ func TestSettleSubnetEscrow_AlreadySettled(t *testing.T) {
 	k, ms, ctx, _ := setupSubnetEscrowTest(t)
 	sdk.GetConfig().SetBech32PrefixForAccount("gonka", "gonka")
 
+	creator := sdk.AccAddress(make([]byte, 20))
+	creator[0] = 0xBB
 	escrow := types.SubnetEscrow{
 		Id:      1,
-		Creator: "gonka1creator",
+		Creator: creator.String(),
 		Settled: true,
 		Slots:   make([]string, keeper.SubnetGroupSize),
 	}
@@ -77,7 +79,7 @@ func TestSettleSubnetEscrow_AlreadySettled(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = ms.SettleSubnetEscrow(ctx, &types.MsgSettleSubnetEscrow{
-		Settler:  "gonka1creator",
+		Settler:  creator.String(),
 		EscrowId: 1,
 	})
 	require.Error(t, err)
@@ -88,16 +90,20 @@ func TestSettleSubnetEscrow_WrongSettler(t *testing.T) {
 	k, ms, ctx, _ := setupSubnetEscrowTest(t)
 	sdk.GetConfig().SetBech32PrefixForAccount("gonka", "gonka")
 
+	creator := sdk.AccAddress(make([]byte, 20))
+	creator[0] = 0xCC
+	wrongSettler := sdk.AccAddress(make([]byte, 20))
+	wrongSettler[0] = 0xDD
 	escrow := types.SubnetEscrow{
 		Id:      1,
-		Creator: "gonka1creator",
+		Creator: creator.String(),
 		Slots:   make([]string, keeper.SubnetGroupSize),
 	}
 	_, err := k.StoreSubnetEscrow(ctx, &escrow, 1)
 	require.NoError(t, err)
 
 	_, err = ms.SettleSubnetEscrow(ctx, &types.MsgSettleSubnetEscrow{
-		Settler:  "gonka1wrong",
+		Settler:  wrongSettler.String(),
 		EscrowId: 1,
 	})
 	require.Error(t, err)
