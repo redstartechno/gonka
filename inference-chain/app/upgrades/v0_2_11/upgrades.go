@@ -27,6 +27,12 @@ func CreateUpgradeHandler(
 	return func(ctx context.Context, plan upgradetypes.Plan, fromVM module.VersionMap) (module.VersionMap, error) {
 		k.LogInfo("starting upgrade", types.Upgrades, "version", UpgradeName)
 
+		// Keep capability module version explicit to avoid re-running InitGenesis
+		// on chains where capability state already exists but version map is missing.
+		if _, ok := fromVM["capability"]; !ok {
+			fromVM["capability"] = mm.Modules["capability"].(module.HasConsensusVersion).ConsensusVersion()
+		}
+
 		err := setParameters(ctx, k)
 		if err != nil {
 			return nil, err
@@ -122,7 +128,7 @@ func executeContractMigration(ctx context.Context, k keeper.Keeper, infoJSON str
 	migrateMsg := []byte(`{"allow_all_trade_tokens":true}`)
 
 	// Perform the actual contract migration via the Wasm Keeper
-	permissionedKeeper := wasmkeeper.NewDefaultPermissionKeeper(k.GetWasmKeeper())
+	permissionedKeeper := wasmkeeper.NewGovPermissionKeeper(k.GetWasmKeeper())
 	sdkCtx := sdk.UnwrapSDKContext(ctx)
 	_, err = permissionedKeeper.Migrate(sdkCtx, contractAddr, adminAddr, data.NewCodeID, migrateMsg)
 	if err != nil {
