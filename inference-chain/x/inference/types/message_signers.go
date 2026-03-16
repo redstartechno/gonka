@@ -71,5 +71,9 @@ func (msg *MsgClaimRewards) GetSignersStrings() []string            { return []s
 func (msg *MsgRequestBridgeMint) GetSignersStrings() []string       { return []string{msg.Creator} }
 func (msg *MsgRequestBridgeWithdrawal) GetSignersStrings() []string { return []string{msg.Creator} }
 
+// Subnet escrow messages
+func (msg *MsgCreateSubnetEscrow) GetSignersStrings() []string { return []string{msg.Creator} }
+func (msg *MsgSettleSubnetEscrow) GetSignersStrings() []string { return []string{msg.Settler} }
+
 // And one validator signed message?
 func (msg *MsgBridgeExchange) GetSignersStrings() []string { return []string{msg.Validator} }

@@ -959,7 +959,7 @@ func (s *InferenceValidator) validateWithPayloads(inference types.Inference, inf
 		return nil, errors.New("no logits found in original or validation response")
 	}
 
-	return compareLogits(originalLogits, validationLogits, baseResult), nil
+	return CompareLogits(originalLogits, validationLogits, baseResult), nil
 }
 
 func unmarshalResponse(inference *types.Inference) (completionapi.CompletionResponse, error) {
@@ -1050,7 +1050,7 @@ func (r InvalidInferenceResult) GetValidationResponseBytes() []byte {
 	return []byte{}
 }
 
-func compareLogits(
+func CompareLogits(
 	originalLogits []completionapi.Logprob,
 	validationLogits []completionapi.Logprob,
 	baseComparisonResult BaseValidationResult,

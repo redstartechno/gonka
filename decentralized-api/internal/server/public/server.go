@@ -165,6 +165,12 @@ func NewServer(
 	return s
 }
 
+// SubnetGroup returns an echo group for mounting subnet routes.
+// Mounted under /v1/subnet so nginx's existing /v1/ location proxies it.
+func (s *Server) SubnetGroup() *echo.Group {
+	return s.e.Group("/v1/subnet")
+}
+
 func (s *Server) Start(addr string) {
 	go s.e.Start(addr)
 }

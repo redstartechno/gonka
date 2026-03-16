@@ -76,6 +76,8 @@ data class InferenceParams(
     val confirmationPocParams: ConfirmationPoCParams? = null,
     @SerializedName("transfer_agent_access_params")
     val transferAgentAccessParams: TransferAgentAccessParams? = null,
+    @SerializedName("subnet_escrow_params")
+    val subnetEscrowParams: SubnetEscrowParams? = null,
 )
 
 data class TokenomicsParams(
@@ -247,6 +249,21 @@ data class ConfirmationPoCParams(
 data class TransferAgentAccessParams(
     @SerializedName("allowed_transfer_addresses")
     val allowedTransferAddresses: List<String> = emptyList(),
+)
+
+data class SubnetEscrowParams(
+    @SerializedName("min_amount")
+    val minAmount: Long,
+    @SerializedName("max_amount")
+    val maxAmount: Long,
+    @SerializedName("max_escrows_per_epoch")
+    val maxEscrowsPerEpoch: Long,
+    @SerializedName("group_size")
+    val groupSize: Long,
+    @SerializedName("allowed_creator_addresses")
+    val allowedCreatorAddresses: List<String> = emptyList(),
+    @SerializedName("token_price")
+    val tokenPrice: Long,
 )
 
 data class PocParams(

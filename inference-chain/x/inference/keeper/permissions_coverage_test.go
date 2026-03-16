@@ -202,6 +202,8 @@ func permissionIdentToValue(name string) string {
 		return string(keeper.PreviousActiveParticipantPermission)
 	case "OpenRegistrationPermission":
 		return string(keeper.OpenRegistrationPermission)
+	case "EscrowAllowListPermission":
+		return string(keeper.EscrowAllowListPermission)
 	default:
 		return name
 	}

@@ -92,6 +92,12 @@ type (
 		// Punishment grace epochs for upgrade protection
 		PunishmentGraceEpochs collections.Map[uint64, types.GraceEpochParams]
 		ActiveParticipantsSet collections.KeySet[collections.Pair[uint64, sdk.AccAddress]]
+		// Subnet escrow collections
+		SubnetEscrows           collections.Map[uint64, types.SubnetEscrow]
+		SubnetEscrowCounter     collections.Item[uint64]
+		SubnetEscrowEpochCount  collections.Map[uint64, uint64]
+		SubnetHostEpochStatsMap collections.Map[collections.Pair[uint64, sdk.AccAddress], types.SubnetHostEpochStats]
+		SubnetEscrowsByEpoch    collections.Map[collections.Pair[uint64, uint64], collections.NoValue]
 	}
 )
 
@@ -462,6 +468,41 @@ func NewKeeper(
 			types.ActiveParticipantsCachePrefix,
 			"active_participants_cache",
 			collections.PairKeyCodec(collections.Uint64Key, sdk.AccAddressKey),
+		),
+		// Subnet escrow collections
+		SubnetEscrows: collections.NewMap(
+			sb,
+			types.SubnetEscrowsPrefix,
+			"subnet_escrows",
+			collections.Uint64Key,
+			codec.CollValue[types.SubnetEscrow](cdc),
+		),
+		SubnetEscrowCounter: collections.NewItem(
+			sb,
+			types.SubnetEscrowCounterPrefix,
+			"subnet_escrow_counter",
+			collections.Uint64Value,
+		),
+		SubnetEscrowEpochCount: collections.NewMap(
+			sb,
+			types.SubnetEscrowEpochCountPrefix,
+			"subnet_escrow_epoch_count",
+			collections.Uint64Key,
+			collections.Uint64Value,
+		),
+		SubnetHostEpochStatsMap: collections.NewMap(
+			sb,
+			types.SubnetHostEpochStatsPrefix,
+			"subnet_host_epoch_stats",
+			collections.PairKeyCodec(collections.Uint64Key, sdk.AccAddressKey),
+			codec.CollValue[types.SubnetHostEpochStats](cdc),
+		),
+		SubnetEscrowsByEpoch: collections.NewMap(
+			sb,
+			types.SubnetEscrowsByEpochPrefix,
+			"subnet_escrows_by_epoch",
+			collections.PairKeyCodec(collections.Uint64Key, collections.Uint64Key),
+			collections.NoValue{},
 		),
 	}
 	// Build the collections schema

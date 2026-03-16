@@ -151,6 +151,8 @@ func setParameters(ctx context.Context, k keeper.Keeper) error {
 	params.EpochParams.ConfirmationPocSafetyWindow = 50
 
 	params.ValidationParams.ClaimValidationEnabled = false
+
+	params.SubnetEscrowParams = types.DefaultSubnetEscrowParams()
 	if err := k.SetParams(ctx, params); err != nil {
 		k.LogError("failed to set params with safety window", types.Upgrades, "error", err)
 		return err
@@ -166,6 +168,7 @@ func setPruningState(ctx context.Context, k keeper.Keeper) error {
 		return err
 	}
 	state.EpochGroupValidationsPrunedEpoch = 0
+	state.SubnetPrunedEpoch = 0
 	return k.PruningState.Set(ctx, state)
 }
 

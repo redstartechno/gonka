@@ -128,6 +128,7 @@ type ModelKeeper interface {
 
 type AuthzKeeper interface {
 	GranterGrants(ctx context.Context, req *authztypes.QueryGranterGrantsRequest) (*authztypes.QueryGranterGrantsResponse, error)
+	Grants(ctx context.Context, req *authztypes.QueryGrantsRequest) (*authztypes.QueryGrantsResponse, error)
 }
 
 // BlsKeeper defines the expected interface for the BLS module.

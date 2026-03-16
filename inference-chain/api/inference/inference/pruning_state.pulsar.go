@@ -18,6 +18,7 @@ var (
 	fd_PruningState_poc_validations_pruned_epoch         protoreflect.FieldDescriptor
 	fd_PruningState_inference_pruned_epoch               protoreflect.FieldDescriptor
 	fd_PruningState_epoch_group_validations_pruned_epoch protoreflect.FieldDescriptor
+	fd_PruningState_subnet_pruned_epoch                  protoreflect.FieldDescriptor
 )
 
 func init() {
@@ -27,6 +28,7 @@ func init() {
 	fd_PruningState_poc_validations_pruned_epoch = md_PruningState.Fields().ByName("poc_validations_pruned_epoch")
 	fd_PruningState_inference_pruned_epoch = md_PruningState.Fields().ByName("inference_pruned_epoch")
 	fd_PruningState_epoch_group_validations_pruned_epoch = md_PruningState.Fields().ByName("epoch_group_validations_pruned_epoch")
+	fd_PruningState_subnet_pruned_epoch = md_PruningState.Fields().ByName("subnet_pruned_epoch")
 }
 
 var _ protoreflect.Message = (*fastReflection_PruningState)(nil)
@@ -118,6 +120,12 @@ func (x *fastReflection_PruningState) Range(f func(protoreflect.FieldDescriptor,
 			return
 		}
 	}
+	if x.SubnetPrunedEpoch != int64(0) {
+		value := protoreflect.ValueOfInt64(x.SubnetPrunedEpoch)
+		if !f(fd_PruningState_subnet_pruned_epoch, value) {
+			return
+		}
+	}
 }
 
 // Has reports whether a field is populated.
@@ -141,6 +149,8 @@ func (x *fastReflection_PruningState) Has(fd protoreflect.FieldDescriptor) bool 
 		return x.InferencePrunedEpoch != int64(0)
 	case "inference.inference.PruningState.epoch_group_validations_pruned_epoch":
 		return x.EpochGroupValidationsPrunedEpoch != int64(0)
+	case "inference.inference.PruningState.subnet_pruned_epoch":
+		return x.SubnetPrunedEpoch != int64(0)
 	default:
 		if fd.IsExtension() {
 			panic(fmt.Errorf("proto3 declared messages do not support extensions: inference.inference.PruningState"))
@@ -165,6 +175,8 @@ func (x *fastReflection_PruningState) Clear(fd protoreflect.FieldDescriptor) {
 		x.InferencePrunedEpoch = int64(0)
 	case "inference.inference.PruningState.epoch_group_validations_pruned_epoch":
 		x.EpochGroupValidationsPrunedEpoch = int64(0)
+	case "inference.inference.PruningState.subnet_pruned_epoch":
+		x.SubnetPrunedEpoch = int64(0)
 	default:
 		if fd.IsExtension() {
 			panic(fmt.Errorf("proto3 declared messages do not support extensions: inference.inference.PruningState"))
@@ -192,6 +204,9 @@ func (x *fastReflection_PruningState) Get(descriptor protoreflect.FieldDescripto
 		return protoreflect.ValueOfInt64(value)
 	case "inference.inference.PruningState.epoch_group_validations_pruned_epoch":
 		value := x.EpochGroupValidationsPrunedEpoch
+		return protoreflect.ValueOfInt64(value)
+	case "inference.inference.PruningState.subnet_pruned_epoch":
+		value := x.SubnetPrunedEpoch
 		return protoreflect.ValueOfInt64(value)
 	default:
 		if descriptor.IsExtension() {
@@ -221,6 +236,8 @@ func (x *fastReflection_PruningState) Set(fd protoreflect.FieldDescriptor, value
 		x.InferencePrunedEpoch = value.Int()
 	case "inference.inference.PruningState.epoch_group_validations_pruned_epoch":
 		x.EpochGroupValidationsPrunedEpoch = value.Int()
+	case "inference.inference.PruningState.subnet_pruned_epoch":
+		x.SubnetPrunedEpoch = value.Int()
 	default:
 		if fd.IsExtension() {
 			panic(fmt.Errorf("proto3 declared messages do not support extensions: inference.inference.PruningState"))
@@ -249,6 +266,8 @@ func (x *fastReflection_PruningState) Mutable(fd protoreflect.FieldDescriptor) p
 		panic(fmt.Errorf("field inference_pruned_epoch of message inference.inference.PruningState is not mutable"))
 	case "inference.inference.PruningState.epoch_group_validations_pruned_epoch":
 		panic(fmt.Errorf("field epoch_group_validations_pruned_epoch of message inference.inference.PruningState is not mutable"))
+	case "inference.inference.PruningState.subnet_pruned_epoch":
+		panic(fmt.Errorf("field subnet_pruned_epoch of message inference.inference.PruningState is not mutable"))
 	default:
 		if fd.IsExtension() {
 			panic(fmt.Errorf("proto3 declared messages do not support extensions: inference.inference.PruningState"))
@@ -269,6 +288,8 @@ func (x *fastReflection_PruningState) NewField(fd protoreflect.FieldDescriptor) 
 	case "inference.inference.PruningState.inference_pruned_epoch":
 		return protoreflect.ValueOfInt64(int64(0))
 	case "inference.inference.PruningState.epoch_group_validations_pruned_epoch":
+		return protoreflect.ValueOfInt64(int64(0))
+	case "inference.inference.PruningState.subnet_pruned_epoch":
 		return protoreflect.ValueOfInt64(int64(0))
 	default:
 		if fd.IsExtension() {
@@ -351,6 +372,9 @@ func (x *fastReflection_PruningState) ProtoMethods() *protoiface.Methods {
 		if x.EpochGroupValidationsPrunedEpoch != 0 {
 			n += 1 + runtime.Sov(uint64(x.EpochGroupValidationsPrunedEpoch))
 		}
+		if x.SubnetPrunedEpoch != 0 {
+			n += 1 + runtime.Sov(uint64(x.SubnetPrunedEpoch))
+		}
 		if x.unknownFields != nil {
 			n += len(x.unknownFields)
 		}
@@ -379,6 +403,11 @@ func (x *fastReflection_PruningState) ProtoMethods() *protoiface.Methods {
 		if x.unknownFields != nil {
 			i -= len(x.unknownFields)
 			copy(dAtA[i:], x.unknownFields)
+		}
+		if x.SubnetPrunedEpoch != 0 {
+			i = runtime.EncodeVarint(dAtA, i, uint64(x.SubnetPrunedEpoch))
+			i--
+			dAtA[i] = 0x28
 		}
 		if x.EpochGroupValidationsPrunedEpoch != 0 {
 			i = runtime.EncodeVarint(dAtA, i, uint64(x.EpochGroupValidationsPrunedEpoch))
@@ -525,6 +554,25 @@ func (x *fastReflection_PruningState) ProtoMethods() *protoiface.Methods {
 						break
 					}
 				}
+			case 5:
+				if wireType != 0 {
+					return protoiface.UnmarshalOutput{NoUnkeyedLiterals: input.NoUnkeyedLiterals, Flags: input.Flags}, fmt.Errorf("proto: wrong wireType = %d for field SubnetPrunedEpoch", wireType)
+				}
+				x.SubnetPrunedEpoch = 0
+				for shift := uint(0); ; shift += 7 {
+					if shift >= 64 {
+						return protoiface.UnmarshalOutput{NoUnkeyedLiterals: input.NoUnkeyedLiterals, Flags: input.Flags}, runtime.ErrIntOverflow
+					}
+					if iNdEx >= l {
+						return protoiface.UnmarshalOutput{NoUnkeyedLiterals: input.NoUnkeyedLiterals, Flags: input.Flags}, io.ErrUnexpectedEOF
+					}
+					b := dAtA[iNdEx]
+					iNdEx++
+					x.SubnetPrunedEpoch |= int64(b&0x7F) << shift
+					if b < 0x80 {
+						break
+					}
+				}
 			default:
 				iNdEx = preIndex
 				skippy, err := runtime.Skip(dAtA[iNdEx:])
@@ -582,6 +630,7 @@ type PruningState struct {
 	PocValidationsPrunedEpoch        int64 `protobuf:"varint,2,opt,name=poc_validations_pruned_epoch,json=pocValidationsPrunedEpoch,proto3" json:"poc_validations_pruned_epoch,omitempty"`
 	InferencePrunedEpoch             int64 `protobuf:"varint,3,opt,name=inference_pruned_epoch,json=inferencePrunedEpoch,proto3" json:"inference_pruned_epoch,omitempty"`
 	EpochGroupValidationsPrunedEpoch int64 `protobuf:"varint,4,opt,name=epoch_group_validations_pruned_epoch,json=epochGroupValidationsPrunedEpoch,proto3" json:"epoch_group_validations_pruned_epoch,omitempty"`
+	SubnetPrunedEpoch                int64 `protobuf:"varint,5,opt,name=subnet_pruned_epoch,json=subnetPrunedEpoch,proto3" json:"subnet_pruned_epoch,omitempty"`
 }
 
 func (x *PruningState) Reset() {
@@ -632,13 +681,20 @@ func (x *PruningState) GetEpochGroupValidationsPrunedEpoch() int64 {
 	return 0
 }
 
+func (x *PruningState) GetSubnetPrunedEpoch() int64 {
+	if x != nil {
+		return x.SubnetPrunedEpoch
+	}
+	return 0
+}
+
 var File_inference_inference_pruning_state_proto protoreflect.FileDescriptor
 
 var file_inference_inference_pruning_state_proto_rawDesc = []byte{
 	0x0a, 0x27, 0x69, 0x6e, 0x66, 0x65, 0x72, 0x65, 0x6e, 0x63, 0x65, 0x2f, 0x69, 0x6e, 0x66, 0x65,
 	0x72, 0x65, 0x6e, 0x63, 0x65, 0x2f, 0x70, 0x72, 0x75, 0x6e, 0x69, 0x6e, 0x67, 0x5f, 0x73, 0x74,
 	0x61, 0x74, 0x65, 0x2e, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x12, 0x13, 0x69, 0x6e, 0x66, 0x65, 0x72,
-	0x65, 0x6e, 0x63, 0x65, 0x2e, 0x69, 0x6e, 0x66, 0x65, 0x72, 0x65, 0x6e, 0x63, 0x65, 0x22, 0x8e,
+	0x65, 0x6e, 0x63, 0x65, 0x2e, 0x69, 0x6e, 0x66, 0x65, 0x72, 0x65, 0x6e, 0x63, 0x65, 0x22, 0xbe,
 	0x02, 0x0a, 0x0c, 0x50, 0x72, 0x75, 0x6e, 0x69, 0x6e, 0x67, 0x53, 0x74, 0x61, 0x74, 0x65, 0x12,
 	0x37, 0x0a, 0x18, 0x70, 0x6f, 0x63, 0x5f, 0x62, 0x61, 0x74, 0x63, 0x68, 0x65, 0x73, 0x5f, 0x70,
 	0x72, 0x75, 0x6e, 0x65, 0x64, 0x5f, 0x65, 0x70, 0x6f, 0x63, 0x68, 0x18, 0x01, 0x20, 0x01, 0x28,
@@ -655,7 +711,10 @@ var file_inference_inference_pruning_state_proto_rawDesc = []byte{
 	0x61, 0x6c, 0x69, 0x64, 0x61, 0x74, 0x69, 0x6f, 0x6e, 0x73, 0x5f, 0x70, 0x72, 0x75, 0x6e, 0x65,
 	0x64, 0x5f, 0x65, 0x70, 0x6f, 0x63, 0x68, 0x18, 0x04, 0x20, 0x01, 0x28, 0x03, 0x52, 0x20, 0x65,
 	0x70, 0x6f, 0x63, 0x68, 0x47, 0x72, 0x6f, 0x75, 0x70, 0x56, 0x61, 0x6c, 0x69, 0x64, 0x61, 0x74,
-	0x69, 0x6f, 0x6e, 0x73, 0x50, 0x72, 0x75, 0x6e, 0x65, 0x64, 0x45, 0x70, 0x6f, 0x63, 0x68, 0x42,
+	0x69, 0x6f, 0x6e, 0x73, 0x50, 0x72, 0x75, 0x6e, 0x65, 0x64, 0x45, 0x70, 0x6f, 0x63, 0x68, 0x12,
+	0x2e, 0x0a, 0x13, 0x73, 0x75, 0x62, 0x6e, 0x65, 0x74, 0x5f, 0x70, 0x72, 0x75, 0x6e, 0x65, 0x64,
+	0x5f, 0x65, 0x70, 0x6f, 0x63, 0x68, 0x18, 0x05, 0x20, 0x01, 0x28, 0x03, 0x52, 0x11, 0x73, 0x75,
+	0x62, 0x6e, 0x65, 0x74, 0x50, 0x72, 0x75, 0x6e, 0x65, 0x64, 0x45, 0x70, 0x6f, 0x63, 0x68, 0x42,
 	0xbf, 0x01, 0x0a, 0x17, 0x63, 0x6f, 0x6d, 0x2e, 0x69, 0x6e, 0x66, 0x65, 0x72, 0x65, 0x6e, 0x63,
 	0x65, 0x2e, 0x69, 0x6e, 0x66, 0x65, 0x72, 0x65, 0x6e, 0x63, 0x65, 0x42, 0x11, 0x50, 0x72, 0x75,
 	0x6e, 0x69, 0x6e, 0x67, 0x53, 0x74, 0x61, 0x74, 0x65, 0x50, 0x72, 0x6f, 0x74, 0x6f, 0x50, 0x01,

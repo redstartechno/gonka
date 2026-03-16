@@ -71,6 +71,11 @@ var (
 	ModelLoadRollingWindowPrefix           = collections.NewPrefix(45)
 	ModelInferenceCountRollingWindowPrefix = collections.NewPrefix(46)
 	EpochGroupValidationEntryPrefix        = collections.NewPrefix(47)
+	SubnetEscrowsPrefix                    = collections.NewPrefix(48)
+	SubnetEscrowCounterPrefix              = collections.NewPrefix(49)
+	SubnetEscrowEpochCountPrefix           = collections.NewPrefix(50)
+	SubnetHostEpochStatsPrefix             = collections.NewPrefix(51)
+	SubnetEscrowsByEpochPrefix             = collections.NewPrefix(52)
 	ParamsKey                              = []byte("p_inference")
 )
 

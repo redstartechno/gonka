@@ -76,4 +76,5 @@ var (
 	ErrDevComponentMismatch                  = sdkerrors.Register(ModuleName, 1170, "developer signature components mismatch")
 	ErrTAComponentMismatch                   = sdkerrors.Register(ModuleName, 1171, "transfer agent signature components mismatch")
 	ErrInferenceRoleMismatch                 = sdkerrors.Register(ModuleName, 1172, "inference role/address invariant mismatch")
+	ErrNotAllowedEscrowCreator               = sdkerrors.Register(ModuleName, 1173, "address is not allowed to create subnet escrows for subnets")
 )

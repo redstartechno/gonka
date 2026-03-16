@@ -265,6 +265,7 @@ data class DockerGroup(
             put("SYNC_WITH_SNAPSHOTS", useSnapshots.toString().lowercase())
             put("SNAPSHOT_INTERVAL", "100")
             put("SNAPSHOT_KEEP_RECENT", "5")
+            put("REST_API_ACTIVE", "true")
             put("P2P_EXTERNAL_ADDRESS", p2pExternalAddress)
 
             genesisGroup?.let {
