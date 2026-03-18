@@ -31,10 +31,10 @@ type Server struct {
 	store       storage.Storage
 	gossip      *gossip.Gossip // nil until gossip is wired
 	verifier    signing.Verifier
-	userAddr    string              // session user address, allowed alongside group members
-	peerClients map[int]*HTTPClient // slot index -> client, for timeout verification
-	rateLimit   *rateLimiter        // nil = no limiting
-	maxBodySize int64               // max request body bytes, 0 = no limit
+	userAddr    string               // session user address, allowed alongside group members
+	peerClients map[int]*HTTPClient  // slot index -> client, for timeout verification
+	rateLimit   *rateLimiter         // nil = no limiting
+	maxBodySize int64                // max request body bytes, 0 = no limit
 	bridge      bridge.MainnetBridge // optional, for warm key verification
 }
 
@@ -251,29 +251,35 @@ func getBody(c echo.Context) ([]byte, error) {
 func (s *Server) HandleInference(c echo.Context) error {
 	sender, err := getSender(c)
 	if err != nil {
-		return err
+		logging.Error("HandleInference", "error", err)
+		return echo.NewHTTPError(http.StatusUnauthorized, "missing sender")
 	}
 	if !s.isOwner(sender) {
+		logging.Error("HandleInference", "error", "restricted to escrow owner")
 		return echo.NewHTTPError(http.StatusForbidden, "restricted to escrow owner")
 	}
 
 	body, err := getBody(c)
 	if err != nil {
+		logging.Error("HandleInference", "error", err)
 		return err
 	}
 
 	var ir InferenceRequest
 	if err := json.Unmarshal(body, &ir); err != nil {
+		logging.Error("HandleInference", "error", "invalid json: "+err.Error())
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid json: "+err.Error())
 	}
 
 	req, err := HostRequestFromJSON(ir)
 	if err != nil {
+		logging.Error("HandleInference", "error", "decode request: "+err.Error())
 		return echo.NewHTTPError(http.StatusBadRequest, "decode request: "+err.Error())
 	}
 
 	resp, err := s.host.HandleRequest(c.Request().Context(), req)
 	if err != nil {
+		logging.Error("HandleInference", "error", "handle request: "+err.Error())
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
 

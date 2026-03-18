@@ -151,6 +151,16 @@ func NewStateMachine(
 	for _, o := range opts {
 		o(sm)
 	}
+
+	logging.Info("NewStateMachine", "subsystem", "state",
+		"escrow_id", escrowID,
+		"group_size", len(group),
+		"balance", balance,
+		"token_price", config.TokenPrice,
+		"vote_threshold", config.VoteThreshold,
+		"user_address", userAddress,
+	)
+
 	return sm
 }
 
@@ -243,7 +253,13 @@ func (sm *StateMachine) ApplyLocalBestEffort(nonce uint64, txs []*types.SubnetTx
 		return nil, nil, fmt.Errorf("compute state root: %w", err)
 	}
 
-	logging.Debug("applied diff (best-effort)", "subsystem", "state", "nonce", nonce, "applied", len(applied), "candidates", len(txs))
+	logging.Debug("applied diff (best-effort)", "subsystem", "state",
+		"nonce", nonce, "applied", len(applied), "candidates", len(txs),
+		"balance", sm.state.Balance,
+		"group_size", len(sm.state.Group),
+		"host_stats_count", len(sm.state.HostStats),
+		"config_token_price", sm.state.Config.TokenPrice,
+	)
 	return root, applied, nil
 }
 
@@ -310,6 +326,20 @@ func (sm *StateMachine) applyCore(nonce uint64, txs []*types.SubnetTx, postState
 
 	// 7. Verify post_state_root if present. On mismatch, roll back everything.
 	if len(postStateRoot) > 0 && !bytes.Equal(root, postStateRoot) {
+		logging.Error("state root mismatch diagnostic",
+			"subsystem", "state",
+			"nonce", nonce,
+			"balance", sm.state.Balance,
+			"group_size", len(sm.state.Group),
+			"host_stats_count", len(sm.state.HostStats),
+			"inferences_count", len(sm.state.Inferences),
+			"phase", sm.state.Phase,
+			"warm_keys_count", len(sm.state.WarmKeys),
+			"config_token_price", sm.state.Config.TokenPrice,
+			"config_vote_threshold", sm.state.Config.VoteThreshold,
+			"config_validation_rate", sm.state.Config.ValidationRate,
+			"escrow_id", sm.state.EscrowID,
+		)
 		sm.restoreMutable(snap)
 		return nil, fmt.Errorf("%w: diff %x, computed %x", types.ErrPostStateRootMismatch, postStateRoot, root)
 	}
