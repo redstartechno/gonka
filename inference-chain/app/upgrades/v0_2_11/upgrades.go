@@ -5,13 +5,119 @@ import (
 	"encoding/json"
 	"errors"
 
+	"cosmossdk.io/math"
 	upgradetypes "cosmossdk.io/x/upgrade/types"
 	wasmkeeper "github.com/CosmWasm/wasmd/x/wasm/keeper"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/cosmos/cosmos-sdk/types/module"
+	distrkeeper "github.com/cosmos/cosmos-sdk/x/distribution/keeper"
 	"github.com/productscience/inference/x/inference/keeper"
 	"github.com/productscience/inference/x/inference/types"
 )
+
+func Gonka(amount int64) int64 {
+	return amount * 1_000_000_000
+}
+
+type BountyReward struct {
+	Address string
+	Amount  int64
+}
+
+var bountyRewards = []BountyReward{
+	// Extra bounty for a comprehensive review of all cases where the data race conditions fix was needed.
+	// PR: https://github.com/gonka-ai/gonka/pull/543
+	{Address: "gonka18enyz7h6hh5zjveee5wnhkhrcexamfz0zdxxqe", Amount: Gonka(2500)},
+
+	// PoC Integration into vLLM v0.11.1.
+	// Issue: https://github.com/gonka-ai/gonka/issues/628
+	{Address: "gonka1yhdhp4vwsvdsplv4acksntx0zxh8saueq6lj9m", Amount: Gonka(25000)},
+
+	// Report of series of prompts resulting in vLLM HTTP 502 response, significant impact.
+	{Address: "gonka12jaf7m4eysyqt32mrgarum6z96vt55tckvcleq", Amount: Gonka(10000)},
+
+	// Report of dust transaction vulnerability extending blocks.
+	{Address: "gonka12jaf7m4eysyqt32mrgarum6z96vt55tckvcleq", Amount: Gonka(1000)},
+
+	// Report of Remote DoS of Validator PoC Software via dist Assertion.
+	{Address: "gonka1f0elpwnx7ezytdlck35003nz6qk8kzvurvnj4a", Amount: Gonka(5000)},
+
+	// Report of State Bloat PoC and End-Block DoS via Unbounded Batch / Validation Payloads.
+	{Address: "gonka1f0elpwnx7ezytdlck35003nz6qk8kzvurvnj4a", Amount: Gonka(5000)},
+
+	// Report of bridge Ethereum address parsing fallback vulnerability.
+	{Address: "gonka1f0elpwnx7ezytdlck35003nz6qk8kzvurvnj4a", Amount: Gonka(750)},
+
+	// Planned task.
+	// PR: https://github.com/gonka-ai/gonka/pull/775
+	{Address: "gonka18enyz7h6hh5zjveee5wnhkhrcexamfz0zdxxqe", Amount: Gonka(1000)},
+
+	// Planned task.
+	// PR: https://github.com/gonka-ai/gonka/pull/773
+	{Address: "gonka18enyz7h6hh5zjveee5wnhkhrcexamfz0zdxxqe", Amount: Gonka(1250)},
+
+	// vLLM 0.15.1 compatibility experiments; basis for next ML node version.
+	// PR: https://github.com/qdanik/vllm/pull/5
+	{Address: "gonka1j3f2xkapx8cmczpjqcsrh7cc3peyj3ngkjv4p8", Amount: Gonka(12000)},
+
+	// vLLM 0.15.1 compatibility experiments covering simultaneous PoC and inference.
+	// PR: https://github.com/qdanik/vllm/pull/6
+	{Address: "gonka1j3f2xkapx8cmczpjqcsrh7cc3peyj3ngkjv4p8", Amount: Gonka(15000)},
+
+	// Report of wind down window vulnerability fixed in PR #767.
+	{Address: "gonka1j3f2xkapx8cmczpjqcsrh7cc3peyj3ngkjv4p8", Amount: Gonka(5000)},
+
+	// Collective solving of nodes unable to join from snapshots - proposed valuable hypothesis.
+	// Issue: https://github.com/gonka-ai/gonka/issues/797
+	{Address: "gonka1ejkupq3cy6p8xd64ew2wlzveml86ckpzn9dl56", Amount: Gonka(1000)},
+
+	// Collective solving of nodes unable to join from snapshots - found source problem.
+	// Issue: https://github.com/gonka-ai/gonka/issues/797
+	{Address: "gonka18enyz7h6hh5zjveee5wnhkhrcexamfz0zdxxqe", Amount: Gonka(3000)},
+
+	// Collective solving StartInference and FinishInference issue.
+	// Issue: https://github.com/gonka-ai/gonka/issues/780
+	{Address: "gonka17kmfwzthep3alxt57vqcqr48uv7swp0u63gcnj", Amount: Gonka(750)},
+
+	// Collective solving StartInference and FinishInference issue.
+	// Issue: https://github.com/gonka-ai/gonka/issues/781
+	{Address: "gonka18enyz7h6hh5zjveee5wnhkhrcexamfz0zdxxqe", Amount: Gonka(5000)},
+
+	// Collective solving StartInference and FinishInference issue.
+	// Issue: https://github.com/gonka-ai/gonka/issues/782
+	{Address: "gonka1ejkupq3cy6p8xd64ew2wlzveml86ckpzn9dl56", Amount: Gonka(5000)},
+
+	// Important issue that affected many participants; extra payment for testing with fix.
+	// PR: https://github.com/gonka-ai/gonka/pull/867
+	{Address: "gonka128nd36m2pz5qcs4q6rd69622flyls05nleazqq", Amount: Gonka(7500)},
+
+	// vLLM 0.15.1 compatibility experiments; basis for next ML node version.
+	// Issue: https://github.com/gonka-ai/gonka/issues/730
+	{Address: "gonka1x45hruazmcqxslj3g8a08988hr5fr3wx33drhp", Amount: Gonka(22500)},
+
+	// Batch Transfer With Vesting implementation.
+	// PR: https://github.com/gonka-ai/gonka/pull/835
+	{Address: "gonka100s7x2t0npruu9ta02306qfmaened3vg3a9dn6", Amount: Gonka(5000)},
+
+	// Collateral slashing vulnerability and fix; low severity.
+	// PR: https://github.com/gonka-ai/gonka/pull/868
+	{Address: "gonka1j3f2xkapx8cmczpjqcsrh7cc3peyj3ngkjv4p8", Amount: Gonka(5000)},
+
+	// v0.2.11 release management.
+	{Address: "gonka1ejkupq3cy6p8xd64ew2wlzveml86ckpzn9dl56", Amount: Gonka(7500)},
+
+	// v0.2.11 release management.
+	{Address: "gonka18enyz7h6hh5zjveee5wnhkhrcexamfz0zdxxqe", Amount: Gonka(7500)},
+
+	// v0.2.10 upgrade review.
+	{Address: "gonka1s8szs7n43jxgz4a4xaxmzm5emh7fmjxhach7w8", Amount: Gonka(2500)},
+
+	// v0.2.10 upgrade review.
+	{Address: "gonka12jaf7m4eysyqt32mrgarum6z96vt55tckvcleq", Amount: Gonka(2500)},
+
+	// v0.2.10 upgrade review.
+	{Address: "gonka18enyz7h6hh5zjveee5wnhkhrcexamfz0zdxxqe", Amount: Gonka(2500)},
+}
 
 // MigrationData expected in the Plan.Info JSON
 type MigrationData struct {
@@ -23,6 +129,7 @@ func CreateUpgradeHandler(
 	mm *module.Manager,
 	configurator module.Configurator,
 	k keeper.Keeper,
+	distrKeeper distrkeeper.Keeper,
 ) upgradetypes.UpgradeHandler {
 	return func(ctx context.Context, plan upgradetypes.Plan, fromVM module.VersionMap) (module.VersionMap, error) {
 		k.LogInfo("starting upgrade", types.Upgrades, "version", UpgradeName)
@@ -50,6 +157,10 @@ func CreateUpgradeHandler(
 		err = k.MigrateEpochGroupValidationsToEntries(ctx)
 		if err != nil {
 			return fromVM, err
+		}
+
+		if err := distributeBountyRewards(ctx, k, distrKeeper); err != nil {
+			return nil, err
 		}
 
 		toVM, err := mm.RunMigrations(ctx, configurator, fromVM)
@@ -205,4 +316,49 @@ func setEpochParticipantsSet(ctx context.Context, k keeper.Keeper, epochIndex ui
 		return types.ErrEpochNotFound
 	}
 	return k.SetActiveParticipantsCache(ctx, epochActiveParticipants)
+}
+
+func distributeBountyRewards(ctx context.Context, k keeper.Keeper, distrKeeper distrkeeper.Keeper) error {
+	if len(bountyRewards) == 0 {
+		k.Logger().Info("No bounty rewards to distribute")
+		return nil
+	}
+
+	var totalRequired int64
+	for _, bounty := range bountyRewards {
+		totalRequired += bounty.Amount
+	}
+
+	feePool, err := distrKeeper.FeePool.Get(ctx)
+	if err != nil {
+		k.Logger().Warn("failed to get fee pool, skipping bounty distribution", "error", err)
+		return nil
+	}
+
+	available := feePool.CommunityPool.AmountOf(types.BaseCoin).TruncateInt64()
+	if available < totalRequired {
+		k.Logger().Warn("insufficient fee pool balance, skipping bounty distribution",
+			"required", totalRequired, "available", available)
+		return nil
+	}
+
+	k.Logger().Info("fee pool balance sufficient", "required", totalRequired, "available", available)
+
+	for _, bounty := range bountyRewards {
+		recipient, err := sdk.AccAddressFromBech32(bounty.Address)
+		if err != nil {
+			k.Logger().Error("invalid bounty address", "address", bounty.Address, "error", err)
+			continue
+		}
+
+		coins := sdk.NewCoins(sdk.NewCoin(types.BaseCoin, math.NewInt(bounty.Amount)))
+		if err := distrKeeper.DistributeFromFeePool(ctx, coins, recipient); err != nil {
+			k.Logger().Error("failed to distribute bounty", "address", bounty.Address, "error", err)
+			continue
+		}
+
+		k.Logger().Info("bounty distributed", "address", bounty.Address, "amount", bounty.Amount)
+	}
+
+	return nil
 }
