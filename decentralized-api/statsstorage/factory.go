@@ -11,22 +11,20 @@ import (
 )
 
 // NewStatsStorage creates a stats storage backend.
-// Uses PostgreSQL when configured and reachable.
-// File storage is only used if DAPI_STATS_FILE_STORAGE_ENABLED is set to "true".
+// Uses PostgreSQL if DAPI_STATS_POSTGRES_ENABLED is set to "true" and PGHOST is configured.
+// File storage is used if DAPI_STATS_FILE_STORAGE_ENABLED is set to "true".
 // Otherwise, returns a disabled storage that returns errors for all stats operations.
 func NewStatsStorage(ctx context.Context) (StatsStorage, error) {
 	retentionDays := parseRetentionDays()
 
-	pgHost := os.Getenv("PGHOST")
-	if pgHost != "" {
+	if os.Getenv("DAPI_STATS_POSTGRES_ENABLED") == "true" && os.Getenv("PGHOST") != "" {
 		pgStorage, err := NewPostgresStorage(ctx)
-		if err == nil {
-			logging.Info("Using PostgreSQL stats storage", types.System, "host", pgHost, "retention_days", retentionDays)
-			return NewManagedStorage(pgStorage, retentionDays), nil
+		if err != nil {
+			return nil, err
 		}
-		// Fail. If they want to be running PostgreSQL and init fails, better to stop and allow them to fix the feature than continue
-		// and lose data silently
-		return nil, err
+		pgHost := os.Getenv("PGHOST")
+		logging.Info("Using PostgreSQL stats storage", types.System, "host", pgHost, "retention_days", retentionDays)
+		return NewManagedStorage(pgStorage, retentionDays), nil
 	}
 
 	if os.Getenv("DAPI_STATS_FILE_STORAGE_ENABLED") == "true" {
