@@ -487,7 +487,30 @@ No impact. `MsgStartInference` and `MsgFinishInference` are fee-exempt. Inferenc
 
 **Sybil attacks:** Each sybil participant pays a base validation fee (~$0.0029) per epoch plus count-proportional fees. A sybil claiming 100,000 count pays ~$0.060 per epoch. Sustaining 100 sybils each claiming 100,000 count costs ~$6.00 per epoch ($0.29 in base fees + $5.70 in count fees). Both dimensions scale linearly, making large-scale attacks economically prohibitive.
 
-## 10. Files Modified
+## 10. Related: Minimum Inference Charge
+
+Independent of transaction fees, the dynamic pricing / escrow system has a gap at the low end: a trivially small inference request (e.g., 1 input token, 1 output token) costs almost nothing through the escrow but triggers the full inference pipeline --- routing, model execution, escrow settlement, and validation.
+
+A minimum inference charge floor would eliminate this noise:
+
+```
+escrow = max(
+    min_charge,                                          // floor
+    (max_tokens + prompt_tokens) × per_token_price       // actual cost
+)
+```
+
+Where `min_charge` is calibrated to the cost of a modest request, e.g., `cost(1000 input, 500 output)` at current per-token pricing. At post-grace base price of 100 ngonka/token:
+
+```
+min_charge = (1000 + 500) × 100 = 150,000 ngonka ≈ $0.000085
+```
+
+This is a separate governance parameter (`MinInferenceCharge` in `DynamicPricingParams`) and does not require changes to the fee or ante handler system --- it would be enforced in the `MsgStartInference` handler when calculating the escrow amount, in `inference-chain/x/inference/calculations/inference_state.go`.
+
+This is complementary to transaction fees: fees prevent general transaction spam, while the minimum inference charge prevents abuse of the inference pipeline specifically.
+
+## 11. Files Modified
 
 | File | Change |
 |------|--------|
