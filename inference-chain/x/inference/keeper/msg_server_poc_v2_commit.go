@@ -32,8 +32,7 @@ func (k msgServer) PoCV2StoreCommit(goCtx context.Context, msg *types.MsgPoCV2St
 		k.LogError(PocFailureTag+"[PoCV2StoreCommit] Error checking confirmation PoC event", types.PoC, "error", err)
 	}
 
-	isMigrationTracking := params.PocParams.ConfirmationPocV2Enabled && isActive && activeEvent != nil && activeEvent.EventSequence == 0
-	if !params.PocParams.PocV2Enabled && !isMigrationTracking {
+	if !params.PocParams.PocV2Enabled {
 		return nil, sdkerrors.Wrap(types.ErrNotSupported, "V2 disabled when poc_v2_enabled=false")
 	}
 
@@ -144,8 +143,7 @@ func (k msgServer) MLNodeWeightDistribution(goCtx context.Context, msg *types.Ms
 		k.LogError(PocFailureTag+"[MLNodeWeightDistribution] Error checking confirmation PoC event", types.PoC, "error", err)
 	}
 
-	isMigrationTracking := params.PocParams.ConfirmationPocV2Enabled && isActive && activeEvent != nil && activeEvent.EventSequence == 0
-	if !params.PocParams.PocV2Enabled && !isMigrationTracking {
+	if !params.PocParams.PocV2Enabled {
 		return nil, sdkerrors.Wrap(types.ErrNotSupported, "V2 disabled when poc_v2_enabled=false")
 	}
 
