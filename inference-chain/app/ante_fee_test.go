@@ -1,0 +1,253 @@
+package app
+
+import (
+	"testing"
+
+	sdk "github.com/cosmos/cosmos-sdk/types"
+	banktypes "github.com/cosmos/cosmos-sdk/x/bank/types"
+	stakingtypes "github.com/cosmos/cosmos-sdk/x/staking/types"
+	"github.com/stretchr/testify/require"
+	protov2 "google.golang.org/protobuf/proto"
+
+	inferencetypes "github.com/productscience/inference/x/inference/types"
+
+	blstypes "github.com/productscience/inference/x/bls/types"
+)
+
+// --- Test FeeTx implementation ---
+
+type testFeeTx struct {
+	msgs []sdk.Msg
+	fee  sdk.Coins
+	gas  uint64
+}
+
+func (t testFeeTx) GetMsgs() []sdk.Msg                    { return t.msgs }
+func (t testFeeTx) ValidateBasic() error                  { return nil }
+func (t testFeeTx) GetMsgsV2() ([]protov2.Message, error) { return nil, nil }
+func (t testFeeTx) GetFee() sdk.Coins                     { return t.fee }
+func (t testFeeTx) GetGas() uint64                        { return t.gas }
+func (t testFeeTx) FeePayer() sdk.AccAddress               { return nil }
+func (t testFeeTx) FeeGranter() sdk.AccAddress             { return nil }
+
+// --- NetworkDutyFeeBypassDecorator tests ---
+
+func TestNetworkDutyBypass_AllExemptMessages(t *testing.T) {
+	decorator := NetworkDutyFeeBypassDecorator{
+		InferenceKeeper: nil,
+		GasCap:          1_000_000,
+		Priority:        500_000,
+	}
+
+	exemptMsgs := []sdk.Msg{
+		&inferencetypes.MsgSubmitPocBatch{},
+		&inferencetypes.MsgValidation{},
+		&inferencetypes.MsgStartInference{},
+		&inferencetypes.MsgFinishInference{},
+		&inferencetypes.MsgInvalidateInference{},
+		&inferencetypes.MsgRevalidateInference{},
+		&inferencetypes.MsgMLNodeWeightDistribution{},
+		&blstypes.MsgSubmitDealerPart{},
+		&blstypes.MsgSubmitVerificationVector{},
+		&blstypes.MsgSubmitPartialSignature{},
+		&blstypes.MsgRequestThresholdSignature{},
+	}
+
+	for _, msg := range exemptMsgs {
+		tx := testFeeTx{msgs: []sdk.Msg{msg}, gas: 100_000}
+		ctx := sdk.Context{}.WithMinGasPrices(sdk.DecCoins{sdk.NewDecCoin("ngonka", sdk.NewInt(10))})
+
+		nextCalled := false
+		_, err := decorator.AnteHandle(ctx, tx, false, func(ctx sdk.Context, tx sdk.Tx, simulate bool) (sdk.Context, error) {
+			nextCalled = true
+			// Verify bypass flag was set
+			require.True(t, IsNetworkDutyBypassed(ctx), "bypass flag should be set for %T", msg)
+			// Verify min gas prices were cleared
+			require.Empty(t, ctx.MinGasPrices(), "min gas prices should be cleared for %T", msg)
+			return ctx, nil
+		})
+		require.NoError(t, err, "exempt message %T should not error", msg)
+		require.True(t, nextCalled, "next handler should be called for %T", msg)
+	}
+}
+
+func TestNetworkDutyBypass_NonExemptMessages(t *testing.T) {
+	decorator := NetworkDutyFeeBypassDecorator{
+		InferenceKeeper: nil,
+		GasCap:          1_000_000,
+		Priority:        500_000,
+	}
+
+	nonExemptMsgs := []sdk.Msg{
+		&banktypes.MsgSend{},
+		&stakingtypes.MsgDelegate{},
+		&inferencetypes.MsgClaimRewards{},
+		&inferencetypes.MsgPoCV2StoreCommit{},
+		&inferencetypes.MsgSubmitNewParticipant{},
+	}
+
+	for _, msg := range nonExemptMsgs {
+		tx := testFeeTx{msgs: []sdk.Msg{msg}, gas: 100_000}
+		ctx := sdk.Context{}.WithMinGasPrices(sdk.DecCoins{sdk.NewDecCoin("ngonka", sdk.NewInt(10))})
+
+		nextCalled := false
+		_, err := decorator.AnteHandle(ctx, tx, false, func(ctx sdk.Context, tx sdk.Tx, simulate bool) (sdk.Context, error) {
+			nextCalled = true
+			// Verify bypass flag was NOT set
+			require.False(t, IsNetworkDutyBypassed(ctx), "bypass flag should NOT be set for %T", msg)
+			// Verify min gas prices were NOT cleared
+			require.NotEmpty(t, ctx.MinGasPrices(), "min gas prices should NOT be cleared for %T", msg)
+			return ctx, nil
+		})
+		require.NoError(t, err, "non-exempt message %T should still pass through", msg)
+		require.True(t, nextCalled, "next handler should be called for %T", msg)
+	}
+}
+
+func TestNetworkDutyBypass_MixedMessages_NoBypass(t *testing.T) {
+	decorator := NetworkDutyFeeBypassDecorator{
+		InferenceKeeper: nil,
+		GasCap:          1_000_000,
+		Priority:        500_000,
+	}
+
+	// Mix of exempt and non-exempt: bypass should NOT apply
+	tx := testFeeTx{
+		msgs: []sdk.Msg{
+			&inferencetypes.MsgValidation{},
+			&banktypes.MsgSend{}, // non-exempt
+		},
+		gas: 100_000,
+	}
+	ctx := sdk.Context{}.WithMinGasPrices(sdk.DecCoins{sdk.NewDecCoin("ngonka", sdk.NewInt(10))})
+
+	_, err := decorator.AnteHandle(ctx, tx, false, func(ctx sdk.Context, tx sdk.Tx, simulate bool) (sdk.Context, error) {
+		require.False(t, IsNetworkDutyBypassed(ctx), "mixed tx should NOT be bypassed")
+		return ctx, nil
+	})
+	require.NoError(t, err)
+}
+
+func TestNetworkDutyBypass_GasCapEnforced(t *testing.T) {
+	decorator := NetworkDutyFeeBypassDecorator{
+		InferenceKeeper: nil,
+		GasCap:          1_000_000,
+		Priority:        500_000,
+	}
+
+	// Gas exceeds cap: should reject
+	tx := testFeeTx{
+		msgs: []sdk.Msg{&inferencetypes.MsgValidation{}},
+		gas:  2_000_000, // exceeds 1M cap
+	}
+	ctx := sdk.Context{}
+
+	_, err := decorator.AnteHandle(ctx, tx, false, func(ctx sdk.Context, tx sdk.Tx, simulate bool) (sdk.Context, error) {
+		t.Fatal("next should not be called when gas exceeds cap")
+		return ctx, nil
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "exceeds cap")
+}
+
+// --- isExemptMessageType tests ---
+
+func TestIsExemptMessageType(t *testing.T) {
+	// Exempt
+	require.True(t, isExemptMessageType(&inferencetypes.MsgSubmitPocBatch{}))
+	require.True(t, isExemptMessageType(&inferencetypes.MsgSubmitPocValidation{}))
+	require.True(t, isExemptMessageType(&inferencetypes.MsgSubmitPocValidationsV2{}))
+	require.True(t, isExemptMessageType(&inferencetypes.MsgValidation{}))
+	require.True(t, isExemptMessageType(&inferencetypes.MsgStartInference{}))
+	require.True(t, isExemptMessageType(&inferencetypes.MsgFinishInference{}))
+	require.True(t, isExemptMessageType(&inferencetypes.MsgInvalidateInference{}))
+	require.True(t, isExemptMessageType(&inferencetypes.MsgRevalidateInference{}))
+	require.True(t, isExemptMessageType(&inferencetypes.MsgMLNodeWeightDistribution{}))
+	require.True(t, isExemptMessageType(&blstypes.MsgSubmitDealerPart{}))
+	require.True(t, isExemptMessageType(&blstypes.MsgSubmitVerificationVector{}))
+	require.True(t, isExemptMessageType(&blstypes.MsgSubmitGroupKeyValidationSignature{}))
+	require.True(t, isExemptMessageType(&blstypes.MsgSubmitPartialSignature{}))
+	require.True(t, isExemptMessageType(&blstypes.MsgRequestThresholdSignature{}))
+
+	// Not exempt
+	require.False(t, isExemptMessageType(&inferencetypes.MsgPoCV2StoreCommit{}))
+	require.False(t, isExemptMessageType(&inferencetypes.MsgClaimRewards{}))
+	require.False(t, isExemptMessageType(&inferencetypes.MsgSubmitNewParticipant{}))
+	require.False(t, isExemptMessageType(&banktypes.MsgSend{}))
+	require.False(t, isExemptMessageType(&stakingtypes.MsgDelegate{}))
+}
+
+// --- NewGonkaFeeChecker tests ---
+
+func TestGonkaFeeChecker_SufficientFee(t *testing.T) {
+	// nil keeper = 0 min gas price = any fee accepted
+	checker := NewGonkaFeeChecker(nil)
+
+	tx := testFeeTx{
+		msgs: []sdk.Msg{&banktypes.MsgSend{}},
+		fee:  sdk.NewCoins(sdk.NewCoin("ngonka", sdk.NewInt(0))),
+		gas:  100_000,
+	}
+	ctx := sdk.Context{}
+
+	feeCoins, priority, err := checker(ctx, tx)
+	require.NoError(t, err)
+	require.NotNil(t, feeCoins)
+	require.Equal(t, int64(0), priority)
+}
+
+func TestGonkaFeeChecker_BypassFlag(t *testing.T) {
+	checker := NewGonkaFeeChecker(nil)
+
+	// Zero fee tx with bypass flag: should pass
+	tx := testFeeTx{
+		msgs: []sdk.Msg{&banktypes.MsgSend{}},
+		fee:  sdk.Coins{},
+		gas:  100_000,
+	}
+	ctx := sdk.Context{}.WithValue(networkDutyBypassKey{}, true)
+
+	feeCoins, _, err := checker(ctx, tx)
+	require.NoError(t, err)
+	require.Empty(t, feeCoins)
+}
+
+func TestGonkaFeeChecker_Priority(t *testing.T) {
+	checker := NewGonkaFeeChecker(nil)
+
+	// Higher fee = higher priority
+	tx := testFeeTx{
+		msgs: []sdk.Msg{&banktypes.MsgSend{}},
+		fee:  sdk.NewCoins(sdk.NewCoin("ngonka", sdk.NewInt(1_000_000))),
+		gas:  100_000,
+	}
+	ctx := sdk.Context{}
+
+	_, priority, err := checker(ctx, tx)
+	require.NoError(t, err)
+	require.Equal(t, int64(10), priority) // 1_000_000 / 100_000 = 10
+}
+
+// --- FeeParams tests ---
+
+func TestDefaultFeeParams(t *testing.T) {
+	fp := inferencetypes.DefaultFeeParams()
+	require.Equal(t, uint64(10), fp.MinGasPriceNgonka)
+	require.Equal(t, uint64(500_000), fp.BaseValidationGas)
+	require.Equal(t, uint64(100), fp.GasPerPoCCount)
+}
+
+func TestFeeParamsMarshalRoundtrip(t *testing.T) {
+	fp := inferencetypes.FeeParams{
+		MinGasPriceNgonka: 42,
+		BaseValidationGas: 123_456,
+		GasPerPoCCount:    789,
+	}
+
+	bz, err := fp.Marshal()
+	require.NoError(t, err)
+
+	fp2, err := inferencetypes.UnmarshalFeeParams(bz)
+	require.NoError(t, err)
+	require.Equal(t, fp, fp2)
+}

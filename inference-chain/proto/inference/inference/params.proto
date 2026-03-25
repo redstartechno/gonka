@@ -338,3 +338,21 @@ message SubnetEscrowParams {
   repeated string allowed_creator_addresses = 5;
   uint64 token_price = 6;
 }
+
+// FeeParams defines governance-controlled parameters for consensus-level fee enforcement.
+// NOTE: FeeParams is stored separately from the main Params proto (own KV key) and
+// serialized as JSON. The Go type is in x/inference/types/fee_params.go.
+// This proto definition is the source of truth for the schema and will be used
+// when proto generation tooling is set up.
+message FeeParams {
+  option (gogoproto.equal) = true;
+  // Minimum gas price in ngonka enforced at consensus level (both CheckTx and DeliverTx).
+  // A transaction must include fee >= gas_limit * min_gas_price_ngonka.
+  uint64 min_gas_price_ngonka = 1;
+  // Gas consumed on the first MsgPoCV2StoreCommit per participant per epoch.
+  // Covers the fixed cost of triggering PoC validation (GPU compute on all validators).
+  uint64 base_validation_gas = 2;
+  // Additional gas consumed per unit of Count in MsgPoCV2StoreCommit.
+  // Charged on delta (count increase) so total equals final_count * gas_per_poc_count.
+  uint64 gas_per_poc_count = 3;
+}

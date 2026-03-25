@@ -6,6 +6,7 @@ import (
 
 	"cosmossdk.io/collections"
 	sdkerrors "cosmossdk.io/errors"
+	storetypes "cosmossdk.io/store/types"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/productscience/inference/x/inference/types"
 )
@@ -76,7 +77,8 @@ func (k msgServer) PoCV2StoreCommit(goCtx context.Context, msg *types.MsgPoCV2St
 	}
 	pk := collections.Join(startBlockHeight, addr)
 	existing, err := k.PoCV2StoreCommits.Get(ctx, pk)
-	if err == nil {
+	isFirstCommit := err != nil // err means no existing commit found
+	if !isFirstCommit {
 		// Same-block rate limit: only one commit per block allowed
 		if existing.CommitBlockHeight == currentBlockHeight {
 			return nil, sdkerrors.Wrap(types.ErrIllegalState, "only one commit per block allowed")
@@ -86,6 +88,18 @@ func (k msgServer) PoCV2StoreCommit(goCtx context.Context, msg *types.MsgPoCV2St
 			return nil, sdkerrors.Wrap(types.ErrIllegalState,
 				fmt.Sprintf("count must increase: got %d, last recorded %d", msg.Count, existing.Count))
 		}
+	}
+
+	// Consume extra gas for sybil resistance (two-component fee).
+	// Base validation gas: charged once per participant per epoch (covers GPU validation cost).
+	// Count gas: charged on delta (so total equals final_count * gas_per_poc_count).
+	feeParams := k.Keeper.GetFeeParams(ctx)
+	if isFirstCommit {
+		ctx.GasMeter().ConsumeGas(storetypes.Gas(feeParams.BaseValidationGas), "poc_validation_base")
+		ctx.GasMeter().ConsumeGas(storetypes.Gas(msg.Count*feeParams.GasPerPoCCount), "poc_commit_count")
+	} else {
+		delta := msg.Count - existing.Count
+		ctx.GasMeter().ConsumeGas(storetypes.Gas(delta*feeParams.GasPerPoCCount), "poc_commit_count_delta")
 	}
 
 	// Store commit with block height

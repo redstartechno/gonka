@@ -915,8 +915,7 @@ func (m *manager) getFactory(id string) (*tx.Factory, error) {
 	factory := m.client.TxFactory.
 		WithAccountNumber(accountNumber).
 		WithGasAdjustment(10).
-		WithFees("").
-		WithGasPrices("").
+		WithGasPrices("10ngonka").
 		WithGas(0).
 		WithUnordered(true).
 		WithKeybase(*m.GetKeyring())
@@ -936,9 +935,11 @@ func (m *manager) getSignedBytes(id string, unsignedTx client.TxBuilder, factory
 
 	timestamp := getTimestamp(blockTs.UnixNano(), m.defaultTimeout)
 
-	// Gas is not charged, but without a high gas limit the transactions fail
-	unsignedTx.SetGasLimit(10000000000000)
-	unsignedTx.SetFeeAmount(sdk.Coins{})
+	// Set high gas limit for batch transactions. Network-duty messages (validations,
+	// PoC, inference) are fee-exempt via NetworkDutyFeeBypassDecorator, so fee amount
+	// is set but will not be charged for exempt messages.
+	unsignedTx.SetGasLimit(10_000_000)
+	unsignedTx.SetFeeAmount(sdk.NewCoins(sdk.NewCoin("ngonka", sdk.NewInt(10_000_000*10))))
 	unsignedTx.SetUnordered(true)
 	unsignedTx.SetTimeoutTimestamp(timestamp)
 	name := m.apiAccount.SignerAccount.Name
