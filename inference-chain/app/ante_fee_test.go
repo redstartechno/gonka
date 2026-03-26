@@ -7,6 +7,7 @@ import (
 	"cosmossdk.io/math"
 	cmtproto "github.com/cometbft/cometbft/proto/tendermint/types"
 	sdk "github.com/cosmos/cosmos-sdk/types"
+	authztypes "github.com/cosmos/cosmos-sdk/x/authz"
 	banktypes "github.com/cosmos/cosmos-sdk/x/bank/types"
 	stakingtypes "github.com/cosmos/cosmos-sdk/x/staking/types"
 	"github.com/stretchr/testify/require"
@@ -182,6 +183,56 @@ func TestIsExemptMessageType(t *testing.T) {
 	require.False(t, isExemptMessageType(&inferencetypes.MsgSubmitNewParticipant{}))
 	require.False(t, isExemptMessageType(&banktypes.MsgSend{}))
 	require.False(t, isExemptMessageType(&stakingtypes.MsgDelegate{}))
+}
+
+// --- MsgExec recursive unwrapping tests ---
+
+func TestNetworkDutyBypass_MsgExec_FailsClosedWithNilKeeper(t *testing.T) {
+	// With nil keeper, MsgExec should fail closed (not bypassed)
+	// even if the inner message is exempt.
+	decorator := NetworkDutyFeeBypassDecorator{
+		InferenceKeeper: nil,
+		GasCap:          1_000_000,
+		Priority:        500_000,
+	}
+
+	execMsg := &authztypes.MsgExec{
+		Grantee: "cosmos1test",
+		// Inner messages would need UnpackAny which requires a codec,
+		// so with nil keeper we fail closed before even checking inners.
+	}
+
+	tx := testFeeTx{msgs: []sdk.Msg{execMsg}, gas: 100_000}
+	ctx := newTestContext().WithMinGasPrices(sdk.DecCoins{sdk.NewDecCoin("ngonka", math.NewInt(10))})
+
+	_, err := decorator.AnteHandle(ctx, tx, false, func(ctx sdk.Context, tx sdk.Tx, simulate bool) (sdk.Context, error) {
+		// MsgExec with nil keeper should NOT be bypassed
+		require.False(t, IsNetworkDutyBypassed(ctx), "MsgExec should fail closed with nil keeper")
+		require.NotEmpty(t, ctx.MinGasPrices(), "min gas prices should NOT be cleared for MsgExec with nil keeper")
+		return ctx, nil
+	})
+	require.NoError(t, err)
+}
+
+func TestIsNetworkDutyRecursive_MsgExec_FailsClosed(t *testing.T) {
+	// Direct test of isNetworkDutyRecursive with MsgExec
+	execMsg := &authztypes.MsgExec{Grantee: "cosmos1test"}
+
+	// nil keeper: fail closed
+	require.False(t, isNetworkDutyRecursive(execMsg, nil),
+		"MsgExec should fail closed with nil keeper")
+}
+
+func TestIsNetworkDutyRecursive_NonExecNonExempt(t *testing.T) {
+	// Non-MsgExec, non-exempt message
+	require.False(t, isNetworkDutyRecursive(&banktypes.MsgSend{}, nil))
+	require.False(t, isNetworkDutyRecursive(&inferencetypes.MsgClaimRewards{}, nil))
+}
+
+func TestIsNetworkDutyRecursive_ExemptDirectMessage(t *testing.T) {
+	// Direct exempt message (not wrapped in MsgExec)
+	require.True(t, isNetworkDutyRecursive(&inferencetypes.MsgValidation{}, nil))
+	require.True(t, isNetworkDutyRecursive(&blstypes.MsgSubmitDealerPart{}, nil))
 }
 
 // --- GonkaFeeChecker tests ---
