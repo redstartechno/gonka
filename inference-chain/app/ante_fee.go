@@ -178,6 +178,12 @@ func GonkaFeeChecker(inferenceKeeper *inferencemodulekeeper.Keeper) ante.TxFeeCh
 		}
 
 		// Calculate required fee: gas * min_gas_price (integer math, no rounding needed).
+		// Overflow check: with uint64 max ~1.8e19, gas up to ~1e13 and price up to ~1e6
+		// are safe, but guard against extreme governance values.
+		if minGasPriceNgonka > 0 && gas > (^uint64(0))/minGasPriceNgonka {
+			return nil, 0, errorsmod.Wrap(sdkerrors.ErrInvalidRequest,
+				"gas * min_gas_price overflow")
+		}
 		requiredAmount := gas * minGasPriceNgonka
 		requiredFee := sdk.NewCoin("ngonka", math.NewIntFromUint64(requiredAmount))
 
