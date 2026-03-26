@@ -50,7 +50,8 @@ jobs:
           TMP_DIR="$(mktemp -d)"
           tar -xzf "$T" -C "$TMP_DIR"
 
-          OUT_ZIP="../public-html/v2/inferenced/inferenced-linux-amd64.zip"
+          OUT_DIR="$(pwd)/../public-html/v2/inferenced"
+          OUT_ZIP="$OUT_DIR/inferenced-linux-amd64.zip"
           rm -f "$OUT_ZIP"
           (
             cd "$TMP_DIR"
