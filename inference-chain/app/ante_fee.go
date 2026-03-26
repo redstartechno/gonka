@@ -18,12 +18,12 @@ import (
 
 // --- Context key for fee bypass flag ---
 
-type networkDutyBypassKey struct{}
+type networkDutyFeeBypassKey struct{}
 
 // IsNetworkDutyBypassed returns true if the NetworkDutyFeeBypassDecorator has
 // determined that all messages in the transaction are fee-exempt network duties.
 func IsNetworkDutyBypassed(ctx sdk.Context) bool {
-	v, ok := ctx.Value(networkDutyBypassKey{}).(bool)
+	v, ok := ctx.Value(networkDutyFeeBypassKey{}).(bool)
 	return ok && v
 }
 
@@ -74,7 +74,7 @@ func (d NetworkDutyFeeBypassDecorator) AnteHandle(ctx sdk.Context, tx sdk.Tx, si
 
 	// Clear min gas prices and set bypass flag for the custom TxFeeChecker.
 	ctx = ctx.WithMinGasPrices(sdk.DecCoins{})
-	ctx = ctx.WithValue(networkDutyBypassKey{}, true)
+	ctx = ctx.WithValue(networkDutyFeeBypassKey{}, true)
 	if d.Priority != 0 {
 		ctx = ctx.WithPriority(d.Priority)
 	}

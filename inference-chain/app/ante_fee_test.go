@@ -212,7 +212,7 @@ func TestGonkaFeeChecker_BypassFlag(t *testing.T) {
 		fee:  sdk.Coins{},
 		gas:  100_000,
 	}
-	ctx := newTestContext().WithValue(networkDutyBypassKey{}, true)
+	ctx := newTestContext().WithValue(networkDutyFeeBypassKey{}, true)
 
 	feeCoins, _, err := checker(ctx, tx)
 	require.NoError(t, err)
