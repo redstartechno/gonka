@@ -2,6 +2,7 @@ package keeper
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"cosmossdk.io/collections"
@@ -76,7 +77,13 @@ func (k msgServer) PoCV2StoreCommit(goCtx context.Context, msg *types.MsgPoCV2St
 	}
 	pk := collections.Join(startBlockHeight, addr)
 	existing, err := k.PoCV2StoreCommits.Get(ctx, pk)
-	isFirstCommit := err != nil // err means no existing commit found
+	isFirstCommit := false
+	if err != nil {
+		if !errors.Is(err, collections.ErrNotFound) {
+			return nil, sdkerrors.Wrap(types.ErrIllegalState, fmt.Sprintf("failed to read commit: %v", err))
+		}
+		isFirstCommit = true
+	}
 	if !isFirstCommit {
 		// Same-block rate limit: only one commit per block allowed
 		if existing.CommitBlockHeight == currentBlockHeight {
@@ -95,10 +102,18 @@ func (k msgServer) PoCV2StoreCommit(goCtx context.Context, msg *types.MsgPoCV2St
 	feeParams := k.Keeper.GetFeeParams(ctx)
 	if isFirstCommit {
 		ctx.GasMeter().ConsumeGas(storetypes.Gas(feeParams.BaseValidationGas), "poc_validation_base")
-		ctx.GasMeter().ConsumeGas(storetypes.Gas(uint64(msg.Count)*feeParams.GasPerPoCCount), "poc_commit_count")
+		countGas, overflow := checkedMul(uint64(msg.Count), feeParams.GasPerPoCCount)
+		if overflow {
+			return nil, sdkerrors.Wrap(types.ErrIllegalState, "count * gas_per_poc_count overflow")
+		}
+		ctx.GasMeter().ConsumeGas(storetypes.Gas(countGas), "poc_commit_count")
 	} else {
 		delta := uint64(msg.Count - existing.Count)
-		ctx.GasMeter().ConsumeGas(storetypes.Gas(delta*feeParams.GasPerPoCCount), "poc_commit_count_delta")
+		deltaGas, overflow := checkedMul(delta, feeParams.GasPerPoCCount)
+		if overflow {
+			return nil, sdkerrors.Wrap(types.ErrIllegalState, "delta * gas_per_poc_count overflow")
+		}
+		ctx.GasMeter().ConsumeGas(storetypes.Gas(deltaGas), "poc_commit_count_delta")
 	}
 
 	// Store commit with block height
@@ -120,6 +135,18 @@ func (k msgServer) PoCV2StoreCommit(goCtx context.Context, msg *types.MsgPoCV2St
 		"count", msg.Count)
 
 	return &types.MsgPoCV2StoreCommitResponse{}, nil
+}
+
+// checkedMul returns a*b and true if the multiplication overflows uint64.
+func checkedMul(a, b uint64) (uint64, bool) {
+	if a == 0 || b == 0 {
+		return 0, false
+	}
+	result := a * b
+	if result/a != b {
+		return 0, true
+	}
+	return result, false
 }
 
 // MLNodeWeightDistribution handles submission of per-node weight distribution.

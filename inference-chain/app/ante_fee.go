@@ -177,15 +177,9 @@ func GonkaFeeChecker(inferenceKeeper *inferencemodulekeeper.Keeper) ante.TxFeeCh
 			return feeCoins, priority, nil
 		}
 
-		// Calculate required fee: gas * min_gas_price (integer math, no rounding needed).
-		// Overflow check: with uint64 max ~1.8e19, gas up to ~1e13 and price up to ~1e6
-		// are safe, but guard against extreme governance values.
-		if minGasPriceNgonka > 0 && gas > (^uint64(0))/minGasPriceNgonka {
-			return nil, 0, errorsmod.Wrap(sdkerrors.ErrInvalidRequest,
-				"gas * min_gas_price overflow")
-		}
-		requiredAmount := gas * minGasPriceNgonka
-		requiredFee := sdk.NewCoin("ngonka", math.NewIntFromUint64(requiredAmount))
+		// Calculate required fee using big-int math to avoid uint64 overflow.
+		requiredAmount := math.NewIntFromUint64(gas).Mul(math.NewIntFromUint64(minGasPriceNgonka))
+		requiredFee := sdk.NewCoin("ngonka", requiredAmount)
 
 		if !feeCoins.IsAnyGTE(sdk.NewCoins(requiredFee)) {
 			return nil, 0, errorsmod.Wrapf(sdkerrors.ErrInsufficientFee,
@@ -205,9 +199,16 @@ func getTxPriority(feeCoins sdk.Coins, gas uint64) int64 {
 		return 0
 	}
 
+	// Clamp gas to max int64 to avoid overflow in QuoRaw.
+	const maxInt64 = int64(^uint64(0) >> 1)
+	divisor := maxInt64
+	if gas <= uint64(maxInt64) {
+		divisor = int64(gas)
+	}
+
 	var priority int64
 	for _, coin := range feeCoins {
-		gasPrice := coin.Amount.QuoRaw(int64(gas))
+		gasPrice := coin.Amount.QuoRaw(divisor)
 		amt := gasPrice.Int64()
 		if amt > priority {
 			priority = amt
