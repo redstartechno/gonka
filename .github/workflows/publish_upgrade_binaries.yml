@@ -34,7 +34,7 @@ jobs:
         run: |
           set -euo pipefail
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
-          go install github.com/ignite/cli/ignite@latest
+          go install github.com/ignite/cli/v28/ignite@latest
           ignite chain build --release --release.prefix "${{ steps.vars.outputs.tarball_prefix }}" -t linux:amd64 -y
 
       - name: Package inferenced-amd64.zip for upgrade
