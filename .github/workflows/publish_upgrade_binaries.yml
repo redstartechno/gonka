@@ -6,6 +6,12 @@ on:
     tags:
       - 'release/v[0-9]*.[0-9]*.[0-9]*'
       - 'release/v[0-9]*.[0-9]*.[0-9]*-*'
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Tag name to use for release (e.g. release/v0.2.11-testnet-7-subnet)"
+        required: true
+        type: string
 jobs:
   build_and_release:
     runs-on: ubuntu-latest
@@ -29,7 +35,7 @@ jobs:
         uses: ignite/cli/actions/cli@main
         if: ${{ steps.vars.outputs.should_release == 'true' }}
         with:
-          args: chain build --release --release.prefix ${{ steps.vars.outputs.tarball_prefix }} -t linux:amd64 -y
+          args: sh -lc "cd inference-chain && ignite chain build --release --release.prefix '${{ steps.vars.outputs.tarball_prefix }}' -t linux:amd64 -y"
         env:
           DO_NOT_TRACK: 1
 
@@ -67,10 +73,10 @@ jobs:
           repository: product-science/race-releases
 
           # --- Release Details ---
-          tag_name: ${{ github.ref_name }} # Use the tag from the push event
-          name: Release ${{ github.ref_name }}   # Use the tag for the release name
+          tag_name: ${{ github.event.inputs.release_tag || github.ref_name }} # Use manual input if dispatched, else use push tag
+          name: Release ${{ github.event.inputs.release_tag || github.ref_name }}   # Use manual input if dispatched, else use push tag
           body: |
-            Automated release created from main source tag ${{ github.ref_name }}.
+            Automated release created from main source tag ${{ github.event.inputs.release_tag || github.ref_name }}.
             Build artifacts from the `build-for-upgrade` target.
           draft: false
           prerelease: false # Set to true if these are pre-releases
