@@ -9,6 +9,9 @@ on:
 jobs:
   build_and_release:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./inference-chain
     steps:
       - name: Set up Go
         uses: actions/setup-go@v3.0.0
@@ -18,11 +21,33 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v3
 
-      - name: Run Makefile build
-        run: make build-for-upgrade
-        # This should produce files in:
-        # ./public/html/v2/inferenced/*
-        # ./public/html/v2/dapi/*
+      - name: Prepare Release Variables
+        id: vars
+        uses: ignite/cli/actions/release/vars@main
+
+      - name: Build inferenced (Ignite chain build)
+        uses: ignite/cli/actions/cli@main
+        if: ${{ steps.vars.outputs.should_release == 'true' }}
+        with:
+          args: chain build --release --release.prefix ${{ steps.vars.outputs.tarball_prefix }} -t linux:amd64 -y
+        env:
+          DO_NOT_TRACK: 1
+
+      - name: Package inferenced-amd64.zip for upgrade
+        run: |
+          set -euo pipefail
+          rm -rf ../public-html/v2/inferenced/* ../public-html/v2/checksums.txt ../public-html/v2/urls.txt
+          mkdir -p ../public-html/v2/inferenced
+
+          Z=$(ls ./release/*inferenced*linux*amd64*.zip 2>/dev/null | awk 'NR==1{print; exit}')
+          test -n "$Z"
+          cp "$Z" ../public-html/v2/inferenced/inferenced-amd64.zip
+
+          echo "inferenced-amd64.zip $(sha256sum ../public-html/v2/inferenced/inferenced-amd64.zip | awk '{print $1}')" >> ../public-html/v2/checksums.txt
+
+      - name: Build decentralized-api for upgrade
+        run: make -C ../decentralized-api build-for-upgrade
+        # produces ../public-html/v2/dapi/decentralized-api-amd64.zip and appends checksums
 
       - name: Generate GitHub App Installation Token for release
         id: get_release_token
