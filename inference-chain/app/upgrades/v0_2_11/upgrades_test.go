@@ -7,5 +7,5 @@ import (
 )
 
 func TestUpgradeName(t *testing.T) {
-	require.Equal(t, "v0.2.11-testnet-7-subnet", UpgradeName)
+	require.Equal(t, "v0.2.11-testnet-8-subnet", UpgradeName)
 }

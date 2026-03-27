@@ -1,3 +1,3 @@
 package v0_2_11
 
-const UpgradeName = "v0.2.11-testnet-7-subnet"
+const UpgradeName = "v0.2.11-testnet-8-subnet"
