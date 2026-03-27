@@ -8,23 +8,39 @@ on:
 jobs:
   build_and_release:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./inference-chain
     steps:
       - name: Checkout
         uses: actions/checkout@v3
         with:
           fetch-depth: 0
 
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.2'
+
       - name: Prepare Release Variables
         id: vars
         uses: ignite/cli/actions/release/vars@main
 
-      - name: Issue Release Assets
-        uses: ignite/cli/actions/cli@main
+      - name: Install Ignite
         if: ${{ steps.vars.outputs.should_release == 'true' }}
-        with:
-          args: chain build -p inference-chain --release --release.prefix ${{ steps.vars.outputs.tarball_prefix }} -t linux:amd64 -t darwin:amd64 -t darwin:arm64 -y
+        run: |
+          set -euo pipefail
+          curl -sL https://get.ignite.com/cli@v28.11.2! | bash
+          echo "/usr/local/bin" >> "$GITHUB_PATH"
+
+      - name: Issue Release Assets
+        if: ${{ steps.vars.outputs.should_release == 'true' }}
         env:
           DO_NOT_TRACK: 1
+          GOTOOLCHAIN: local
+        run: |
+          set -euo pipefail
+          ignite chain build --release --release.prefix "${{ steps.vars.outputs.tarball_prefix }}" -t linux:amd64 -t darwin:amd64 -t darwin:arm64 -y
 
       - name: Prepare inferenced release asset
         if: ${{ steps.vars.outputs.should_release == 'true' }}
