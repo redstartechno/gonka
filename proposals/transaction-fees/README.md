@@ -268,7 +268,7 @@ isNetworkDutyRecursive(msg):
 
 **Parameters:**
 
-*   `GasCap`: `1,000,000` gas. Prevents abuse where a node submits duty transactions with inflated gas that consume excessive block space without paying fees.
+*   `GasCap`: `10,000,000` gas. Prevents abuse where a node submits duty transactions with inflated gas that consume excessive block space without paying fees. Must be large enough to cover batch transactions with multiple messages.
 *   `Priority`: `500,000`. Ensures zero-fee duty transactions are not starved in the mempool.
 
 ### 5.4. Ante Handler Chain
@@ -422,7 +422,7 @@ Without recursive unpacking, an attacker could wrap a fee-required message (e.g.
 
 ### 7.3. Gas Cap on Bypassed Transactions
 
-The `GasCap` (1,000,000 gas) on the bypass decorator prevents abuse where a node submits duty transactions with inflated gas that consume excessive block space without paying fees.
+The `GasCap` (10,000,000 gas) on the bypass decorator prevents abuse where a node submits duty transactions with inflated gas that consume excessive block space without paying fees. This cap must be large enough to accommodate batch transactions with multiple messages.
 
 ### 7.4. Mixed Transaction Prevention
 
@@ -454,7 +454,7 @@ Adding a message to the exempt list means it can be submitted for free. Each add
 | `FeeParams.min_gas_price` | `10ngonka` | On-chain, `x/inference` params | Governance proposal |
 | `FeeParams.base_validation_gas` | `500,000` | On-chain, `x/inference` params | Governance proposal |
 | `FeeParams.gas_per_poc_count` | `100` | On-chain, `x/inference` params | Governance proposal |
-| Bypass gas cap | `1,000,000` | `NetworkDutyFeeBypassDecorator` | Chain upgrade |
+| Bypass gas cap | `10,000,000` | `NetworkDutyFeeBypassDecorator` | Chain upgrade |
 | Bypass priority | `500,000` | `NetworkDutyFeeBypassDecorator` | Chain upgrade |
 | Fee-exempt message set | See Section 3.2 | `isExemptMessageType()` | Chain upgrade |
 | DAPI gas price | `10ngonka` | `cosmosclient.go`, `tx_manager.go` | Config change |

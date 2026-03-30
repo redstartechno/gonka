@@ -43,7 +43,7 @@ func (t testFeeTx) FeeGranter() []byte                     { return nil }
 func TestNetworkDutyBypass_AllExemptMessages(t *testing.T) {
 	decorator := NetworkDutyFeeBypassDecorator{
 		InferenceKeeper: nil,
-		GasCap:          1_000_000,
+		GasCap:          10_000_000,
 		Priority:        500_000,
 	}
 
@@ -82,7 +82,7 @@ func TestNetworkDutyBypass_AllExemptMessages(t *testing.T) {
 func TestNetworkDutyBypass_NonExemptMessages(t *testing.T) {
 	decorator := NetworkDutyFeeBypassDecorator{
 		InferenceKeeper: nil,
-		GasCap:          1_000_000,
+		GasCap:          10_000_000,
 		Priority:        500_000,
 	}
 
@@ -115,7 +115,7 @@ func TestNetworkDutyBypass_NonExemptMessages(t *testing.T) {
 func TestNetworkDutyBypass_MixedMessages_NoBypass(t *testing.T) {
 	decorator := NetworkDutyFeeBypassDecorator{
 		InferenceKeeper: nil,
-		GasCap:          1_000_000,
+		GasCap:          10_000_000,
 		Priority:        500_000,
 	}
 
@@ -139,7 +139,7 @@ func TestNetworkDutyBypass_MixedMessages_NoBypass(t *testing.T) {
 func TestNetworkDutyBypass_GasCapEnforced(t *testing.T) {
 	decorator := NetworkDutyFeeBypassDecorator{
 		InferenceKeeper: nil,
-		GasCap:          1_000_000,
+		GasCap:          10_000_000,
 		Priority:        500_000,
 	}
 
@@ -192,7 +192,7 @@ func TestNetworkDutyBypass_MsgExec_FailsClosedWithNilKeeper(t *testing.T) {
 	// even if the inner message is exempt.
 	decorator := NetworkDutyFeeBypassDecorator{
 		InferenceKeeper: nil,
-		GasCap:          1_000_000,
+		GasCap:          10_000_000,
 		Priority:        500_000,
 	}
 

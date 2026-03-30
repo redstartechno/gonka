@@ -57,10 +57,10 @@ const (
 	// FeeParams.MinGasPriceNgonka default. Used for both the single-tx path
 	// (cosmosclient.go WithGasPrices) and the batch-tx path (getSignedBytes).
 	MinGasPriceNgonka = 10
-	// BatchGasLimit is the gas limit for batch transactions. Must not exceed
-	// NetworkDutyFeeBypassDecorator.GasCap (1,000,000) so that fee-exempt
-	// duty transactions are not rejected.
-	BatchGasLimit = 1_000_000
+	// BatchGasLimit is the gas limit for batch transactions.
+	// Must not exceed NetworkDutyFeeBypassDecorator.GasCap so that fee-exempt
+	// duty transactions are not rejected by the gas cap check.
+	BatchGasLimit = 10_000_000
 )
 
 type TxManager interface {
