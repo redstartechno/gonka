@@ -2,12 +2,10 @@ package keeper
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"cosmossdk.io/collections"
 	sdkerrors "cosmossdk.io/errors"
-	storetypes "cosmossdk.io/store/types"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/productscience/inference/x/inference/types"
 )
@@ -77,14 +75,7 @@ func (k msgServer) PoCV2StoreCommit(goCtx context.Context, msg *types.MsgPoCV2St
 	}
 	pk := collections.Join(startBlockHeight, addr)
 	existing, err := k.PoCV2StoreCommits.Get(ctx, pk)
-	isFirstCommit := false
-	if err != nil {
-		if !errors.Is(err, collections.ErrNotFound) {
-			return nil, sdkerrors.Wrap(types.ErrIllegalState, fmt.Sprintf("failed to read commit: %v", err))
-		}
-		isFirstCommit = true
-	}
-	if !isFirstCommit {
+	if err == nil {
 		// Same-block rate limit: only one commit per block allowed
 		if existing.CommitBlockHeight == currentBlockHeight {
 			return nil, sdkerrors.Wrap(types.ErrIllegalState, "only one commit per block allowed")
@@ -94,26 +85,6 @@ func (k msgServer) PoCV2StoreCommit(goCtx context.Context, msg *types.MsgPoCV2St
 			return nil, sdkerrors.Wrap(types.ErrIllegalState,
 				fmt.Sprintf("count must increase: got %d, last recorded %d", msg.Count, existing.Count))
 		}
-	}
-
-	// Consume extra gas for sybil resistance (two-component fee).
-	// Base validation gas: charged once per participant per epoch (covers GPU validation cost).
-	// Count gas: charged on delta (so total equals final_count * gas_per_poc_count).
-	feeParams := k.Keeper.GetFeeParams(ctx)
-	if isFirstCommit {
-		ctx.GasMeter().ConsumeGas(storetypes.Gas(feeParams.BaseValidationGas), "poc_validation_base")
-		countGas, overflow := checkedMul(uint64(msg.Count), feeParams.GasPerPoCCount)
-		if overflow {
-			return nil, sdkerrors.Wrap(types.ErrIllegalState, "count * gas_per_poc_count overflow")
-		}
-		ctx.GasMeter().ConsumeGas(storetypes.Gas(countGas), "poc_commit_count")
-	} else {
-		delta := uint64(msg.Count - existing.Count)
-		deltaGas, overflow := checkedMul(delta, feeParams.GasPerPoCCount)
-		if overflow {
-			return nil, sdkerrors.Wrap(types.ErrIllegalState, "delta * gas_per_poc_count overflow")
-		}
-		ctx.GasMeter().ConsumeGas(storetypes.Gas(deltaGas), "poc_commit_count_delta")
 	}
 
 	// Store commit with block height
@@ -135,18 +106,6 @@ func (k msgServer) PoCV2StoreCommit(goCtx context.Context, msg *types.MsgPoCV2St
 		"count", msg.Count)
 
 	return &types.MsgPoCV2StoreCommitResponse{}, nil
-}
-
-// checkedMul returns a*b and true if the multiplication overflows uint64.
-func checkedMul(a, b uint64) (uint64, bool) {
-	if a == 0 || b == 0 {
-		return 0, false
-	}
-	result := a * b
-	if result/a != b {
-		return 0, true
-	}
-	return result, false
 }
 
 // MLNodeWeightDistribution handles submission of per-node weight distribution.

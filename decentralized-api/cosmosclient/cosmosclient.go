@@ -118,7 +118,8 @@ func NewInferenceCosmosClient(ctx context.Context, addressPrefix string, config 
 		cosmosclient.WithKeyringServiceName("inferenced"),
 		cosmosclient.WithNodeAddress(nodeConfig.Url),
 		cosmosclient.WithKeyringDir(keyringDir),
-		cosmosclient.WithGasPrices(fmt.Sprintf("%dngonka", tx_manager.MinGasPriceNgonka)),
+		cosmosclient.WithGasPrices("0ngonka"),
+		cosmosclient.WithFees("0ngonka"),
 		cosmosclient.WithGas("auto"),
 		cosmosclient.WithGasAdjustment(5),
 	)

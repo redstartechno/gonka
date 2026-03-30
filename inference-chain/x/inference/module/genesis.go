@@ -63,12 +63,6 @@ func InitGenesis(ctx sdk.Context, k keeper.Keeper, genState types.GenesisState) 
 		}
 	}
 
-	// Initialize FeeParams with production defaults at genesis.
-	if err := k.SetFeeParams(ctx, types.DefaultFeeParams()); err != nil {
-		//nolint:forbidigo // genesis code
-		panic(err)
-	}
-
 	// this line is used by starport scaffolding # genesis/module/init
 	if err := k.SetParams(ctx, genState.Params); err != nil {
 		//nolint:forbidigo // genesis code

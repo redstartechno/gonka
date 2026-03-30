@@ -160,9 +160,7 @@ func (d LiquidityPoolFeeBypassDecorator) AnteHandle(ctx sdk.Context, tx sdk.Tx, 
 				inferencetypes.System, "poolAddress", poolAddress, "wrappedCodeID", wrappedCodeID)
 		}
 		// Waive min-gas-prices (fees) but keep metering; optionally raise priority.
-		// Set the fee bypass flag so the custom TxFeeChecker also allows zero fees.
 		ctx = ctx.WithMinGasPrices(sdk.DecCoins{})
-		ctx = ctx.WithValue(networkDutyFeeBypassKey{}, true)
 		if d.Priority != 0 {
 			ctx = ctx.WithPriority(d.Priority)
 		}
@@ -209,12 +207,7 @@ func NewAnteHandler(options HandlerOptions) (sdk.AnteHandler, error) {
 			GasCap:          500000,    // safe cap for swap path; tune after measuring simulate
 			Priority:        1_000_000, // optional: ensure zero-fee txs aren't starved
 		},
-		NetworkDutyFeeBypassDecorator{
-			InferenceKeeper: options.InferenceKeeper,
-			GasCap:          1_000_000, // cap for fee-exempt duty txs
-			Priority:        500_000,   // ensure zero-fee duty txs aren't starved
-		},
-		ante.NewDeductFeeDecorator(options.AccountKeeper, options.BankKeeper, options.FeegrantKeeper, GonkaFeeChecker(options.InferenceKeeper)),
+		ante.NewDeductFeeDecorator(options.AccountKeeper, options.BankKeeper, options.FeegrantKeeper, options.TxFeeChecker),
 		// Run mempool filters AFTER fee deduction (so invalid txs pay fees), but BEFORE signature verification (to avoid crypto work).
 		NewPocPeriodValidationDecorator(options.InferenceKeeper),   // Reject PoC submissions outside allowed windows
 		NewValidationEarlyRejectDecorator(options.InferenceKeeper), // Reject invalid MsgValidation txs early (duplicate / not-in-epoch)

@@ -648,29 +648,6 @@ data class ApplicationCLI(
         return execAndParse(finalArgs, stdIn = passwordInjection)
     }
 
-    fun sendTransactionWithFees(args: List<String>, fees: String, useColdAccount: Boolean = true): TxResponse {
-        val from = if (useColdAccount) this.getColdAccountName() else this.getWarmAccountName()
-        Logger.info("Sending transaction with fees=$fees")
-        val finalArgs = listOf("tx") + args + getTransactionArgsWithFees(from, fees)
-        return execAndParse(finalArgs, stdIn = passwordInjection)
-    }
-
-    private fun getTransactionArgsWithFees(from: String, fees: String) = listOf(
-        "--keyring-backend",
-        this.config.keyringBackend,
-        "--keyring-dir=/root/${config.stateDirName}",
-        "--yes",
-        "--unordered",
-        "--timeout-duration",
-        "60s",
-        "--gas",
-        "200000",
-        "--fees",
-        fees,
-        "--from",
-        from
-    )
-
     private fun getTransactionArgs(from: String) = listOf(
         "--keyring-backend",
         this.config.keyringBackend,
@@ -681,8 +658,6 @@ data class ApplicationCLI(
         "60s",
         "--gas",
         "2000000",
-        "--gas-prices",
-        "10ngonka",
         "--gas-adjustment",
         "5.0",
         "--from",
