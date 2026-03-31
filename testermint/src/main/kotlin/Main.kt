@@ -329,14 +329,25 @@ fun initialize(pairs: List<LocalInferencePair>, resetMlNodes: Boolean = true): L
         println("No funded nodes")
         throw IllegalStateException("No funded nodes")
     }
+
+    // Fund unfunded nodes so they can pay transaction fees.
+    // With consensus-level fee enforcement, nodes need a balance to submit any transaction.
+    if (unfunded.isNotEmpty()) {
+        Logger.info("Funding {} unfunded nodes from highest-funded node", unfunded.size)
+        for (pair in unfunded) {
+            val destAddress = pair.node.getColdAddress()
+            highestFunded.transferMoneyTo(pair.node, 100_000_000) // 0.1 GNK
+            Logger.info("Funded {} with 0.1 GNK", destAddress)
+        }
+        highestFunded.node.waitForNextBlock(2)
+    }
+
     val currentParticipants = highestFunded.api.getParticipants()
-    for (pair in funded) {
+    for (pair in (funded + unfunded)) {
         if (currentParticipants.none { it.id == pair.node.getColdAddress() }) {
             pair.addSelfAsParticipant(listOf(defaultModel))
         }
     }
-//    addUnfundedDirectly(unfunded, currentParticipants, highestFunded)
-//    fundUnfunded(unfunded, highestFunded)
 
     highestFunded.node.waitForNextBlock(2)
     pairs.forEach { pair ->
