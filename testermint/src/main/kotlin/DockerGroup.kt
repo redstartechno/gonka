@@ -191,6 +191,21 @@ data class DockerGroup(
                 this.genesisGroup?.apiUrl ?: "http://genesis-api:9000"
             )
             node.waitForNextBlock(2)
+
+            // Fund the join node from genesis so it can pay transaction fees
+            // (e.g., for grantMlOpsPermissions authz grant).
+            val genesisNode = containers.getCli("/${config.genesisName}")
+                ?: error("Could not find genesis node container")
+            val joinColdAddress = node.getColdAddress()
+            val fundingAmount = "100000000ngonka" // 0.1 GNK — enough for fees
+            Logger.info("Funding join node $joinColdAddress with $fundingAmount from genesis")
+            genesisNode.sendTransactionDirectly(listOf(
+                "bank", "send",
+                genesisNode.getColdAccountName(), joinColdAddress,
+                fundingAmount
+            ))
+            node.waitForNextBlock(2)
+
             node.grantMlOpsPermissionsToWarmAccount()
             val startRemainingArgs = baseArgs + listOf("api", "mock-server", "proxy")
             this.coldAccountPubkey = node.getColdPubKey()
