@@ -118,7 +118,7 @@ func NewInferenceCosmosClient(ctx context.Context, addressPrefix string, config 
 		cosmosclient.WithKeyringServiceName("inferenced"),
 		cosmosclient.WithNodeAddress(nodeConfig.Url),
 		cosmosclient.WithKeyringDir(keyringDir),
-		cosmosclient.WithGasPrices(fmt.Sprintf("%dngonka", tx_manager.MinGasPriceNgonka)),
+		cosmosclient.WithGasPrices(fmt.Sprintf("%dngonka", nodeConfig.GetMinGasPriceNgonka())),
 		cosmosclient.WithGas("auto"),
 		cosmosclient.WithGasAdjustment(5),
 	)
@@ -158,7 +158,7 @@ func NewInferenceCosmosClient(ctx context.Context, addressPrefix string, config 
 		}
 	}()
 
-	mn, err := tx_manager.StartTxManager(ctx, &cosmoclient, apiAccount, time.Second*60, natsConn, accAddress, config.GetHeight)
+	mn, err := tx_manager.StartTxManager(ctx, &cosmoclient, apiAccount, time.Second*60, natsConn, accAddress, nodeConfig.GetMinGasPriceNgonka(), config.GetHeight)
 	if err != nil {
 		return nil, err
 	}

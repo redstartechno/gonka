@@ -53,10 +53,6 @@ const (
 
 	maxBlockTimeDrift = 120 * time.Second
 
-	// MinGasPriceNgonka is the minimum gas price in ngonka, matching the on-chain
-	// FeeParams.MinGasPriceNgonka default. Used for both the single-tx path
-	// (cosmosclient.go WithGasPrices) and the batch-tx path (getSignedBytes).
-	MinGasPriceNgonka = 10
 	// BatchGasLimit is the gas limit for batch transactions.
 	// Must not exceed NetworkDutyFeeBypassDecorator.GasCap so that fee-exempt
 	// duty transactions are not rejected by the gas cap check.
@@ -86,17 +82,18 @@ type blockTimeTracker struct {
 }
 
 type manager struct {
-	ctx              context.Context
-	client           *cosmosclient.Client
-	apiAccount       *apiconfig.ApiAccount
-	txFactory        *tx.Factory
-	accountRetriever client.AccountRetriever
-	address          string
-	defaultTimeout   time.Duration
-	natsConnection   *nats.Conn
-	natsJetStream    nats.JetStreamContext
-	blockTimeTracker *blockTimeTracker
-	getHeightFunc    func() int64
+	ctx                context.Context
+	client             *cosmosclient.Client
+	apiAccount         *apiconfig.ApiAccount
+	txFactory          *tx.Factory
+	accountRetriever   client.AccountRetriever
+	address            string
+	defaultTimeout     time.Duration
+	natsConnection     *nats.Conn
+	natsJetStream      nats.JetStreamContext
+	blockTimeTracker   *blockTimeTracker
+	getHeightFunc      func() int64
+	minGasPriceNgonka  int64
 }
 
 func StartTxManager(
@@ -106,6 +103,7 @@ func StartTxManager(
 	defaultTimeout time.Duration,
 	natsConnection *nats.Conn,
 	address string,
+	minGasPriceNgonka int64,
 	getHeight func() int64) (*manager, error) {
 	js, err := natsConnection.JetStream()
 	if err != nil {
@@ -123,16 +121,20 @@ func StartTxManager(
 	blstypes.RegisterInterfaces(client.Context().InterfaceRegistry)
 	streamvestingtypes.RegisterInterfaces(client.Context().InterfaceRegistry)
 
+	if minGasPriceNgonka <= 0 {
+		minGasPriceNgonka = apiconfig.DefaultMinGasPriceNgonka
+	}
 	m := &manager{
-		ctx:              ctx,
-		client:           client,
-		address:          address,
-		apiAccount:       account,
-		accountRetriever: authtypes.AccountRetriever{},
-		defaultTimeout:   defaultTimeout,
-		natsConnection:   natsConnection,
-		natsJetStream:    js,
-		getHeightFunc:    getHeight,
+		ctx:               ctx,
+		client:            client,
+		address:           address,
+		apiAccount:        account,
+		accountRetriever:  authtypes.AccountRetriever{},
+		defaultTimeout:    defaultTimeout,
+		natsConnection:    natsConnection,
+		natsJetStream:     js,
+		getHeightFunc:     getHeight,
+		minGasPriceNgonka: minGasPriceNgonka,
 		blockTimeTracker: &blockTimeTracker{
 			maxBlockTimeout: 10 * time.Second,
 		},
@@ -925,7 +927,7 @@ func (m *manager) getFactory(id string) (*tx.Factory, error) {
 	factory := m.client.TxFactory.
 		WithAccountNumber(accountNumber).
 		WithGasAdjustment(10).
-		WithGasPrices(fmt.Sprintf("%dngonka", MinGasPriceNgonka)).
+		WithGasPrices(fmt.Sprintf("%dngonka", m.minGasPriceNgonka)).
 		WithGas(0).
 		WithUnordered(true).
 		WithKeybase(*m.GetKeyring())
@@ -949,7 +951,7 @@ func (m *manager) getSignedBytes(id string, unsignedTx client.TxBuilder, factory
 	// PoC, inference) are fee-exempt via the bypass decorator, so this fee
 	// will not be charged for exempt messages.
 	unsignedTx.SetGasLimit(BatchGasLimit)
-	unsignedTx.SetFeeAmount(sdk.NewCoins(sdk.NewCoin("ngonka", math.NewInt(BatchGasLimit*MinGasPriceNgonka))))
+	unsignedTx.SetFeeAmount(sdk.NewCoins(sdk.NewCoin("ngonka", math.NewInt(BatchGasLimit*m.minGasPriceNgonka))))
 	unsignedTx.SetUnordered(true)
 	unsignedTx.SetTimeoutTimestamp(timestamp)
 	name := m.apiAccount.SignerAccount.Name

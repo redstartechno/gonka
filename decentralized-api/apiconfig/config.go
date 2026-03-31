@@ -76,6 +76,19 @@ type ChainNodeConfig struct {
 	KeyringBackend   string `koanf:"keyring_backend" json:"keyring_backend"`
 	KeyringDir       string `koanf:"keyring_dir" json:"keyring_dir"`
 	KeyringPassword  string `json:"-"`
+	// MinGasPriceNgonka is the gas price in ngonka used for transaction fee calculation.
+	// Must be >= the on-chain FeeParams.MinGasPriceNgonka. Defaults to 10 if unset.
+	MinGasPriceNgonka int64 `koanf:"min_gas_price_ngonka" json:"min_gas_price_ngonka"`
+}
+
+const DefaultMinGasPriceNgonka int64 = 10
+
+// GetMinGasPriceNgonka returns the configured gas price, defaulting to 10 if unset.
+func (c ChainNodeConfig) GetMinGasPriceNgonka() int64 {
+	if c.MinGasPriceNgonka > 0 {
+		return c.MinGasPriceNgonka
+	}
+	return DefaultMinGasPriceNgonka
 }
 
 type MLNodeKeyConfig struct {
