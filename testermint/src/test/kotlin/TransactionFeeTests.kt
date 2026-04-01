@@ -4,6 +4,7 @@ import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.BeforeAll
 import org.junit.jupiter.api.MethodOrderer
 import org.junit.jupiter.api.Order
+import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestMethodOrder
 
@@ -21,6 +22,7 @@ import org.junit.jupiter.api.TestMethodOrder
  * - Fee-exempt messages (inference lifecycle) work without fees
  * - Default transaction path (with --gas-prices) works
  */
+@Tag("unstable") // Requires cluster reboot with fee enforcement; excluded from standard CI run
 @TestMethodOrder(MethodOrderer.OrderAnnotation::class)
 class TransactionFeeTests : TestermintTest() {
 
