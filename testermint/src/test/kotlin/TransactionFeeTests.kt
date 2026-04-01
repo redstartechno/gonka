@@ -17,7 +17,8 @@ import org.junit.jupiter.api.TestMethodOrder
  * Verifies that:
  * - Fee-required messages are rejected with zero/insufficient fees
  * - Fee-required messages succeed with sufficient fees
- * - Fees are deducted from the sender's balance
+ * - Fees are actually deducted from the sender's balance
+ * - Fee-exempt messages (inference lifecycle) work without fees
  * - Default transaction path (with --gas-prices) works
  */
 @TestMethodOrder(MethodOrderer.OrderAnnotation::class)
@@ -54,6 +55,8 @@ class TransactionFeeTests : TestermintTest() {
         }
     }
 
+    // --- Fee rejection tests ---
+
     @Test
     @Order(1)
     fun `bank send with zero fees is rejected`() {
@@ -75,31 +78,6 @@ class TransactionFeeTests : TestermintTest() {
 
     @Test
     @Order(2)
-    fun `bank send with sufficient fees succeeds`() {
-        logHighlight("Testing that bank send with sufficient fees succeeds")
-
-        val balanceBefore = genesis.getBalance(genesisAddress)
-
-        // 200,000 gas * 10 ngonka/gas = 2,000,000 ngonka minimum fee
-        val result = genesis.submitTransactionWithFees(
-            listOf(
-                "bank", "send",
-                genesisAddress, recipientAddress,
-                "1000ngonka"
-            ),
-            fees = "2000000ngonka"
-        )
-
-        assertThat(result.code).isEqualTo(0)
-
-        val balanceAfter = genesis.getBalance(genesisAddress)
-        // Balance should decrease by at least the transfer amount
-        assertThat(balanceAfter).isLessThan(balanceBefore)
-        logHighlight("Bank send with sufficient fees succeeded. Balance: $balanceBefore -> $balanceAfter")
-    }
-
-    @Test
-    @Order(3)
     fun `staking delegate with zero fees is rejected`() {
         logHighlight("Testing that staking delegate with zero fees is rejected")
 
@@ -120,7 +98,58 @@ class TransactionFeeTests : TestermintTest() {
     }
 
     @Test
+    @Order(3)
+    fun `bank send with insufficient fees is rejected`() {
+        logHighlight("Testing that bank send with insufficient fees is rejected")
+
+        // At 10 ngonka/gas and 200,000 gas, minimum fee is 2,000,000 ngonka.
+        // Send only 1 ngonka as fee.
+        val result = genesis.submitTransactionWithFees(
+            listOf(
+                "bank", "send",
+                genesisAddress, recipientAddress,
+                "1000ngonka"
+            ),
+            fees = "1ngonka"
+        )
+
+        assertThat(result.code).isNotEqualTo(0)
+        assertThat(result.rawLog).containsIgnoringCase("insufficient fee")
+        logHighlight("Bank send with insufficient fees correctly rejected: ${result.rawLog}")
+    }
+
+    // --- Fee acceptance tests ---
+
+    @Test
     @Order(4)
+    fun `bank send with sufficient fees succeeds and deducts balance`() {
+        logHighlight("Testing that bank send with sufficient fees succeeds")
+
+        val balanceBefore = genesis.getBalance(genesisAddress)
+
+        // 200,000 gas * 10 ngonka/gas = 2,000,000 ngonka minimum fee
+        val result = genesis.submitTransactionWithFees(
+            listOf(
+                "bank", "send",
+                genesisAddress, recipientAddress,
+                "1000ngonka"
+            ),
+            fees = "2000000ngonka"
+        )
+
+        assertThat(result.code).isEqualTo(0)
+
+        val balanceAfter = genesis.getBalance(genesisAddress)
+        // Balance should decrease by at least transfer amount + fee
+        assertThat(balanceAfter).isLessThan(balanceBefore)
+        val deducted = balanceBefore - balanceAfter
+        // Deducted amount should be at least the transfer (1000) + fee (2000000)
+        assertThat(deducted).isGreaterThanOrEqualTo(1000 + 2000000)
+        logHighlight("Balance deducted: $deducted ngonka (transfer=1000 + fee>=2000000)")
+    }
+
+    @Test
+    @Order(5)
     fun `default transaction path succeeds with gas prices`() {
         logHighlight("Testing that default transaction path (with --gas-prices) succeeds")
 
@@ -136,5 +165,22 @@ class TransactionFeeTests : TestermintTest() {
 
         assertThat(result.code).isEqualTo(0)
         logHighlight("Default-path transaction succeeded (fees auto-calculated from gas prices)")
+    }
+
+    // --- Fee-exempt bypass test ---
+
+    @Test
+    @Order(6)
+    fun `inference request succeeds with fee enforcement active`() {
+        logHighlight("Testing that inference works with fee enforcement (MsgStartInference and MsgFinishInference are fee-exempt)")
+
+        genesis.waitForNextInferenceWindow()
+
+        val response = genesis.makeInferenceRequest(inferenceRequest)
+
+        // Inference should complete successfully — the DAPI submits MsgStartInference
+        // and MsgFinishInference which are fee-exempt network duty messages.
+        assertThat(response.choices).isNotEmpty
+        logHighlight("Inference succeeded with fee enforcement active: model=${response.model}")
     }
 }
