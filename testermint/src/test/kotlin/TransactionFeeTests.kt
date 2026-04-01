@@ -150,21 +150,23 @@ class TransactionFeeTests : TestermintTest() {
 
     @Test
     @Order(5)
-    fun `default transaction path succeeds with gas prices`() {
-        logHighlight("Testing that default transaction path (with --gas-prices) succeeds")
+    fun `transaction with zero fees is rejected when enforcement is active`() {
+        logHighlight("Testing that zero-fee transaction is rejected (not just insufficient, but zero)")
 
-        // The default submitTransaction path includes --gas-prices 10ngonka,
-        // so fee calculation happens automatically via gas simulation.
-        val result = genesis.submitTransaction(
+        // The default submitTransaction path sends with zero fees.
+        // With fee enforcement active, this should be rejected.
+        val result = genesis.submitTransactionWithFees(
             listOf(
                 "bank", "send",
                 genesisAddress, recipientAddress,
                 "500ngonka"
-            )
+            ),
+            fees = "0ngonka"
         )
 
-        assertThat(result.code).isEqualTo(0)
-        logHighlight("Default-path transaction succeeded (fees auto-calculated from gas prices)")
+        assertThat(result.code).isNotEqualTo(0)
+        assertThat(result.rawLog).containsIgnoringCase("insufficient fee")
+        logHighlight("Zero-fee transaction correctly rejected with fee enforcement active")
     }
 
     // --- Fee-exempt bypass test ---
