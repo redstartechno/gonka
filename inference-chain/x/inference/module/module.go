@@ -173,7 +173,7 @@ func (am AppModule) ExportGenesis(ctx sdk.Context, cdc codec.JSONCodec) json.Raw
 
 // ConsensusVersion is a sequence number for state-breaking change of the module.
 // It should be incremented on each consensus-breaking change introduced by the module.
-func (AppModule) ConsensusVersion() uint64 { return 13 }
+func (AppModule) ConsensusVersion() uint64 { return 14 }
 
 // BeginBlock contains the logic that is automatically triggered at the beginning of each block.
 func (am AppModule) BeginBlock(ctx context.Context) error {
@@ -569,12 +569,6 @@ func (am AppModule) onEndOfPoCValidationStage(ctx context.Context, blockHeight i
 
 	modelAssigner.AllocateMLNodesForPoC(ctx, *upcomingEpoch, activeParticipants)
 	am.LogInfo("Finished PoC allocation for all participants", types.EpochGroup, "step", "poc_allocation_complete")
-
-	err = am.RegisterTopMiners(ctx, activeParticipants, blockTime)
-	if err != nil {
-		am.LogError("onEndOfPoCValidationStage: Unable to register top miners", types.Tokenomics, "error", err.Error())
-		return
-	}
 
 	am.LogInfo("onEndOfPoCValidationStage: computed new weights", types.Stages,
 		"upcomingEpoch.Index", upcomingEpoch.Index,

@@ -500,9 +500,6 @@ fun createSpec(epochLength: Long = 15L, epochShift: Int = 0): Spec<AppState> = s
                 this[PocParams::pocNormalizationEnabled] = false
             }
         }
-        this[InferenceState::genesisOnlyParams] = spec<GenesisOnlyParams> {
-            this[GenesisOnlyParams::topRewardPeriod] = Duration.ofDays(365).toSeconds()
-        }
         this[InferenceState::modelList] = listOf(
             ModelListItem(
                 proposedBy = "genesis",

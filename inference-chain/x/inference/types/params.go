@@ -18,9 +18,8 @@ var (
 	KeyBaseWeightRatio                   = []byte("BaseWeightRatio")
 	KeyCollateralPerWeightUnit           = []byte("CollateralPerWeightUnit")
 	// Vesting parameter keys for TokenomicsParams
-	KeyWorkVestingPeriod     = []byte("WorkVestingPeriod")
-	KeyRewardVestingPeriod   = []byte("RewardVestingPeriod")
-	KeyTopMinerVestingPeriod = []byte("TopMinerVestingPeriod")
+	KeyWorkVestingPeriod   = []byte("WorkVestingPeriod")
+	KeyRewardVestingPeriod = []byte("RewardVestingPeriod")
 	// Bitcoin reward parameter keys
 	KeyUseBitcoinRewards          = []byte("UseBitcoinRewards")
 	KeyInitialEpochReward         = []byte("InitialEpochReward")
@@ -99,15 +98,9 @@ func DefaultGenesisOnlyParams() GenesisOnlyParams {
 	return GenesisOnlyParams{
 		TotalSupply:                             1_000 * million * billion,
 		OriginatorSupply:                        160 * million * billion,
-		TopRewardAmount:                         120 * million * billion,
 		PreProgrammedSaleAmount:                 120 * million * billion,
-		TopRewards:                              3,
 		SupplyDenom:                             BaseCoin,
 		StandardRewardAmount:                    600 * million * billion,
-		TopRewardPeriod:                         year,
-		TopRewardPayouts:                        12,
-		TopRewardPayoutsPerMiner:                4,
-		TopRewardMaxDuration:                    year * 4,
 		MaxIndividualPowerPercentage:            DecimalFromFloat(0.25),
 		GenesisGuardianEnabled:                  true, // Enable genesis guardian system by default
 		GenesisGuardianNetworkMaturityThreshold: 2_000_000,
@@ -264,11 +257,8 @@ func DefaultTokenomicsParams() *TokenomicsParams {
 		SubsidyReductionInterval: DecimalFromFloat(0.05),
 		SubsidyReductionAmount:   DecimalFromFloat(0.20),
 		CurrentSubsidyPercentage: DecimalFromFloat(0.90),
-		TopRewardAllowedFailure:  DecimalFromFloat(0.10),
-		TopMinerPocQualification: 10,
 		WorkVestingPeriod:        0, // Default: no vesting (production: 180, E2E tests: 2)
 		RewardVestingPeriod:      0, // Default: no vesting (production: 180, E2E tests: 2)
-		TopMinerVestingPeriod:    0, // Default: no vesting (production: 180, E2E tests: 2)
 	}
 }
 
@@ -353,7 +343,6 @@ func (p *TokenomicsParams) ParamSetPairs() paramtypes.ParamSetPairs {
 	return paramtypes.ParamSetPairs{
 		paramtypes.NewParamSetPair(KeyWorkVestingPeriod, &p.WorkVestingPeriod, validateVestingPeriod),
 		paramtypes.NewParamSetPair(KeyRewardVestingPeriod, &p.RewardVestingPeriod, validateVestingPeriod),
-		paramtypes.NewParamSetPair(KeyTopMinerVestingPeriod, &p.TopMinerVestingPeriod, validateVestingPeriod),
 	}
 }
 
@@ -592,9 +581,6 @@ func (p *TokenomicsParams) Validate() error {
 	if p.CurrentSubsidyPercentage == nil {
 		return fmt.Errorf("current subsidy percentage cannot be nil")
 	}
-	if p.TopRewardAllowedFailure == nil {
-		return fmt.Errorf("top reward allowed failure cannot be nil")
-	}
 
 	// Validate vesting parameters
 	if err := validateVestingPeriod(p.WorkVestingPeriod); err != nil {
@@ -602,9 +588,6 @@ func (p *TokenomicsParams) Validate() error {
 	}
 	if err := validateVestingPeriod(p.RewardVestingPeriod); err != nil {
 		return errors.Wrap(err, "invalid reward_vesting_period")
-	}
-	if err := validateVestingPeriod(p.TopMinerVestingPeriod); err != nil {
-		return errors.Wrap(err, "invalid top_miner_vesting_period")
 	}
 
 	return nil
