@@ -264,19 +264,29 @@ func (k Keeper) AssignSlots(ctx sdk.Context, participants []types.ParticipantWit
 // SetEpochBLSData stores EpochBLSData in the state.
 //
 // DealerParts are stored out-of-band under per-participant sub-keys (see
-// SetDealerPart and DealerPartKey). This function writes only the base
-// struct with DealerParts zeroed out — it never rewrites dealer parts
-// themselves. The dealer hot path (msg_server_dealer.go) writes to the
-// sub-keys directly via SetDealerPart; phase transitions and dispute
-// resolution read via GetEpochBLSData (which rehydrates DealerParts from
-// sub-keys) and write back only the base struct.
+// SetDealerPart and DealerPartKey). Any non-empty dealer parts in the
+// input struct are synced to sub-keys. The base struct is persisted with
+// DealerParts zeroed so it stays constant-size. This means callers can
+// set dealer parts via this function (e.g., during DKG initialization or
+// in tests), and the data will be readable via GetEpochBLSData which
+// rehydrates from sub-keys.
 //
-// This split avoids rewriting the whole struct (which grows with every
-// submission in the dealing phase) on every MsgSubmitDealerPart, which
-// previously created a gas-estimation race where later dealers hit
-// "out of gas" and dropped out of the signing group.
+// The dealer HOT PATH (MsgSubmitDealerPart) bypasses this function
+// entirely and calls SetDealerPart directly — a single sub-key write
+// with constant gas cost regardless of how many dealers already submitted.
 func (k Keeper) SetEpochBLSData(ctx sdk.Context, epochBLSData types.EpochBLSData) error {
 	store := k.storeService.OpenKVStore(ctx)
+
+	// Sync any non-empty dealer parts to their sub-keys. Empty placeholders
+	// (DealerAddress == "") are skipped — they only exist as in-memory
+	// sentinels during DKG initialization.
+	for i, dp := range epochBLSData.DealerParts {
+		if dp != nil && dp.DealerAddress != "" {
+			if err := k.SetDealerPart(ctx, epochBLSData.EpochId, uint32(i), dp); err != nil {
+				return fmt.Errorf("sync dealer part %d to sub-key: %w", i, err)
+			}
+		}
+	}
 
 	// Persist the base struct with DealerParts zeroed so writes stay
 	// constant-size. We copy to avoid mutating the caller's struct.
