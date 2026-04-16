@@ -19,6 +19,7 @@ const (
 var (
 	ParamsKey                       = []byte("p_bls")
 	EpochBLSDataPrefix              = []byte("epoch_bls_data")
+	DealerPartPrefix                = []byte("epoch_bls_dealer_part/")
 	ThresholdSigningRequestPrefix   = []byte("threshold_signing_request")
 	ExpirationIndexPrefix           = []byte("expiration_index")
 	GroupValidationPrefix           = []byte("group_validation_")
@@ -35,6 +36,37 @@ func EpochBLSDataKey(epochID uint64) []byte {
 	copy(key, EpochBLSDataPrefix)
 	binary.BigEndian.PutUint64(key[len(EpochBLSDataPrefix):], epochID)
 	return key
+}
+
+// DealerPartKey generates a sub-key for storing a single DealerPartStorage.
+//
+// Layout: {DealerPartPrefix}{epoch_id:uint64 BE}/{participant_index:uint32 BE}.
+//
+// Storing each dealer part under its own key prevents the entire EpochBLSData
+// struct from being rewritten on every MsgSubmitDealerPart submission. Before
+// this change, the Nth dealer paid gas proportional to N (because the dealing
+// struct accumulates dealer parts inline), which created a race where the
+// DAPI's simulation-based gas estimate was too low by the time the tx landed,
+// pushing later dealers over the declared gas limit and failing them out of
+// the DKG entirely.
+func DealerPartKey(epochID uint64, participantIndex uint32) []byte {
+	key := make([]byte, len(DealerPartPrefix)+8+1+4)
+	copy(key, DealerPartPrefix)
+	binary.BigEndian.PutUint64(key[len(DealerPartPrefix):], epochID)
+	key[len(DealerPartPrefix)+8] = '/'
+	binary.BigEndian.PutUint32(key[len(DealerPartPrefix)+8+1:], participantIndex)
+	return key
+}
+
+// DealerPartEpochPrefix returns the prefix used to iterate all dealer parts
+// for a given epoch ID. Used to rehydrate EpochBLSData.DealerParts on read
+// and to clear state when an epoch's DKG is torn down.
+func DealerPartEpochPrefix(epochID uint64) []byte {
+	prefix := make([]byte, len(DealerPartPrefix)+8+1)
+	copy(prefix, DealerPartPrefix)
+	binary.BigEndian.PutUint64(prefix[len(DealerPartPrefix):], epochID)
+	prefix[len(DealerPartPrefix)+8] = '/'
+	return prefix
 }
 
 // ThresholdSigningRequestKey generates a key for storing ThresholdSigningRequest by request ID
