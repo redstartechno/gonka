@@ -5,10 +5,20 @@ import (
 	"sort"
 
 	"cosmossdk.io/math"
+	"cosmossdk.io/store/prefix"
+	"github.com/cosmos/cosmos-sdk/runtime"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
 	"github.com/productscience/inference/x/bls/types"
 )
+
+// dealerPartsStore returns a prefix.Store scoped to all dealer parts for a
+// single epoch. Keys within the returned store are the sub-keys produced by
+// types.DealerPartSubKey (4-byte big-endian participant index).
+func (k Keeper) dealerPartsStore(ctx sdk.Context, epochID uint64) prefix.Store {
+	store := runtime.KVStoreAdapter(k.storeService.OpenKVStore(ctx))
+	return prefix.NewStore(store, types.DealerPartEpochPrefix(epochID))
+}
 
 // InitiateKeyGenerationForEpoch initiates DKG for a given epoch with finalized participants
 func (k Keeper) InitiateKeyGenerationForEpoch(ctx sdk.Context, epochID uint64, finalizedParticipants []types.ParticipantWithWeightAndKey) error {
@@ -264,12 +274,12 @@ func (k Keeper) AssignSlots(ctx sdk.Context, participants []types.ParticipantWit
 // SetEpochBLSData stores EpochBLSData in the state.
 //
 // DealerParts are stored out-of-band under per-participant sub-keys (see
-// SetDealerPart and DealerPartKey). Any non-empty dealer parts in the
-// input struct are synced to sub-keys. The base struct is persisted with
-// DealerParts zeroed so it stays constant-size. This means callers can
-// set dealer parts via this function (e.g., during DKG initialization or
-// in tests), and the data will be readable via GetEpochBLSData which
-// rehydrates from sub-keys.
+// SetDealerPart and the DealerPartEpochPrefix/DealerPartSubKey helpers).
+// Any non-empty dealer parts in the input struct are synced to sub-keys.
+// The base struct is persisted with DealerParts zeroed so it stays
+// constant-size. This means callers can set dealer parts via this function
+// (e.g., during DKG initialization or in tests), and the data will be
+// readable via GetEpochBLSData which rehydrates from sub-keys.
 //
 // The dealer HOT PATH (MsgSubmitDealerPart) bypasses this function
 // entirely and calls SetDealerPart directly — a single sub-key write
@@ -310,24 +320,18 @@ func (k Keeper) SetDealerPart(ctx sdk.Context, epochID uint64, participantIndex 
 	if dealerPart == nil {
 		return fmt.Errorf("nil dealer part")
 	}
-	store := k.storeService.OpenKVStore(ctx)
-	subKey := types.DealerPartKey(epochID, participantIndex)
 	value, err := k.cdc.Marshal(dealerPart)
 	if err != nil {
 		return fmt.Errorf("marshal dealer part: %w", err)
 	}
-	return store.Set(subKey, value)
+	k.dealerPartsStore(ctx, epochID).Set(types.DealerPartSubKey(participantIndex), value)
+	return nil
 }
 
 // GetDealerPart reads a single dealer part for a participant. Returns
 // (nil, nil) if no submission exists yet for that slot.
 func (k Keeper) GetDealerPart(ctx sdk.Context, epochID uint64, participantIndex uint32) (*types.DealerPartStorage, error) {
-	store := k.storeService.OpenKVStore(ctx)
-	subKey := types.DealerPartKey(epochID, participantIndex)
-	value, err := store.Get(subKey)
-	if err != nil {
-		return nil, err
-	}
+	value := k.dealerPartsStore(ctx, epochID).Get(types.DealerPartSubKey(participantIndex))
 	if value == nil {
 		return nil, nil
 	}
@@ -343,39 +347,18 @@ func (k Keeper) GetDealerPart(ctx sdk.Context, epochID uint64, participantIndex 
 // don't accumulate in state. Not used on the normal phase-transition path —
 // verifying phase still needs to read dealer parts.
 func (k Keeper) DeleteDealerPartsForEpoch(ctx sdk.Context, epochID uint64) error {
-	kvStore := k.storeService.OpenKVStore(ctx)
-	// OpenKVStore returns the module's root kvstore. We need to iterate with
-	// a prefix, which is supported via the cosmos runtime KVStoreAdapter.
-	prefix := types.DealerPartEpochPrefix(epochID)
-	it, err := kvStore.Iterator(prefix, prefixRangeEnd(prefix))
-	if err != nil {
-		return err
-	}
-	defer it.Close()
+	dealerStore := k.dealerPartsStore(ctx, epochID)
+	it := dealerStore.Iterator(nil, nil)
+
 	var keysToDelete [][]byte
 	for ; it.Valid(); it.Next() {
 		// Copy the key — the iterator's key is only valid until Next().
-		k := append([]byte(nil), it.Key()...)
-		keysToDelete = append(keysToDelete, k)
+		keysToDelete = append(keysToDelete, append([]byte(nil), it.Key()...))
 	}
-	for _, key := range keysToDelete {
-		if err := kvStore.Delete(key); err != nil {
-			return err
-		}
-	}
-	return nil
-}
+	it.Close()
 
-// prefixRangeEnd returns the key one past the given prefix, used as the
-// exclusive upper bound for a prefix scan.
-func prefixRangeEnd(prefix []byte) []byte {
-	end := make([]byte, len(prefix))
-	copy(end, prefix)
-	for i := len(end) - 1; i >= 0; i-- {
-		end[i]++
-		if end[i] != 0 {
-			return end
-		}
+	for _, key := range keysToDelete {
+		dealerStore.Delete(key)
 	}
 	return nil
 }
@@ -424,16 +407,26 @@ func (k Keeper) GetEpochBLSData(ctx sdk.Context, epochID uint64) (types.EpochBLS
 		epochBLSData.DealerParts = expanded
 	}
 
-	// Overlay sub-key dealer parts on top of the base slice. Any participant
-	// whose sub-key entry exists takes precedence over whatever was inlined.
-	for i := 0; i < numParticipants; i++ {
-		dp, err := k.GetDealerPart(ctx, epochID, uint32(i))
+	// Overlay sub-key dealer parts on top of the base slice with a single
+	// prefix scan. Any participant whose sub-key entry exists takes
+	// precedence over whatever was inlined. Sub-keys for participant
+	// indices outside the current participant set are ignored (stale data
+	// should have been cleared via DeleteDealerPartsForEpoch).
+	it := k.dealerPartsStore(ctx, epochID).Iterator(nil, nil)
+	defer it.Close()
+	for ; it.Valid(); it.Next() {
+		idx, err := types.ParseDealerPartSubKey(it.Key())
 		if err != nil {
-			return types.EpochBLSData{}, fmt.Errorf("read dealer part for participant %d: %w", i, err)
+			return types.EpochBLSData{}, fmt.Errorf("parse dealer part sub-key: %w", err)
 		}
-		if dp != nil {
-			epochBLSData.DealerParts[i] = dp
+		if int(idx) >= numParticipants {
+			continue
 		}
+		var dp types.DealerPartStorage
+		if err := k.cdc.Unmarshal(it.Value(), &dp); err != nil {
+			return types.EpochBLSData{}, fmt.Errorf("unmarshal dealer part %d: %w", idx, err)
+		}
+		epochBLSData.DealerParts[idx] = &dp
 	}
 
 	return epochBLSData, nil
