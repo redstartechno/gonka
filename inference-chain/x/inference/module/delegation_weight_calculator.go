@@ -288,13 +288,16 @@ func (wc *DelegationWeightCalculator) EligibleGroups() []string {
 func (wc *DelegationWeightCalculator) ComputeConsensusWeights(eligibleModels []string) map[string]int64 {
 	result := make(map[string]int64)
 
+	// A sole eligible group has nothing to cap against; treating it as capped
+	// collapses its weight to 0 when N-1 was also single-group.
+	soleGroup := len(eligibleModels) == 1
+
 	for _, modelID := range eligibleModels {
 		g := wc.Groups[modelID]
 		if g == nil {
 			continue
 		}
 
-		// Compute raw group total: koeff * sum(pocWeight)
 		rawContributions := make(map[string]int64)
 		rawTotal := int64(0)
 		for _, m := range g.Members {
@@ -303,8 +306,10 @@ func (wc *DelegationWeightCalculator) ComputeConsensusWeights(eligibleModels []s
 			rawTotal += contrib
 		}
 
-		// Apply cap
-		cap := wc.ComputeGroupCap(modelID)
+		cap := int64(-1)
+		if !soleGroup {
+			cap = wc.ComputeGroupCap(modelID)
+		}
 		scaleFactor := mathsdk.LegacyOneDec()
 		if cap >= 0 && rawTotal > cap && rawTotal > 0 {
 			scaleFactor = mathsdk.LegacyNewDec(cap).Quo(mathsdk.LegacyNewDec(rawTotal))

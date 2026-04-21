@@ -525,6 +525,31 @@ func TestComputeConsensusWeights_GroupExceedsCap_ProportionalScaling(t *testing.
 	require.Equal(t, int64(200), result["bob"])
 }
 
+// Regression: if N-1 only had this non-initial group eligible, reconstructing
+// the per-member contribution from raw pocWeight yields thisGroupContrib >=
+// totalWeight for every member, other = 0, cap = 0, and scaling collapses
+// every contribution to 0 -- stalling the chain. A sole eligible group has
+// nothing to cap against, so capping must be skipped.
+func TestComputeConsensusWeights_SoleNonInitialGroup_SkipsCap(t *testing.T) {
+	wc := &DelegationWeightCalculator{
+		Groups: map[string]*GroupData{
+			"qwen2.5": {
+				Members:          []string{"a", "b"},
+				MemberPocWeights: map[string]int64{"a": 7202, "b": 2547},
+				ConsensusKoeff:   mathsdk.LegacyMustNewDecFromStr("4.475"),
+				IsInitialGroup:   false,
+			},
+		},
+		ConsensusWeights:     map[string]int64{"a": 8912, "b": 4098},
+		Params:               WeightParams{CapFactor: mathsdk.LegacyOneDec()},
+		PrevMemberPocWeights: map[string]map[string]int64{"qwen2.5": {"a": 7202, "b": 2547}},
+	}
+
+	result := wc.ComputeConsensusWeights([]string{"qwen2.5"})
+	require.Positive(t, result["a"])
+	require.Positive(t, result["b"])
+}
+
 func TestComputeConsensusWeights_GroupUnderCap_NoScaling(t *testing.T) {
 	wc := &DelegationWeightCalculator{
 		Groups: map[string]*GroupData{
