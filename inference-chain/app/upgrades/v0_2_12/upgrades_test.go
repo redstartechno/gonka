@@ -474,6 +474,50 @@ func TestMigrationSequence(t *testing.T) {
 	require.Equal(t, int64(5), pstate.PocValidationSnapshotsPrunedEpoch)
 }
 
+func TestApplyTestnetOnlyOverrides_AppendsModelAndZeroesMinGasPrice(t *testing.T) {
+	k, ctx, _ := keepertest.InferenceKeeperReturningMocks(t)
+	require.NoError(t, k.SetEffectiveEpochIndex(ctx, 5))
+
+	params, err := k.GetParams(ctx)
+	require.NoError(t, err)
+	params.PocParams.ModelId = "founding-model"
+	params.PocParams.SeqLen = 512
+	params.PocParams.WeightScaleFactor = inferencetypes.DecimalFromFloat(0.75)
+	params.PocParams.StatTest = inferencetypes.DefaultPoCStatTestParams()
+	params.PocParams.Models = nil
+	require.NoError(t, k.SetParams(ctx, params))
+
+	require.NoError(t, migrateParams(ctx, k))
+	require.NoError(t, setFeeParams(ctx, k))
+	require.NoError(t, applyTestnetOnlyOverrides(ctx, k))
+	require.NoError(t, applyTestnetOnlyOverrides(ctx, k))
+
+	got, err := k.GetParams(ctx)
+	require.NoError(t, err)
+	require.Len(t, got.PocParams.Models, 2)
+	require.Equal(t, "founding-model", got.PocParams.Models[0].ModelId)
+
+	extra := got.PocParams.Models[1]
+	require.Equal(t, "Qwen/Qwen2.5-7B-Instruct", extra.ModelId)
+	require.Equal(t, int64(256), extra.SeqLen)
+	require.NotNil(t, extra.StatTest)
+	require.Equal(t, inferencetypes.DecimalFromFloat(0.4), extra.StatTest.DistThreshold)
+	require.Equal(t, inferencetypes.DecimalFromFloat(0.1), extra.StatTest.PMismatch)
+	require.Equal(t, inferencetypes.DecimalFromFloat(0.05), extra.StatTest.PValueThreshold)
+	require.NotNil(t, extra.WeightScaleFactor)
+	extraWSF, err := extra.WeightScaleFactor.ToLegacyDec()
+	require.NoError(t, err)
+	require.Equal(t, "4.475000000000000000", extraWSF.String())
+	require.Equal(t, uint64(7), extra.PenaltyStartEpoch)
+
+	require.NotNil(t, got.FeeParams)
+	require.Zero(t, got.FeeParams.MinGasPriceNgonka)
+
+	defaults := inferencetypes.DefaultFeeParams()
+	require.Equal(t, defaults.BaseValidationGas, got.FeeParams.BaseValidationGas)
+	require.Equal(t, defaults.GasPerPocCount, got.FeeParams.GasPerPocCount)
+}
+
 func TestAdjustBLSParameters_SetsDefaultsForZeroValues(t *testing.T) {
 	k, ctx := keepertest.BlsKeeper(t)
 
