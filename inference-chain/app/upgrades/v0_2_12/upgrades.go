@@ -152,6 +152,13 @@ func CreateUpgradeHandler(
 			return toVM, err
 		}
 
+		// TESTNET-ONLY: keep testnet upgrades isolated from the mainnet/state
+		// migration path. This appends the extra PoC model and zeros min gas
+		// price only after all other v0.2.12 changes have completed.
+		if err := applyTestnetOnlyOverrides(ctx, k); err != nil {
+			return toVM, err
+		}
+
 		k.LogInfo("successfully upgraded", types.Upgrades, "version", UpgradeName)
 		return toVM, nil
 	}
@@ -661,5 +668,59 @@ func setFeeParams(ctx context.Context, k keeper.Keeper) error {
 		"min_gas_price_ngonka", fp.MinGasPriceNgonka,
 		"base_validation_gas", fp.BaseValidationGas,
 		"gas_per_poc_count", fp.GasPerPocCount)
+	return nil
+}
+
+func applyTestnetOnlyOverrides(ctx context.Context, k keeper.Keeper) error {
+	params, err := k.GetParams(ctx)
+	if err != nil {
+		return err
+	}
+	penaltyStartEpoch := uint64(2)
+	if epochIndex, found := k.GetEffectiveEpochIndex(ctx); found {
+		penaltyStartEpoch = uint64(epochIndex) + 2
+	}
+
+	if params.PocParams != nil {
+		const qwen25ToolChoiceModelID = "Qwen/Qwen2.5-7B-Instruct"
+		modelExists := false
+		for _, model := range params.PocParams.Models {
+			if model != nil && model.ModelId == qwen25ToolChoiceModelID {
+				modelExists = true
+				break
+			}
+		}
+		if !modelExists {
+			params.PocParams.Models = append(params.PocParams.Models, &types.PoCModelConfig{
+				ModelId: qwen25ToolChoiceModelID,
+				SeqLen:  256,
+				StatTest: &types.PoCStatTestParams{
+					DistThreshold:   types.DecimalFromFloat(0.4),
+					PMismatch:       types.DecimalFromFloat(0.1),
+					PValueThreshold: types.DecimalFromFloat(0.05),
+				},
+				WeightScaleFactor: types.DecimalFromFloat(4.475), // Qwen3-4B weight scale 2.5 * 1.79
+				PenaltyStartEpoch: penaltyStartEpoch,
+			})
+			k.LogInfo("appended testnet-only Qwen 7B tool-choice model", types.Upgrades,
+				"model_id", qwen25ToolChoiceModelID,
+				"seq_len", 256,
+				"weight_scale_factor", "4.475",
+				"penalty_start_epoch", penaltyStartEpoch)
+		}
+	}
+
+	if params.FeeParams == nil {
+		params.FeeParams = types.DefaultFeeParams()
+	}
+	params.FeeParams.MinGasPriceNgonka = 0
+
+	if err := k.SetParams(ctx, params); err != nil {
+		k.LogError("failed to apply testnet-only upgrade overrides", types.Upgrades, "error", err)
+		return err
+	}
+
+	k.LogInfo("applied testnet-only upgrade overrides", types.Upgrades,
+		"min_gas_price_ngonka", params.FeeParams.MinGasPriceNgonka)
 	return nil
 }
