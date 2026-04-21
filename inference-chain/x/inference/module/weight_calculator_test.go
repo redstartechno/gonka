@@ -518,7 +518,7 @@ func TestComputeConsensusWeights_GroupExceedsCap_ProportionalScaling(t *testing.
 		PrevMemberPocWeights: map[string]map[string]int64{"model-b": {"alice": 1000, "bob": 500}},
 	}
 
-	result := wc.ComputeConsensusWeights([]string{"model-a", "model-b"})
+	result, _ := wc.ComputeConsensusWeights([]string{"model-a", "model-b"})
 	// model-a: uncapped, alice=100, bob=200
 	// model-b: cap=0, scaled to 0
 	require.Equal(t, int64(100), result["alice"])
@@ -545,7 +545,7 @@ func TestComputeConsensusWeights_SoleNonInitialGroup_SkipsCap(t *testing.T) {
 		PrevMemberPocWeights: map[string]map[string]int64{"qwen2.5": {"a": 7202, "b": 2547}},
 	}
 
-	result := wc.ComputeConsensusWeights([]string{"qwen2.5"})
+	result, _ := wc.ComputeConsensusWeights([]string{"qwen2.5"})
 	require.Positive(t, result["a"])
 	require.Positive(t, result["b"])
 }
@@ -573,7 +573,7 @@ func TestComputeConsensusWeights_GroupUnderCap_NoScaling(t *testing.T) {
 		PrevMemberPocWeights: map[string]map[string]int64{"model-b": {"alice": 10}},
 	}
 
-	result := wc.ComputeConsensusWeights([]string{"model-a", "model-b"})
+	result, _ := wc.ComputeConsensusWeights([]string{"model-a", "model-b"})
 	// model-a: 100, model-b: 10 (no scaling), total: 110
 	require.Equal(t, int64(110), result["alice"])
 }
@@ -592,7 +592,7 @@ func TestComputeConsensusWeights_InitialGroupExempt(t *testing.T) {
 		Params:           WeightParams{CapFactor: mathsdk.LegacyMustNewDecFromStr("1.0")},
 	}
 
-	result := wc.ComputeConsensusWeights([]string{"model-a"})
+	result, _ := wc.ComputeConsensusWeights([]string{"model-a"})
 	// Initial group exempt from cap, raw value passes through
 	require.Equal(t, int64(10000), result["alice"])
 }
