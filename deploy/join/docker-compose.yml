@@ -108,11 +108,14 @@ services:
       - SERVER_NAME=${SERVER_NAME:-}
       - GONKA_API_PORT=9000
       - GONKA_API_EXEMPT_ROUTES=chat inference poc/proofs
+      - GONKA_API_EXEMPT_ROUTES=chat inference poc/proofs subnet devshard
+      - EXEMPT_CONN_LIMIT=200
       - GONKA_API_BLOCKED_ROUTES=poc-batches training
       - CHAIN_RPC_PORT=26657
       - CHAIN_API_PORT=1317
       - CHAIN_GRPC_PORT=9090
       - DASHBOARD_PORT=5173
+      - PROXY_REAL_IP_FROM=172.18.0.1
       # SSL enablement (entrypoint enables SSL if CERT_ISSUER_DOMAIN is set)
       - CERT_ISSUER_DOMAIN=${CERT_ISSUER_DOMAIN:-}
       - PROXY_ADD_NODE_PREFIX=${PROXY_ADD_NODE_PREFIX:-false}
@@ -123,6 +126,8 @@ services:
       - DISABLE_CHAIN_API=${DISABLE_CHAIN_API:-true}
       - DISABLE_CHAIN_RPC=${DISABLE_CHAIN_RPC:-true}
       - DISABLE_CHAIN_GRPC=${DISABLE_CHAIN_GRPC:-true}
+      - DISABLE_VALIDATOR_WHITELIST=${DISABLE_VALIDATOR_WHITELIST:-true}
+      - DISABLE_FAIL2BAN=${DISABLE_FAIL2BAN:-true}
     volumes:
       - ${SSL_CERT_SOURCE:-./secrets/nginx-ssl}:/etc/nginx/ssl
     depends_on:
