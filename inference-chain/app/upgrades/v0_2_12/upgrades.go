@@ -710,6 +710,35 @@ func applyTestnetOnlyOverrides(ctx context.Context, k keeper.Keeper) error {
 		}
 	}
 
+	if params.DevshardEscrowParams == nil {
+		params.DevshardEscrowParams = types.DefaultDevshardEscrowParams()
+	}
+	const (
+		testnetDevshardVersionName  = "v1"
+		testnetDevshardBinaryURL    = "https://github.com/product-science/race-releases/releases/download/release%2Fv0.2.12-alpha1/devshardd.zip"
+		testnetDevshardBinarySHA256 = "98aac3f7a73ccfd0b1084e4b1190a54a7d57e1861738ce9984bbf02e31011cf9"
+	)
+	devshardVersionUpdated := false
+	for _, version := range params.DevshardEscrowParams.ApprovedVersions {
+		if version != nil && version.Name == testnetDevshardVersionName {
+			version.Binary = testnetDevshardBinaryURL
+			version.Sha256 = testnetDevshardBinarySHA256
+			devshardVersionUpdated = true
+			break
+		}
+	}
+	if !devshardVersionUpdated {
+		params.DevshardEscrowParams.ApprovedVersions = append(params.DevshardEscrowParams.ApprovedVersions, &types.DevshardApprovedVersion{
+			Name:   testnetDevshardVersionName,
+			Binary: testnetDevshardBinaryURL,
+			Sha256: testnetDevshardBinarySHA256,
+		})
+	}
+	k.LogInfo("upserted testnet-only approved devshard version", types.Upgrades,
+		"name", testnetDevshardVersionName,
+		"binary", testnetDevshardBinaryURL,
+		"sha256", testnetDevshardBinarySHA256)
+
 	if params.FeeParams == nil {
 		params.FeeParams = types.DefaultFeeParams()
 	}
