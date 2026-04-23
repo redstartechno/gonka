@@ -115,7 +115,6 @@ services:
       - CHAIN_API_PORT=1317
       - CHAIN_GRPC_PORT=9090
       - DASHBOARD_PORT=5173
-      - PROXY_REAL_IP_FROM=172.18.0.1
       # SSL enablement (entrypoint enables SSL if CERT_ISSUER_DOMAIN is set)
       - CERT_ISSUER_DOMAIN=${CERT_ISSUER_DOMAIN:-}
       - PROXY_ADD_NODE_PREFIX=${PROXY_ADD_NODE_PREFIX:-false}
