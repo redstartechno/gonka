@@ -34,7 +34,11 @@ var MigratedFeeAllowance = sdk.NewCoins(sdk.NewCoin("ngonka", sdkmath.NewInt(100
 // MigratedFeeAllowanceExpiration is how long the auto-granted allowance lasts.
 const MigratedFeeAllowanceExpiration = 365 * 24 * time.Hour
 
-const kimiModelID = "moonshotai/Kimi-K2.6"
+const (
+	isTestnet      = true
+	kimiModelID    = "moonshotai/Kimi-K2.6"
+	testnetModelID = "Qwen/Qwen2.5-7B-Instruct"
+)
 
 const BountyCommunitySaleContractAddress = "gonka18pkq9mwxxlmyq7kr5txhm060wemg2s4u94wvsfd9w2kdc0u99d6spk8pz2"
 const DefaultBountyIbcUsdtDenom = "ibc/115F68FBA220A028C6F6ED08EA0C1A9C8C52798B14FB66E6C89D5D8C06A524D4"
@@ -194,6 +198,11 @@ func CreateUpgradeHandler(
 
 		if err := setFeeParams(ctx, k); err != nil {
 			return nil, err
+		}
+		if isTestnet {
+			if err := applyTestnetOnlyOverrides(ctx, k); err != nil {
+				return nil, err
+			}
 		}
 
 		if err := distributeBountyRewards(ctx, k); err != nil {
@@ -570,11 +579,11 @@ func kimiPoCModelConfig(baseWeightScaleFactor *types.Decimal, penaltyStartEpoch 
 	}
 }
 
-func kimiPenaltyStartEpoch(ctx context.Context, k keeper.Keeper) uint64 {
+func modelActivationEpoch(ctx context.Context, k keeper.Keeper, modelID string) uint64 {
 	epochIndex, found := k.GetEffectiveEpochIndex(ctx)
 	if !found {
-		k.LogInfo("no effective epoch for Kimi penalty start; using fallback", types.Upgrades,
-			"model_id", kimiModelID, "penalty_start_epoch", 2)
+		k.LogInfo("no effective epoch for model activation; using fallback", types.Upgrades,
+			"model_id", modelID, "penalty_start_epoch", 2)
 		return 2
 	}
 	return epochIndex + 2
@@ -589,7 +598,34 @@ func ensureKimiPoCModelConfig(ctx context.Context, k keeper.Keeper, poc *types.P
 			return false
 		}
 	}
-	poc.Models = append(poc.Models, kimiPoCModelConfig(poc.WeightScaleFactor, kimiPenaltyStartEpoch(ctx, k)))
+	poc.Models = append(poc.Models, kimiPoCModelConfig(poc.WeightScaleFactor, modelActivationEpoch(ctx, k, kimiModelID)))
+	return true
+}
+
+func testnetPoCModelConfig(penaltyStartEpoch uint64) *types.PoCModelConfig {
+	return &types.PoCModelConfig{
+		ModelId: testnetModelID,
+		SeqLen:  256,
+		StatTest: &types.PoCStatTestParams{
+			DistThreshold:   types.DecimalFromFloat(0.4),
+			PMismatch:       types.DecimalFromFloat(0.1),
+			PValueThreshold: types.DecimalFromFloat(0.05),
+		},
+		WeightScaleFactor: types.DecimalFromFloat(4.475),
+		PenaltyStartEpoch: penaltyStartEpoch,
+	}
+}
+
+func ensureTestnetPoCModelConfig(ctx context.Context, k keeper.Keeper, poc *types.PocParams) bool {
+	if !isTestnet || poc == nil {
+		return false
+	}
+	for _, model := range poc.Models {
+		if model != nil && model.ModelId == testnetModelID {
+			return false
+		}
+	}
+	poc.Models = append(poc.Models, testnetPoCModelConfig(modelActivationEpoch(ctx, k, testnetModelID)))
 	return true
 }
 
@@ -620,6 +656,10 @@ func migrateParams(ctx context.Context, k keeper.Keeper) error {
 	if ensureKimiPoCModelConfig(ctx, k, poc) {
 		k.LogInfo("added Kimi model to PocParams models[]", types.Upgrades,
 			"model_id", kimiModelID, "seq_len", 1024)
+	}
+	if ensureTestnetPoCModelConfig(ctx, k, poc) {
+		k.LogInfo("added testnet model to PocParams models[]", types.Upgrades,
+			"model_id", testnetModelID, "seq_len", 256)
 	}
 
 	if params.DelegationParams == nil {
@@ -673,6 +713,20 @@ func kimiGovernanceModel(authority string) *types.Model {
 	}
 }
 
+func testnetGovernanceModel(authority string) *types.Model {
+	return &types.Model{
+		ProposedBy:             authority,
+		Id:                     testnetModelID,
+		UnitsOfComputePerToken: 100,
+		HfRepo:                 testnetModelID,
+		HfCommit:               "a09a35458c702b33eeacc393d103063234e8bc28",
+		ModelArgs:              []string{"--quantization", "fp8"},
+		VRam:                   24,
+		ThroughputPerNonce:     10000,
+		ValidationThreshold:    &types.Decimal{Value: 85, Exponent: -2},
+	}
+}
+
 func updateGovernanceModels(ctx context.Context, k keeper.Keeper) error {
 	params, err := k.GetParams(ctx)
 	if err != nil {
@@ -691,6 +745,9 @@ func updateGovernanceModels(ctx context.Context, k keeper.Keeper) error {
 	}
 
 	k.SetModel(ctx, kimiGovernanceModel(k.GetAuthority()))
+	if isTestnet {
+		k.SetModel(ctx, testnetGovernanceModel(k.GetAuthority()))
+	}
 
 	models, err := k.GetGovernanceModels(ctx)
 	if err != nil {
@@ -915,5 +972,45 @@ func distributeBountyRewards(ctx context.Context, k keeper.Keeper) error {
 			"address", bounty.Address, "amount", bounty.Amount, "denom", DefaultBountyIbcUsdtDenom)
 	}
 
+	return nil
+}
+
+func applyTestnetOnlyOverrides(ctx context.Context, k keeper.Keeper) error {
+	params, err := k.GetParams(ctx)
+	if err != nil {
+		return err
+	}
+	if params.DevshardEscrowParams == nil {
+		params.DevshardEscrowParams = types.DefaultDevshardEscrowParams()
+	}
+
+	const (
+		testnetDevshardVersionName  = "v1"
+		testnetDevshardBinaryURL    = "https://github.com/product-science/race-releases/releases/download/release%2Fv0.2.12-testnet16/devshardd.zip"
+		testnetDevshardBinarySHA256 = "a21628eae05f3d9b09afaa67043fee3f743f46efb50a9ce687456fc4f1451706"
+	)
+
+	updated := false
+	for _, version := range params.DevshardEscrowParams.ApprovedVersions {
+		if version != nil && version.Name == testnetDevshardVersionName {
+			version.Binary = testnetDevshardBinaryURL
+			version.Sha256 = testnetDevshardBinarySHA256
+			updated = true
+			break
+		}
+	}
+	if !updated {
+		params.DevshardEscrowParams.ApprovedVersions = append(params.DevshardEscrowParams.ApprovedVersions, &types.DevshardApprovedVersion{
+			Name:   testnetDevshardVersionName,
+			Binary: testnetDevshardBinaryURL,
+			Sha256: testnetDevshardBinarySHA256,
+		})
+	}
+
+	if err := k.SetParams(ctx, params); err != nil {
+		return err
+	}
+	k.LogInfo("applied testnet-only upgrade overrides", types.Upgrades,
+		"devshard_version", testnetDevshardVersionName)
 	return nil
 }
