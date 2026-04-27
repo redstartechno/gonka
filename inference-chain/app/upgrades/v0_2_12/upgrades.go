@@ -42,7 +42,7 @@ const kimiModelID = "moonshotai/Kimi-K2.6"
 // MsgUpdateParams.
 const (
 	DevshardV1Name   = "v1"
-	DevshardV1Binary = "https://github.com/product-science/race-releases/releases/download/release%2Fv0.2.12/devshardd.zip"
+	DevshardV1Binary = "https://github.com/gonka-ai/gonka/releases/download/release%2Fv0.2.12/devshardd.zip"
 	DevshardV1Sha256 = "15f722444e6545bc787f1ef6d1011557d25a8b05cb9f6aaf1a514349d36d4715"
 )
 
