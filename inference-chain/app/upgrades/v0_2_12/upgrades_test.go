@@ -179,7 +179,7 @@ func TestMigrateParams(t *testing.T) {
 	require.NotNil(t, got.DelegationParams)
 	require.Equal(t, "founding-model", got.DelegationParams.InitialModelId)
 	defaults := inferencetypes.DefaultDelegationParams()
-	require.Equal(t, defaults.DeployWindow, got.DelegationParams.DeployWindow)
+	require.Equal(t, int64(500), got.DelegationParams.DeployWindow)
 	require.Equal(t, defaults.VMin, got.DelegationParams.VMin)
 	require.Equal(t, defaults.WThreshold, got.DelegationParams.WThreshold)
 	require.Equal(t, inferencetypes.DecimalFromFloat(1.5), got.DelegationParams.CapFactor)
