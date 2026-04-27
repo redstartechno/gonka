@@ -651,7 +651,7 @@ func migrateParams(ctx context.Context, k keeper.Keeper) error {
 	params.DelegationParams.RefusalPenalty = types.DecimalFromFloat(0.1)
 	params.DelegationParams.NoParticipationPenalty = types.DecimalFromFloat(0.15)
 	params.DelegationParams.DelegationShare = types.DecimalFromFloat(0.05)
-	params.DelegationParams.CapFactor = types.DecimalFromFloat(1.5)
+	params.DelegationParams.CapFactor = types.DecimalFromFloat(0.75)
 	params.DelegationParams.DeployWindow = 500
 	if poc != nil && params.DelegationParams.InitialModelId == "" {
 		params.DelegationParams.InitialModelId = poc.ModelId

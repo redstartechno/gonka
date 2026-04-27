@@ -43,21 +43,20 @@ type GroupData struct {
 type WeightParams struct {
 	WThreshold mathsdk.LegacyDec // min fraction of total weight from members for eligibility
 	VMin       int64             // min hosts with non-zero consensus weight
-	CapFactor  mathsdk.LegacyDec // max group weight as multiple of members' weight in other groups
+	CapFactor  mathsdk.LegacyDec // fraction of N-1 total network weight allowed per non-initial group
 }
 
 // DelegationWeightCalculator sits above PoCWeightCalculator and handles
 // cross-group concerns: eligibility, caps, consensus weight, delegation modes,
 // and per-group voting power.
 type DelegationWeightCalculator struct {
-	Groups                     map[string]*GroupData          // model_id -> group data
-	ConsensusWeights           map[string]int64               // participant -> ActiveParticipant.Weight from N-1
-	UpcomingActiveParticipants map[string]bool                // post-PoC-validation upcoming active participant set
-	TotalNetworkWeight         int64                          // sum(ConsensusWeights)
-	Delegations                map[string]map[string]string   // model_id -> (delegator -> delegate_to)
-	Refusals                   map[string]map[string]bool     // model_id -> (participant -> true)
+	Groups                     map[string]*GroupData        // model_id -> group data
+	ConsensusWeights           map[string]int64             // participant -> ActiveParticipant.Weight from N-1
+	UpcomingActiveParticipants map[string]bool              // post-PoC-validation upcoming active participant set
+	TotalNetworkWeight         int64                        // sum(ConsensusWeights)
+	Delegations                map[string]map[string]string // model_id -> (delegator -> delegate_to)
+	Refusals                   map[string]map[string]bool   // model_id -> (participant -> true)
 	Params                     WeightParams
-	PrevMemberPocWeights       map[string]map[string]int64    // model_id -> member -> N-1 raw pocWeight (for cap calculation)
 }
 
 // participates returns true if p has positive N-1 consensus weight or is in
@@ -274,36 +273,19 @@ func (wc *DelegationWeightCalculator) ResolveGroupParticipation(modelID string) 
 	return modes
 }
 
-// ComputeGroupCap returns the maximum consensus weight this group can contribute.
-// Returns -1 (uncapped) only for the initial model exemption.
+// ComputeGroupCap returns the maximum consensus weight a non-initial group can
+// contribute, expressed as a fraction of the N-1 total network weight.
+// Returns -1 (uncapped) for the initial model.
 func (wc *DelegationWeightCalculator) ComputeGroupCap(modelID string) int64 {
 	g, ok := wc.Groups[modelID]
 	if !ok {
 		return 0
 	}
 	if g.IsInitialGroup {
-		return -1 // uncapped
+		return -1
 	}
-	// cap = CapFactor * sum(member's consensus weight from other eligible groups)
-	// "from other groups" = N-1 consensus weight minus this group's N-1 contribution.
-	// Uses PrevMemberPocWeights (N-1 per-model pocWeight) to keep the calculation
-	// purely in N-1 space. Uses 0 when N-1 data is not available.
-	otherGroupWeight := int64(0)
-	prevWeights := wc.PrevMemberPocWeights[modelID]
-	for _, m := range g.Members {
-		totalWeight := wc.ConsensusWeights[m]
-		prevPocWeight := int64(0)
-		if prevWeights != nil {
-			prevPocWeight = prevWeights[m]
-		}
-		thisGroupContrib := g.ConsensusKoeff.MulInt64(prevPocWeight).TruncateInt64()
-		other := totalWeight - thisGroupContrib
-		if other > 0 {
-			otherGroupWeight += other
-		}
-	}
-	cap := wc.Params.CapFactor.MulInt64(otherGroupWeight).TruncateInt64()
-	if cap <= 0 {
+	cap := wc.Params.CapFactor.MulInt64(wc.TotalNetworkWeight).TruncateInt64()
+	if cap < 0 {
 		return 0
 	}
 	return cap

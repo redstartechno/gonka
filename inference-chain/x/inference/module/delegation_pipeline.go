@@ -60,7 +60,6 @@ func (am AppModule) buildDelegationWeightCalculator(
 		Delegations:                nextEpochDelegations,
 		Refusals:                   nextEpochRefusals,
 		Params:                     buildWeightParams(params),
-		PrevMemberPocWeights:       prevState.perModelPocWeights,
 	}
 }
 
