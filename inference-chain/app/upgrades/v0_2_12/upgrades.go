@@ -596,7 +596,7 @@ func kimiPenaltyStartEpoch(ctx context.Context, k keeper.Keeper) uint64 {
 			"model_id", kimiModelID, "penalty_start_epoch", 2)
 		return 2
 	}
-	return epochIndex + 2
+	return epochIndex + 3
 }
 
 func ensureKimiPoCModelConfig(ctx context.Context, k keeper.Keeper, poc *types.PocParams) bool {
