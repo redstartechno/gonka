@@ -826,6 +826,76 @@ func TestResolveGroupParticipation_DelegationToZeroWeightTarget_ModeNone(t *test
 	require.Equal(t, ModeNone, modes["delegator"])
 }
 
+// Newcomer (absent from N-1 ConsensusWeights, present in UpcomingActiveParticipants)
+// gets ModeDelegate so their delegation applies in their first active epoch.
+func TestResolveGroupParticipation_NewcomerWithDelegation(t *testing.T) {
+	wc := &DelegationWeightCalculator{
+		Groups: map[string]*GroupData{
+			"model-a": {
+				Members:        []string{"target"},
+				ConsensusKoeff: mathsdk.LegacyOneDec(),
+			},
+		},
+		ConsensusWeights: map[string]int64{
+			"target": 100,
+		},
+		UpcomingActiveParticipants: map[string]bool{
+			"target":   true,
+			"newcomer": true,
+		},
+		Delegations: map[string]map[string]string{
+			"model-a": {"newcomer": "target"},
+		},
+	}
+
+	modes := wc.ResolveGroupParticipation("model-a")
+	require.Equal(t, ModeDelegate, modes["newcomer"])
+	require.Equal(t, ModeDirect, modes["target"])
+}
+
+// Newcomer's delegation lands on the target's per-model voting power.
+func TestComputeGroupVotingPowers_NewcomerDelegationFlows(t *testing.T) {
+	wc := &DelegationWeightCalculator{
+		Groups: map[string]*GroupData{
+			"model-a": {
+				Members:        []string{"target"},
+				ConsensusKoeff: mathsdk.LegacyOneDec(),
+			},
+		},
+		ConsensusWeights:     map[string]int64{"target": 100},
+		UpcomingActiveParticipants: map[string]bool{"target": true, "newcomer": true},
+		Delegations: map[string]map[string]string{
+			"model-a": {"newcomer": "target"},
+		},
+	}
+
+	modes := wc.ResolveGroupParticipation("model-a")
+	finalWeights := map[string]int64{"target": 100, "newcomer": 50}
+	vp := wc.ComputeGroupVotingPowers("model-a", modes, finalWeights)
+	require.Equal(t, int64(150), vp["target"])
+	require.Len(t, vp, 1)
+}
+
+// Newcomer who refuses gets ModeRefuse in their first active epoch.
+func TestResolveGroupParticipation_NewcomerRefusal(t *testing.T) {
+	wc := &DelegationWeightCalculator{
+		Groups: map[string]*GroupData{
+			"model-a": {
+				Members:        []string{"target"},
+				ConsensusKoeff: mathsdk.LegacyOneDec(),
+			},
+		},
+		ConsensusWeights:     map[string]int64{"target": 100},
+		UpcomingActiveParticipants: map[string]bool{"target": true, "newcomer": true},
+		Refusals: map[string]map[string]bool{
+			"model-a": {"newcomer": true},
+		},
+	}
+
+	modes := wc.ResolveGroupParticipation("model-a")
+	require.Equal(t, ModeRefuse, modes["newcomer"])
+}
+
 func newMinimalInferenceKeeper(t *testing.T) (keeper.Keeper, sdk.Context) {
 	k, ctx, _ := newMinimalInferenceKeeperWithStub(t)
 	return k, ctx
