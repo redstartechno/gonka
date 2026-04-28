@@ -44,7 +44,8 @@ fi
 
 ## Verify
 
-    curl -sS http://127.0.0.1:9200/admin/v1/config \
-      | jq '.nodes[] | {id, models: (.models | keys)}'
+```
+curl -sS http://127.0.0.1:9200/admin/v1/config \
+  | jq '.nodes[] | {id, models: (.models | keys)}'
 
 Wait 60s after the run before triggering the upgrade so the change has been persisted.
