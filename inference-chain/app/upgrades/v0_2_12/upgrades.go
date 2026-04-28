@@ -341,7 +341,7 @@ func adjustParameters(ctx context.Context, k keeper.Keeper) error {
 	if params.EpochParams == nil {
 		params.EpochParams = types.DefaultEpochParams()
 	}
-	params.EpochParams.ConfirmationPocSafetyWindow = 500
+	params.EpochParams.ConfirmationPocSafetyWindow = 10
 
 	err = k.SetParams(ctx, params)
 	if err != nil {
@@ -652,7 +652,7 @@ func migrateParams(ctx context.Context, k keeper.Keeper) error {
 	params.DelegationParams.NoParticipationPenalty = types.DecimalFromFloat(0.15)
 	params.DelegationParams.DelegationShare = types.DecimalFromFloat(0.05)
 	params.DelegationParams.CapFactor = types.DecimalFromFloat(0.75)
-	params.DelegationParams.DeployWindow = 500
+	params.DelegationParams.DeployWindow = 10
 	if poc != nil && params.DelegationParams.InitialModelId == "" {
 		params.DelegationParams.InitialModelId = poc.ModelId
 	}
