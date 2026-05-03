@@ -99,6 +99,7 @@ const (
 	DefaultDevshardMaxEscrowsPerEpoch uint32 = 100
 	DefaultDevshardGroupSize          uint32 = 16
 	DefaultDevshardTokenPrice         uint64 = 1
+	DefaultDevshardMaxNonce           uint32 = 20_000
 )
 
 func DefaultGenesisOnlyParams() GenesisOnlyParams {
@@ -326,6 +327,7 @@ func DefaultDevshardEscrowParams() *DevshardEscrowParams {
 		GroupSize:               DefaultDevshardGroupSize,
 		AllowedCreatorAddresses: nil,
 		TokenPrice:              DefaultDevshardTokenPrice,
+		MaxNonce:                DefaultDevshardMaxNonce,
 	}
 }
 
@@ -338,6 +340,9 @@ func (p *DevshardEscrowParams) Validate() error {
 	}
 	if p.GroupSize == 0 {
 		return fmt.Errorf("devshard escrow group_size must be positive")
+	}
+	if p.MaxNonce == 0 {
+		return fmt.Errorf("devshard escrow max_nonce must be positive")
 	}
 	seen := make(map[string]struct{}, len(p.ApprovedVersions))
 	for i, v := range p.ApprovedVersions {

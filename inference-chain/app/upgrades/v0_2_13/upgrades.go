@@ -9,7 +9,10 @@ import (
 	"github.com/productscience/inference/x/inference/types"
 )
 
-const MaxEscrowsPerEpoch uint32 = 500_000
+const (
+	MaxEscrowsPerEpoch uint32 = 500_000
+	MaxNonce           uint32 = 1_000_000
+)
 
 func CreateUpgradeHandler(
 	mm *module.Manager,
@@ -23,7 +26,7 @@ func CreateUpgradeHandler(
 			fromVM["capability"] = mm.Modules["capability"].(module.HasConsensusVersion).ConsensusVersion()
 		}
 
-		if err := setDevshardMaxEscrowsPerEpoch(ctx, k); err != nil {
+		if err := setDevshardEscrowParams(ctx, k); err != nil {
 			return nil, err
 		}
 
@@ -37,7 +40,7 @@ func CreateUpgradeHandler(
 	}
 }
 
-func setDevshardMaxEscrowsPerEpoch(ctx context.Context, k keeper.Keeper) error {
+func setDevshardEscrowParams(ctx context.Context, k keeper.Keeper) error {
 	params, err := k.GetParams(ctx)
 	if err != nil {
 		return err
@@ -46,10 +49,12 @@ func setDevshardMaxEscrowsPerEpoch(ctx context.Context, k keeper.Keeper) error {
 		params.DevshardEscrowParams = types.DefaultDevshardEscrowParams()
 	}
 	params.DevshardEscrowParams.MaxEscrowsPerEpoch = MaxEscrowsPerEpoch
+	params.DevshardEscrowParams.MaxNonce = MaxNonce
 	if err := k.SetParams(ctx, params); err != nil {
 		return err
 	}
-	k.LogInfo("set devshard max_escrows_per_epoch", types.Upgrades,
-		"max_escrows_per_epoch", MaxEscrowsPerEpoch)
+	k.LogInfo("set devshard escrow params", types.Upgrades,
+		"max_escrows_per_epoch", MaxEscrowsPerEpoch,
+		"max_nonce", MaxNonce)
 	return nil
 }

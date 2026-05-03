@@ -28,6 +28,7 @@ The on-chain migration logic is defined in [`upgrades.go`](https://github.com/go
 
 Migrations:
 - Sets `DevshardEscrowParams.MaxEscrowsPerEpoch` to `500_000`.
+- Sets `DevshardEscrowParams.MaxNonce` to `1_000_000` (previously a hardcoded `20_000` constant in the settlement path).
 
 ## Changes
 
