@@ -396,7 +396,10 @@ func TestUpdateConfirmationWeightsV2_UsesPerModelWeightScaleFactor(t *testing.T)
 		TotalNetworkWeight: 100,
 	}))
 
-	result := am.updateConfirmationWeightsV2(ctx, event)
+	snapshot, found, err := k.GetPoCValidationSnapshot(ctx, event.TriggerHeight)
+	require.NoError(t, err)
+	require.True(t, found)
+	result := am.updateConfirmationWeightsV2(ctx, event, snapshot)
 
 	require.Len(t, result, 1)
 	require.Equal(t, testutil.Executor, result[0].Index)

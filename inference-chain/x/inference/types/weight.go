@@ -13,14 +13,10 @@ func ConfirmationWeightOfParticipant(p *ActiveParticipant, scales []*Confirmatio
 		}
 		modelNodes[modelID] = append(modelNodes[modelID], p.MlNodes[i].MlNodes...)
 	}
-	return confirmationWeight(modelNodes, scales)
+	return ConfirmationWeightOfModelNodes(modelNodes, scales)
 }
 
 func ConfirmationWeightOfModelNodes(modelNodes map[string][]*MLNodeInfo, scales []*ConfirmationWeightScale) int64 {
-	return confirmationWeight(modelNodes, scales)
-}
-
-func confirmationWeight(modelNodes map[string][]*MLNodeInfo, scales []*ConfirmationWeightScale) int64 {
 	coefficients := confirmationCoefficients(scales)
 	total := int64(0)
 	for modelID, nodes := range modelNodes {
@@ -51,13 +47,8 @@ func confirmationCoefficients(scales []*ConfirmationWeightScale) map[string]math
 }
 
 func confirmationScaleFactor(scale *ConfirmationWeightScale) mathsdk.LegacyDec {
-	if scale == nil || scale.WeightScaleFactor == nil ||
-		(scale.WeightScaleFactor.Value == 0 && scale.WeightScaleFactor.Exponent == 0) {
+	if scale == nil {
 		return mathsdk.LegacyOneDec()
 	}
-	dec, err := scale.WeightScaleFactor.ToLegacyDec()
-	if err != nil {
-		return mathsdk.LegacyOneDec()
-	}
-	return dec
+	return scale.WeightScaleFactor.LegacyDecOrOne()
 }

@@ -86,12 +86,14 @@ func TestActualSettle(t *testing.T) {
 				Weight:             1000,
 				Reputation:         100,
 				ConfirmationWeight: 1000,
+				MlNodes:            []*types.MLNodeInfo{{PocWeight: 1000}},
 			},
 			{
 				MemberAddress:      participant2.Address,
 				Weight:             1000,
 				Reputation:         100,
 				ConfirmationWeight: 1000,
+				MlNodes:            []*types.MLNodeInfo{{PocWeight: 1000}},
 			},
 		},
 
@@ -200,6 +202,7 @@ func TestActualSettleWithManyParticipants(t *testing.T) {
 			Weight:             1000,
 			Reputation:         100,
 			ConfirmationWeight: 1000,
+			MlNodes:            []*types.MLNodeInfo{{PocWeight: 1000}},
 		}
 	}
 
@@ -319,6 +322,7 @@ func TestSettleWithGraceEpoch(t *testing.T) {
 			{
 				MemberAddress: participantHighMiss.Address,
 				Weight:        1000,
+				MlNodes:       []*types.MLNodeInfo{{PocWeight: 1000}},
 			},
 		},
 	})
@@ -400,6 +404,7 @@ func TestSettleWithoutGraceEpoch(t *testing.T) {
 			{
 				MemberAddress: participantHighMiss.Address,
 				Weight:        1000,
+				MlNodes:       []*types.MLNodeInfo{{PocWeight: 1000}},
 			},
 		},
 	})

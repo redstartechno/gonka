@@ -413,7 +413,7 @@ func (am AppModule) evaluateConfirmation(
 		return nil
 	}
 
-	confirmationParticipants := am.updateConfirmationWeightsV2(ctx, event)
+	confirmationParticipants := am.updateConfirmationWeightsV2(ctx, event, snapshot)
 	measured := weightByParticipant(confirmationParticipants, scales)
 
 	participants, found := am.keeper.GetActiveParticipants(ctx, event.EpochIndex)
@@ -499,6 +499,7 @@ func computeRatio(reading, totalExpected int64) *types.Decimal {
 func (am AppModule) updateConfirmationWeightsV2(
 	ctx context.Context,
 	event *types.ConfirmationPoCEvent,
+	snapshot types.PoCValidationSnapshot,
 ) []*types.ActiveParticipant {
 	// Get off-chain store commits using trigger_height as key
 	storeCommits, err := am.keeper.GetAllPoCV2StoreCommitsForStage(ctx, event.TriggerHeight)
@@ -572,43 +573,33 @@ func (am AppModule) updateConfirmationWeightsV2(
 	var validationSlots int
 	timeNormalizationFactor := mathsdk.LegacyOneDec()
 
-	snapshot, snapshotFound, _ := am.keeper.GetPoCValidationSnapshot(ctx, event.TriggerHeight)
-	if snapshotFound {
-		if params.PocParams.ValidationSlots > 0 {
-			appHash = snapshot.AppHash
-			validationSlots = int(params.PocParams.ValidationSlots)
-		}
-		if params.PocParams.PocNormalizationEnabled {
-			timeNormalizationFactor = CalculateTimeNormalizationFactor(
-				snapshot.GenerationStartTimestamp,
-				snapshot.ExchangeEndTimestamp,
-				params.EpochParams.PocStageDuration,
-				params.EpochParams.PocExchangeDuration,
-			)
-		}
-		am.LogInfo("updateConfirmationWeightsV2: Using validation snapshot", types.PoC,
-			"appHash", appHash,
-			"validationSlots", validationSlots,
-			"generationStartTimestamp", snapshot.GenerationStartTimestamp,
-			"exchangeEndTimestamp", snapshot.ExchangeEndTimestamp,
-			"timeNormalizationFactor", timeNormalizationFactor.String(),
-			"pocNormalizationEnabled", params.PocParams.PocNormalizationEnabled,
-		)
-	} else {
-		am.LogWarn("updateConfirmationWeightsV2: Validation snapshot not found", types.PoC,
-			"triggerHeight", event.TriggerHeight,
+	if params.PocParams.ValidationSlots > 0 {
+		appHash = snapshot.AppHash
+		validationSlots = int(params.PocParams.ValidationSlots)
+	}
+	if params.PocParams.PocNormalizationEnabled {
+		timeNormalizationFactor = CalculateTimeNormalizationFactor(
+			snapshot.GenerationStartTimestamp,
+			snapshot.ExchangeEndTimestamp,
+			params.EpochParams.PocStageDuration,
+			params.EpochParams.PocExchangeDuration,
 		)
 	}
+	am.LogInfo("updateConfirmationWeightsV2: Using validation snapshot", types.PoC,
+		"appHash", appHash,
+		"validationSlots", validationSlots,
+		"generationStartTimestamp", snapshot.GenerationStartTimestamp,
+		"exchangeEndTimestamp", snapshot.ExchangeEndTimestamp,
+		"timeNormalizationFactor", timeNormalizationFactor.String(),
+		"pocNormalizationEnabled", params.PocParams.PocNormalizationEnabled,
+	)
 
 	// Load per-model voting powers from snapshot
 	modelVotingPowers := make(map[string]map[string]int64)
-	totalNetworkWeight := int64(0)
-	if snapshotFound {
-		for _, mvw := range snapshot.ModelVotingPowers {
-			modelVotingPowers[mvw.ModelId] = types.VotingPowerSliceToMap(mvw.VotingPowers)
-		}
-		totalNetworkWeight = snapshot.TotalNetworkWeight
+	for _, mvw := range snapshot.ModelVotingPowers {
+		modelVotingPowers[mvw.ModelId] = types.VotingPowerSliceToMap(mvw.VotingPowers)
 	}
+	totalNetworkWeight := snapshot.TotalNetworkWeight
 
 	calculator := NewPoCWeightCalculator(
 		modelVotingPowers,

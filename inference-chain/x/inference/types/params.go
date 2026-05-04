@@ -1148,6 +1148,24 @@ func (d *Decimal) ToFloat() float64 {
 	return d.ToDecimal().InexactFloat64()
 }
 
+func (d *Decimal) CloneOrOne() *Decimal {
+	if d == nil || (d.Value == 0 && d.Exponent == 0) {
+		return &Decimal{Value: 1, Exponent: 0}
+	}
+	return &Decimal{Value: d.Value, Exponent: d.Exponent}
+}
+
+func (d *Decimal) LegacyDecOrOne() sdkmath.LegacyDec {
+	if d == nil || (d.Value == 0 && d.Exponent == 0) {
+		return sdkmath.LegacyOneDec()
+	}
+	dec, err := d.ToLegacyDec()
+	if err != nil {
+		return sdkmath.LegacyOneDec()
+	}
+	return dec
+}
+
 func DecimalFromFloat(f float64) *Decimal {
 	d := decimal.NewFromFloat(f)
 	return &Decimal{Value: d.CoefficientInt64(), Exponent: d.Exponent()}
@@ -1197,14 +1215,10 @@ func (p *PocParams) GetWeightScaleFactorDec() sdkmath.LegacyDec {
 }
 
 func (p *PoCModelConfig) GetWeightScaleFactorDec() sdkmath.LegacyDec {
-	if p == nil || p.WeightScaleFactor == nil || (p.WeightScaleFactor.Value == 0 && p.WeightScaleFactor.Exponent == 0) {
+	if p == nil {
 		return sdkmath.LegacyOneDec()
 	}
-	dec, err := p.WeightScaleFactor.ToLegacyDec()
-	if err != nil {
-		return sdkmath.LegacyOneDec()
-	}
-	return dec
+	return p.WeightScaleFactor.LegacyDecOrOne()
 }
 
 var (

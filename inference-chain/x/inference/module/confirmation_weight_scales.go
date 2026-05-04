@@ -28,15 +28,8 @@ func buildConfirmationWeightScales(
 		config, _ := pocParams.GetModelConfig(modelID)
 		scales = append(scales, &types.ConfirmationWeightScale{
 			ModelId:           modelID,
-			WeightScaleFactor: cloneConfirmationScaleFactor(config.GetWeightScaleFactor()),
+			WeightScaleFactor: config.GetWeightScaleFactor().CloneOrOne(),
 		})
 	}
 	return scales
-}
-
-func cloneConfirmationScaleFactor(d *types.Decimal) *types.Decimal {
-	if d == nil || (d.Value == 0 && d.Exponent == 0) {
-		return &types.Decimal{Value: 1, Exponent: 0}
-	}
-	return &types.Decimal{Value: d.Value, Exponent: d.Exponent}
 }

@@ -79,9 +79,6 @@ func (k *Keeper) AggregateMLNodesFromModelSubgroups(ctx context.Context, epochIn
 			for _, subVw := range subgroup.ValidationWeights {
 				if subVw.MemberAddress == vw.MemberAddress {
 					modelNodes[subgroup.ModelId] = subVw.MlNodes
-					if len(modelNodes[subgroup.ModelId]) == 0 && subVw.Weight > 0 {
-						modelNodes[subgroup.ModelId] = []*types.MLNodeInfo{{PocWeight: subVw.Weight}}
-					}
 					break
 				}
 			}

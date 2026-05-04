@@ -136,7 +136,7 @@ func confirmationWeightScalesFromModels(
 		if config == nil || config.ModelId == "" {
 			continue
 		}
-		coefficients[config.ModelId] = cloneDecimal(config.WeightScaleFactor)
+		coefficients[config.ModelId] = config.WeightScaleFactor
 	}
 
 	modelIDs := make([]string, 0, len(models))
@@ -147,21 +147,10 @@ func confirmationWeightScalesFromModels(
 
 	scales := make([]*types.ConfirmationWeightScale, 0, len(modelIDs))
 	for _, modelID := range modelIDs {
-		scaleFactor := coefficients[modelID]
-		if scaleFactor == nil {
-			scaleFactor = &types.Decimal{Value: 1, Exponent: 0}
-		}
 		scales = append(scales, &types.ConfirmationWeightScale{
 			ModelId:           modelID,
-			WeightScaleFactor: scaleFactor,
+			WeightScaleFactor: coefficients[modelID].CloneOrOne(),
 		})
 	}
 	return scales
-}
-
-func cloneDecimal(d *types.Decimal) *types.Decimal {
-	if d == nil || (d.Value == 0 && d.Exponent == 0) {
-		return &types.Decimal{Value: 1, Exponent: 0}
-	}
-	return &types.Decimal{Value: d.Value, Exponent: d.Exponent}
 }
