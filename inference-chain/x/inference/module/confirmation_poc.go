@@ -405,16 +405,16 @@ func (am AppModule) evaluateConfirmation(
 			"triggerHeight", event.TriggerHeight)
 		return nil
 	}
-	if missingModels := missingConfirmationModels(scales, snapshot.ModelVotingPowers); len(missingModels) > 0 {
-		am.LogWarn("evaluateConfirmation: validation snapshot missing confirmation models, skipping event", types.PoC,
+	presentScales := confirmationScalesInSnapshot(scales, snapshot.ModelVotingPowers)
+	if len(presentScales) == 0 {
+		am.LogWarn("evaluateConfirmation: validation snapshot has no confirmation models, skipping event", types.PoC,
 			"epochIndex", event.EpochIndex,
-			"triggerHeight", event.TriggerHeight,
-			"missingModels", missingModels)
+			"triggerHeight", event.TriggerHeight)
 		return nil
 	}
 
 	confirmationParticipants := am.updateConfirmationWeightsV2(ctx, event, snapshot)
-	measured := weightByParticipant(confirmationParticipants, scales)
+	measured := weightByParticipant(confirmationParticipants, presentScales)
 
 	participants, found := am.keeper.GetActiveParticipants(ctx, event.EpochIndex)
 	if !found {
@@ -431,8 +431,8 @@ func (am AppModule) evaluateConfirmation(
 		preservedSnapshot = types.PreservedNodesSnapshot{}
 	}
 
-	preserved := preservedWeightByParticipant(activeParticipants, &preservedSnapshot, scales)
-	totalExpected := weightByParticipant(activeParticipants, scales)
+	preserved := preservedWeightByParticipant(activeParticipants, &preservedSnapshot, presentScales)
+	totalExpected := weightByParticipant(activeParticipants, presentScales)
 
 	updated, ratios := foldEventReadings(epochGroupData, measured, preserved, totalExpected)
 	if updated {
@@ -623,22 +623,23 @@ func (am AppModule) updateConfirmationWeightsV2(
 	return calculator.Calculate()
 }
 
-func missingConfirmationModels(
+func confirmationScalesInSnapshot(
 	scales []*types.ConfirmationWeightScale,
 	modelVotingPowers []*types.ModelVotingPowers,
-) []string {
-	required := make(map[string]bool, len(scales))
-	for _, scale := range scales {
-		if scale != nil && scale.ModelId != "" {
-			required[scale.ModelId] = true
-		}
-	}
+) []*types.ConfirmationWeightScale {
+	present := make(map[string]bool, len(modelVotingPowers))
 	for _, mvw := range modelVotingPowers {
 		if mvw != nil {
-			delete(required, mvw.ModelId)
+			present[mvw.ModelId] = true
 		}
 	}
-	return sortedKeys(required)
+	filtered := make([]*types.ConfirmationWeightScale, 0, len(scales))
+	for _, scale := range scales {
+		if scale != nil && present[scale.ModelId] {
+			filtered = append(filtered, scale)
+		}
+	}
+	return filtered
 }
 
 func weightByParticipant(

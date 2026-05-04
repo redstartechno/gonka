@@ -110,6 +110,21 @@ func TestFoldEventReadings_EmptyEventKeepsRatioAtOne(t *testing.T) {
 	requireRatioEqual(t, ratios[addr], 1, 1)
 }
 
+func TestConfirmationScalesInSnapshot(t *testing.T) {
+	scales := []*types.ConfirmationWeightScale{
+		{ModelId: "model-a", WeightScaleFactor: types.DecimalFromFloat(1)},
+		{ModelId: "model-b", WeightScaleFactor: types.DecimalFromFloat(2)},
+		{ModelId: "model-c", WeightScaleFactor: types.DecimalFromFloat(3)},
+	}
+	got := confirmationScalesInSnapshot(scales, []*types.ModelVotingPowers{
+		{ModelId: "model-c"},
+		{ModelId: "model-a"},
+		{ModelId: "extra-model"},
+	})
+
+	require.Equal(t, []*types.ConfirmationWeightScale{scales[0], scales[2]}, got)
+}
+
 func requireRatioEqual(t *testing.T, got *types.Decimal, numerator, denominator int64) {
 	t.Helper()
 	require.NotNil(t, got)
