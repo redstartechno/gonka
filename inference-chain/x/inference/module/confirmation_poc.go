@@ -477,6 +477,9 @@ func foldEventReadings(
 	for i, vw := range epochGroupData.ValidationWeights {
 		addr := vw.MemberAddress
 		reading := preserved[addr] + measured[addr]
+		if totalExpected[addr] == 0 {
+			continue
+		}
 		if reading < vw.ConfirmationWeight {
 			epochGroupData.ValidationWeights[i].ConfirmationWeight = reading
 			updated = true

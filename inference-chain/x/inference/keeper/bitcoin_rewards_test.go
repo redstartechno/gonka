@@ -370,6 +370,57 @@ func TestCalculateParticipantBitcoinRewards(t *testing.T) {
 		},
 	}
 
+	t.Run("Empty confirmation scales skip confirmation rescale", func(t *testing.T) {
+		noScaleData := &types.EpochGroupData{
+			EpochIndex: 1,
+			ValidationWeights: []*types.ValidationWeight{
+				{
+					MemberAddress:      "participant1",
+					Weight:             1000,
+					ConfirmationWeight: 0,
+				},
+				{
+					MemberAddress:      "participant2",
+					Weight:             1000,
+					ConfirmationWeight: 0,
+				},
+			},
+		}
+		noScaleParticipants := []types.Participant{
+			{
+				Address:           "participant1",
+				Status:            types.ParticipantStatus_ACTIVE,
+				CurrentEpochStats: &types.CurrentEpochStats{},
+			},
+			{
+				Address:           "participant2",
+				Status:            types.ParticipantStatus_ACTIVE,
+				CurrentEpochStats: &types.CurrentEpochStats{},
+			},
+		}
+		noDecayParams := &types.BitcoinRewardParams{
+			InitialEpochReward: 1000,
+			DecayRate:          types.DecimalFromFloat(0),
+			GenesisEpoch:       1,
+		}
+
+		logger := createTestLogger(t)
+		results, bitcoinResult, err := CalculateParticipantBitcoinRewards(
+			noScaleParticipants,
+			noScaleData,
+			noDecayParams,
+			nil,
+			modelNodesFromVW(noScaleData.ValidationWeights),
+			logger,
+		)
+
+		require.NoError(t, err)
+		require.Equal(t, int64(1000), bitcoinResult.Amount)
+		require.Len(t, results, 2)
+		require.Equal(t, uint64(500), results[0].Settle.RewardCoins)
+		require.Equal(t, uint64(500), results[1].Settle.RewardCoins)
+	})
+
 	t.Run("Successful Bitcoin reward distribution", func(t *testing.T) {
 		logger := createTestLogger(t)
 		results, bitcoinResult, err := CalculateParticipantBitcoinRewards(participants, epochGroupData, bitcoinParams, nil, modelNodesAndScales(epochGroupData), logger)

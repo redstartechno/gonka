@@ -609,20 +609,27 @@ func CalculateParticipantBitcoinRewards(
 			continue
 		}
 
-		rawTotal := types.ConfirmationWeightOfModelNodes(
-			participantMLNodes[participant.Address],
-			epochGroupData.ConfirmationWeightScales,
-		)
-		effectiveWeight := int64(0)
-		if rawTotal > 0 {
-			confirmed := vw.ConfirmationWeight
-			if confirmed < 0 {
-				confirmed = 0
+		effectiveWeight := fullWeight
+		if len(epochGroupData.ConfirmationWeightScales) == 0 {
+			logger.Info("Bitcoin Rewards: no confirmation weight scales, skipping confirmation rescale",
+				"participant", participant.Address,
+				"fullWeight", fullWeight)
+		} else {
+			rawTotal := types.ConfirmationWeightOfModelNodes(
+				participantMLNodes[participant.Address],
+				epochGroupData.ConfirmationWeightScales,
+			)
+			effectiveWeight = 0
+			if rawTotal > 0 {
+				confirmed := vw.ConfirmationWeight
+				if confirmed < 0 {
+					confirmed = 0
+				}
+				ewBig := big.NewInt(confirmed)
+				ewBig.Mul(ewBig, big.NewInt(vw.Weight))
+				ewBig.Div(ewBig, big.NewInt(rawTotal))
+				effectiveWeight = ewBig.Int64()
 			}
-			ewBig := big.NewInt(confirmed)
-			ewBig.Mul(ewBig, big.NewInt(vw.Weight))
-			ewBig.Div(ewBig, big.NewInt(rawTotal))
-			effectiveWeight = ewBig.Int64()
 		}
 		if effectiveWeight > int64(fullWeight) {
 			effectiveWeight = int64(fullWeight)

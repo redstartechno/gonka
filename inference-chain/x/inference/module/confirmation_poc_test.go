@@ -85,8 +85,9 @@ func TestFoldEventReadings_AllPreservedZeroMeasuredIsNotPenalized(t *testing.T) 
 	requireRatioEqual(t, ratios[addr], 1, 1)
 }
 
-// No expected confirmation at all results in a ratio
-// of 1 (no slashing) and no change to ConfirmationWeight, because totalExpected = 0.
+// No expected confirmation at all results in no ratio write and no change to
+// ConfirmationWeight, because this event has no enforceable weight for the
+// participant.
 func TestFoldEventReadings_EmptyEventKeepsRatioAtOne(t *testing.T) {
 	addr := "participant1"
 	ege := &types.EpochGroupData{
@@ -103,11 +104,9 @@ func TestFoldEventReadings_EmptyEventKeepsRatioAtOne(t *testing.T) {
 		map[string]int64{},
 	)
 
-	// reading = 0 < 50 -> ConfirmationWeight drops to 0. But ratio stays at 1 since
-	// totalExpected = 0 (no nodes expected from this event).
-	require.True(t, updated)
-	require.Equal(t, int64(0), ege.ValidationWeights[0].ConfirmationWeight)
-	requireRatioEqual(t, ratios[addr], 1, 1)
+	require.False(t, updated)
+	require.Equal(t, int64(50), ege.ValidationWeights[0].ConfirmationWeight)
+	require.NotContains(t, ratios, addr)
 }
 
 func TestConfirmationScalesInSnapshot(t *testing.T) {
