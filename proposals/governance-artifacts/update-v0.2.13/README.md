@@ -29,6 +29,7 @@ The on-chain migration logic is defined in [`upgrades.go`](https://github.com/go
 Migrations:
 - Sets `DevshardEscrowParams.MaxEscrowsPerEpoch` to `500_000`.
 - Sets `DevshardEscrowParams.MaxNonce` to `1_000_000` (previously a hardcoded `20_000` constant in the settlement path).
+- Backfills `MsgRespondDealerComplaints` authz grants on every existing cold-to-warm ML ops pair. v0.2.12 added this message to the granted permission list but did not migrate existing grants, so DAPIs on hosts that joined before v0.2.12 could not respond to dealer complaints.
 
 ## Changes
 

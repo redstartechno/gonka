@@ -4,9 +4,14 @@ import (
 	"cmp"
 	"context"
 	"slices"
+	"time"
 
 	upgradetypes "cosmossdk.io/x/upgrade/types"
+	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/cosmos/cosmos-sdk/types/module"
+	"github.com/cosmos/cosmos-sdk/x/authz"
+	authzkeeper "github.com/cosmos/cosmos-sdk/x/authz/keeper"
+	blstypes "github.com/productscience/inference/x/bls/types"
 	"github.com/productscience/inference/x/inference/keeper"
 	"github.com/productscience/inference/x/inference/types"
 )
@@ -20,6 +25,7 @@ func CreateUpgradeHandler(
 	mm *module.Manager,
 	configurator module.Configurator,
 	k keeper.Keeper,
+	authzKeeper authzkeeper.Keeper,
 ) upgradetypes.UpgradeHandler {
 	return func(ctx context.Context, _ upgradetypes.Plan, fromVM module.VersionMap) (module.VersionMap, error) {
 		k.LogInfo("starting upgrade", types.Upgrades, "version", UpgradeName)
@@ -32,6 +38,9 @@ func CreateUpgradeHandler(
 			return nil, err
 		}
 		if err := backfillConfirmationWeightScales(ctx, k); err != nil {
+			return nil, err
+		}
+		if err := grantRespondDealerComplaintsAuthz(ctx, authzKeeper, k); err != nil {
 			return nil, err
 		}
 
@@ -124,6 +133,69 @@ func backfillConfirmationWeightScales(ctx context.Context, k keeper.Keeper) erro
 	k.LogInfo("backfilled confirmation weight scales", types.Upgrades,
 		"epoch", epochIndex,
 		"models", len(root.ConfirmationWeightScales))
+	return nil
+}
+
+// grantRespondDealerComplaintsAuthz backfills MsgRespondDealerComplaints authz
+// grants on every existing cold->warm ML ops pair. v0.2.12 added the message to
+// InferenceOperationKeyPerms but did not migrate existing grants, so DAPIs on
+// hosts that joined before v0.2.12 cannot respond to dealer complaints until
+// they re-run grant-ml-ops-permissions. Identify pairs by an existing
+// MsgStartInference grant (the canonical marker) and reuse its expiration.
+func grantRespondDealerComplaintsAuthz(ctx context.Context, authzKeeper authzkeeper.Keeper, k keeper.Keeper) error {
+	type grantPair struct {
+		granter    sdk.AccAddress
+		grantee    sdk.AccAddress
+		expiration *time.Time
+	}
+	seen := make(map[string]bool)
+	var pairs []grantPair
+
+	startInferenceMsgType := sdk.MsgTypeURL(&types.MsgStartInference{})
+	respondMsgType := sdk.MsgTypeURL(&blstypes.MsgRespondDealerComplaints{})
+
+	authzKeeper.IterateGrants(ctx, func(granterAddr, granteeAddr sdk.AccAddress, grant authz.Grant) bool {
+		if grant.Authorization.GetTypeUrl() != "/cosmos.authz.v1beta1.GenericAuthorization" {
+			return false
+		}
+		var genAuth authz.GenericAuthorization
+		if err := k.Codec().Unmarshal(grant.Authorization.Value, &genAuth); err != nil {
+			return false
+		}
+		if genAuth.Msg != startInferenceMsgType {
+			return false
+		}
+		key := granterAddr.String() + "->" + granteeAddr.String()
+		if seen[key] {
+			return false
+		}
+		seen[key] = true
+		pairs = append(pairs, grantPair{granter: granterAddr, grantee: granteeAddr, expiration: grant.Expiration})
+		return false
+	})
+
+	k.LogInfo("found cold->warm pairs needing MsgRespondDealerComplaints grant", types.Upgrades, "count", len(pairs))
+
+	created := 0
+	skipped := 0
+	for _, pair := range pairs {
+		existing, _ := authzKeeper.GetAuthorization(ctx, pair.grantee, pair.granter, respondMsgType)
+		if existing != nil {
+			skipped++
+			continue
+		}
+		auth := authz.NewGenericAuthorization(respondMsgType)
+		if err := authzKeeper.SaveGrant(ctx, pair.grantee, pair.granter, auth, pair.expiration); err != nil {
+			k.LogError("failed to save MsgRespondDealerComplaints grant", types.Upgrades,
+				"granter", pair.granter.String(),
+				"grantee", pair.grantee.String(),
+				"error", err)
+			continue
+		}
+		created++
+	}
+	k.LogInfo("MsgRespondDealerComplaints grant migration complete", types.Upgrades,
+		"created", created, "skipped", skipped)
 	return nil
 }
 
