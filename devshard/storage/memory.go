@@ -37,6 +37,7 @@ func copyWarmKeyDelta(src map[uint32]string) map[uint32]string {
 
 type sessionData struct {
 	escrowID      string
+	epochID       uint64
 	version       string
 	creatorAddr   string
 	config        types.SessionConfig
@@ -70,6 +71,7 @@ func (m *Memory) CreateSession(params CreateSessionParams) error {
 
 	m.sessions[params.EscrowID] = &sessionData{
 		escrowID:     params.EscrowID,
+		epochID:      params.EpochID,
 		version:      types.NormalizeSessionVersion(params.Version),
 		creatorAddr:  params.CreatorAddr,
 		config:       params.Config,
@@ -93,14 +95,14 @@ func (m *Memory) MarkSettled(escrowID string) error {
 	return nil
 }
 
-func (m *Memory) ListActiveSessions() ([]string, error) {
+func (m *Memory) ListActiveSessions() ([]ActiveSession, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	var result []string
+	var result []ActiveSession
 	for id, s := range m.sessions {
 		if s.status == "active" {
-			result = append(result, id)
+			result = append(result, ActiveSession{EscrowID: id, EpochID: s.epochID})
 		}
 	}
 	return result, nil
@@ -160,6 +162,7 @@ func (m *Memory) GetSessionMeta(escrowID string) (*SessionMeta, error) {
 
 	meta := &SessionMeta{
 		EscrowID:       s.escrowID,
+		EpochID:        s.epochID,
 		Version:        s.version,
 		CreatorAddr:    s.creatorAddr,
 		Config:         s.config,
@@ -218,6 +221,18 @@ func (m *Memory) LastFinalized(escrowID string) (uint64, error) {
 	}
 
 	return s.lastFinalized, nil
+}
+
+func (m *Memory) PruneEpoch(epochID uint64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for id, s := range m.sessions {
+		if s.epochID == epochID {
+			delete(m.sessions, id)
+		}
+	}
+	return nil
 }
 
 func (m *Memory) Close() error { return nil }

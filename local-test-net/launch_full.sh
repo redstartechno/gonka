@@ -2,6 +2,16 @@
 # Proxy ports: genesis=80, join1=81, join2=82
 set -e
 
+# Postgres is always part of the cluster (mirrors launch.sh). One
+# testermint-postgres container is brought up alongside genesis and every
+# node's dapi + devshardd container reaches it via the shared network.
+export PGHOST="testermint-postgres"
+export PGPORT="5432"
+export PGDATABASE="payloads"
+export PGUSER="payloads"
+export PGPASSWORD="test"
+echo "Postgres enabled (PGHOST=$PGHOST, host port ${TESTERMINT_PG_PORT:-15432})"
+
 export REST_API_ACTIVE=true
 export PUBLIC_SERVER_PORT=9000
 export ML_SERVER_PORT=9001
@@ -39,6 +49,7 @@ docker compose -p genesis \
   -f docker-compose.explorer.yml \
   -f docker-compose.proxy.yml \
   -f docker-compose.bridge.yml \
+  -f docker-compose.postgres.yml \
   up -d
 sleep 40
 

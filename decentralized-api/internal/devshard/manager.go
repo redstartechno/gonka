@@ -137,6 +137,7 @@ func (m *HostManager) create(escrowID string) (*transport.Server, error) {
 
 	if err := m.store.CreateSession(storage.CreateSessionParams{
 		EscrowID:       escrowID,
+		EpochID:        escrow.EpochID,
 		Version:        m.boundVersion,
 		CreatorAddr:    creatorAddr,
 		Config:         config,
@@ -177,7 +178,7 @@ func (m *HostManager) create(escrowID string) (*transport.Server, error) {
 // injecting warm key deltas from the stored DiffRecords. Call this on startup
 // after constructing the HostManager.
 func (m *HostManager) RecoverSessions() error {
-	escrowIDs, err := m.store.ListActiveSessions()
+	active, err := m.store.ListActiveSessions()
 	if err != nil {
 		return fmt.Errorf("list active sessions: %w", err)
 	}
@@ -185,10 +186,10 @@ func (m *HostManager) RecoverSessions() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	for _, escrowID := range escrowIDs {
-		if err := m.recoverSession(escrowID); err != nil {
+	for _, sess := range active {
+		if err := m.recoverSession(sess.EscrowID); err != nil {
 			logging.Error("skipping corrupt session", inferenceTypes.System,
-				"escrow_id", escrowID, "error", err)
+				"escrow_id", sess.EscrowID, "epoch_id", sess.EpochID, "error", err)
 		}
 	}
 

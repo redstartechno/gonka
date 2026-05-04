@@ -1,6 +1,17 @@
 # This script runs 1 genesis node, which is used as seed node also, and 2 full nodes
 set -e
 
+# Postgres is always part of the cluster: a single testermint-postgres
+# container is brought up alongside genesis, and every node's dapi +
+# devshardd reaches it via the shared chain-public network. Mirrors the
+# CI/CD path so behavior is identical between local and pipeline runs.
+export PGHOST="testermint-postgres"
+export PGPORT="5432"
+export PGDATABASE="payloads"
+export PGUSER="payloads"
+export PGPASSWORD="test"
+echo "Postgres enabled (PGHOST=$PGHOST, host port ${TESTERMINT_PG_PORT:-15432})"
+
 # launch genesis node
 export PUBLIC_SERVER_PORT=9000
 export ML_SERVER_PORT=9001
@@ -31,7 +42,7 @@ if [ -n "$(ls -A ./public-html 2>/dev/null)" ]; then
 fi
 
 echo "Starting genesis node"
-docker compose -p genesis -f docker-compose-base.yml -f docker-compose.genesis.yml up -d
+docker compose -p genesis -f docker-compose-base.yml -f docker-compose.genesis.yml -f docker-compose.postgres.yml up -d
 sleep 40
 
 # seed node parameters for both joining nodes

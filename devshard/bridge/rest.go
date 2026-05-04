@@ -123,6 +123,7 @@ func (b *RESTBridge) GetEscrow(escrowID string) (*EscrowInfo, error) {
 		AppHash:        appHash,
 		Slots:          resp.Escrow.Slots,
 		TokenPrice:     resp.Escrow.TokenPrice,
+		EpochID:        resp.Escrow.EpochIndex,
 	}, nil
 }
 

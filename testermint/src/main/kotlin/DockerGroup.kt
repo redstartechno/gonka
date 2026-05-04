@@ -49,7 +49,19 @@ val DNS_COMPOSE_FILES = listOf(
 val BASE_COMPOSE_FILES = listOf(
     "${LOCAL_TEST_NET_DIR}/docker-compose-base.yml",
 )
-val GENESIS_COMPOSE_FILES = BASE_COMPOSE_FILES + "${LOCAL_TEST_NET_DIR}/docker-compose.genesis.yml" + DNS_COMPOSE_FILES
+
+// Postgres is always part of the cluster: a single testermint-postgres
+// container is brought up alongside genesis (via the overlay below) and
+// every node's dapi + devshardd reaches it as testermint-postgres:5432
+// over the shared chain-public network. Removing the overlay would force
+// dapi back onto the SQLite fallback, which the storage tests are designed
+// to detect, so do not gate this.
+private val POSTGRES_OVERLAY = listOf("$LOCAL_TEST_NET_DIR/docker-compose.postgres.yml")
+
+val GENESIS_COMPOSE_FILES = BASE_COMPOSE_FILES +
+    "${LOCAL_TEST_NET_DIR}/docker-compose.genesis.yml" +
+    DNS_COMPOSE_FILES +
+    POSTGRES_OVERLAY
 val NODE_COMPOSE_FILES = BASE_COMPOSE_FILES + "${LOCAL_TEST_NET_DIR}/docker-compose.join.yml" + DNS_COMPOSE_FILES
 
 data class GenesisUrls(val keyName: String) {
@@ -317,6 +329,17 @@ data class DockerGroup(
                 put("SEED_NODE_P2P_URL", it.p2pUrl)
                 put("SEED_API_URL", it.apiUrl)
             }
+
+            // Postgres for devshard/payload storage. Always set: the
+            // genesis project brings up testermint-postgres and every
+            // node's api+versiond container connects via the shared
+            // chain-public network. dapi falls back to SQLite if PGHOST
+            // is empty, which we never want in tests.
+            put("PGHOST", "testermint-postgres")
+            put("PGPORT", "5432")
+            put("PGDATABASE", "payloads")
+            put("PGUSER", "payloads")
+            put("PGPASSWORD", "test")
 
             // Test-supplied extras applied last so they override defaults.
             // DevshardStandaloneTests uses this to set VERSIOND_BINARY_NAME,

@@ -1,0 +1,247 @@
+package storage
+
+import (
+	"database/sql"
+	"encoding/json"
+	"fmt"
+	"log/slog"
+	"os"
+	"strings"
+	"time"
+
+	"devshard/types"
+
+	_ "modernc.org/sqlite"
+)
+
+// EpochResolver returns the epoch_index for an escrow id. The migration
+// helper uses it to stamp legacy sessions (which had no epoch_id column)
+// with the right partition key so they land in the new layout.
+type EpochResolver func(escrowID string) (uint64, error)
+
+// MigrateLegacySQLite copies sessions, diffs and signatures from the legacy
+// single-file SQLite store at legacyPath into dest. After a successful
+// migration the legacy file is renamed to legacyPath + ".migrated.<ts>" so
+// repeated startups are idempotent.
+//
+// No-op if legacyPath does not exist. Returns the number of sessions moved.
+//
+// Migration runs through the public Storage API of dest, so it works against
+// both the per-epoch SQLite backend and the Postgres backend. Sessions whose
+// escrow can no longer be resolved on chain are skipped with a warning rather
+// than aborting the whole migration.
+func MigrateLegacySQLite(legacyPath string, dest Storage, resolveEpoch EpochResolver) (int, error) {
+	info, err := os.Stat(legacyPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, fmt.Errorf("stat legacy %s: %w", legacyPath, err)
+	}
+	if info.IsDir() {
+		// Path was already promoted to the new directory layout. Nothing to do.
+		return 0, nil
+	}
+
+	src, err := sql.Open("sqlite", legacyPath)
+	if err != nil {
+		return 0, fmt.Errorf("open legacy %s: %w", legacyPath, err)
+	}
+	defer src.Close()
+
+	for _, p := range []string{
+		"PRAGMA query_only=ON",
+		"PRAGMA busy_timeout=5000",
+	} {
+		if _, err := src.Exec(p); err != nil {
+			return 0, fmt.Errorf("legacy pragma %s: %w", p, err)
+		}
+	}
+
+	rows, err := src.Query(
+		`SELECT escrow_id, version, creator_addr, config_json, group_json, initial_balance,
+		        latest_nonce, last_finalized, status
+		 FROM sessions`,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("query legacy sessions: %w", err)
+	}
+
+	type legacySession struct {
+		escrowID, version, creatorAddr, configJSON, groupJSON, status string
+		initialBalance, latestNonce, lastFinalized                    uint64
+	}
+	var sessions []legacySession
+	for rows.Next() {
+		var ls legacySession
+		var version sql.NullString
+		if err := rows.Scan(
+			&ls.escrowID, &version, &ls.creatorAddr, &ls.configJSON, &ls.groupJSON,
+			&ls.initialBalance, &ls.latestNonce, &ls.lastFinalized, &ls.status,
+		); err != nil {
+			rows.Close()
+			return 0, fmt.Errorf("scan legacy session: %w", err)
+		}
+		if version.Valid {
+			ls.version = version.String
+		}
+		sessions = append(sessions, ls)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("iter legacy sessions: %w", err)
+	}
+
+	migrated := 0
+	for _, ls := range sessions {
+		epochID, err := resolveEpoch(ls.escrowID)
+		if err != nil {
+			slog.Warn("devshard migrate: skipping session, epoch unresolved",
+				"escrow_id", ls.escrowID, "error", err)
+			continue
+		}
+
+		var cfg types.SessionConfig
+		if err := json.Unmarshal([]byte(ls.configJSON), &cfg); err != nil {
+			return migrated, fmt.Errorf("unmarshal config for %s: %w", ls.escrowID, err)
+		}
+		var group []types.SlotAssignment
+		if err := json.Unmarshal([]byte(ls.groupJSON), &group); err != nil {
+			return migrated, fmt.Errorf("unmarshal group for %s: %w", ls.escrowID, err)
+		}
+
+		if err := dest.CreateSession(CreateSessionParams{
+			EscrowID:       ls.escrowID,
+			EpochID:        epochID,
+			Version:        ls.version,
+			CreatorAddr:    ls.creatorAddr,
+			Config:         cfg,
+			Group:          group,
+			InitialBalance: ls.initialBalance,
+		}); err != nil {
+			return migrated, fmt.Errorf("create session %s: %w", ls.escrowID, err)
+		}
+
+		if err := migrateLegacyDiffs(src, dest, ls.escrowID); err != nil {
+			return migrated, fmt.Errorf("migrate diffs for %s: %w", ls.escrowID, err)
+		}
+
+		if ls.lastFinalized > 0 {
+			if err := dest.MarkFinalized(ls.escrowID, ls.lastFinalized); err != nil {
+				return migrated, fmt.Errorf("mark finalized %s: %w", ls.escrowID, err)
+			}
+		}
+		if ls.status == "settled" {
+			if err := dest.MarkSettled(ls.escrowID); err != nil {
+				return migrated, fmt.Errorf("mark settled %s: %w", ls.escrowID, err)
+			}
+		}
+		migrated++
+	}
+
+	if err := src.Close(); err != nil {
+		return migrated, fmt.Errorf("close legacy: %w", err)
+	}
+
+	stamped := fmt.Sprintf("%s.migrated.%d", legacyPath, time.Now().Unix())
+	if err := os.Rename(legacyPath, stamped); err != nil {
+		return migrated, fmt.Errorf("rename legacy file: %w", err)
+	}
+	// Best-effort cleanup of WAL/SHM sidecars from the renamed legacy file.
+	for _, suffix := range []string{"-wal", "-shm"} {
+		sidecar := legacyPath + suffix
+		if _, err := os.Stat(sidecar); err == nil {
+			if err := os.Rename(sidecar, stamped+suffix); err != nil && !strings.Contains(err.Error(), "no such file") {
+				slog.Warn("devshard migrate: failed to rename sidecar", "path", sidecar, "error", err)
+			}
+		}
+	}
+	return migrated, nil
+}
+
+func migrateLegacyDiffs(src *sql.DB, dest Storage, escrowID string) error {
+	rows, err := src.Query(
+		`SELECT nonce, txs_proto, user_sig, post_state_root, state_hash, warm_keys_json, created_at
+		 FROM diffs WHERE escrow_id = ? ORDER BY nonce`,
+		escrowID,
+	)
+	if err != nil {
+		return fmt.Errorf("query diffs: %w", err)
+	}
+	type legacyDiff struct {
+		nonce         uint64
+		txsProto      []byte
+		userSig       []byte
+		postStateRoot []byte
+		stateHash     []byte
+		warmJSON      *string
+		createdAt     int64
+	}
+	var diffs []legacyDiff
+	for rows.Next() {
+		var d legacyDiff
+		if err := rows.Scan(&d.nonce, &d.txsProto, &d.userSig, &d.postStateRoot, &d.stateHash, &d.warmJSON, &d.createdAt); err != nil {
+			rows.Close()
+			return fmt.Errorf("scan diff: %w", err)
+		}
+		diffs = append(diffs, d)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iter diffs: %w", err)
+	}
+
+	for _, d := range diffs {
+		txs, err := unmarshalTxs(d.txsProto)
+		if err != nil {
+			return fmt.Errorf("unmarshal txs nonce %d: %w", d.nonce, err)
+		}
+		rec := types.DiffRecord{
+			Diff: types.Diff{
+				Nonce:         d.nonce,
+				Txs:           txs,
+				UserSig:       d.userSig,
+				PostStateRoot: d.postStateRoot,
+			},
+			StateHash: d.stateHash,
+			CreatedAt: d.createdAt,
+		}
+		if d.warmJSON != nil {
+			wk := make(map[uint32]string)
+			if err := json.Unmarshal([]byte(*d.warmJSON), &wk); err != nil {
+				return fmt.Errorf("unmarshal warm keys nonce %d: %w", d.nonce, err)
+			}
+			rec.WarmKeyDelta = wk
+		}
+
+		// Pull signatures into the diff record before insert so the dest
+		// store sees them as part of the same AppendDiff transaction.
+		sigRows, err := src.Query(
+			`SELECT slot_id, sig FROM signatures WHERE escrow_id = ? AND nonce = ?`,
+			escrowID, d.nonce,
+		)
+		if err != nil {
+			return fmt.Errorf("query sigs nonce %d: %w", d.nonce, err)
+		}
+		sigs := map[uint32][]byte{}
+		for sigRows.Next() {
+			var slotID uint32
+			var sig []byte
+			if err := sigRows.Scan(&slotID, &sig); err != nil {
+				sigRows.Close()
+				return fmt.Errorf("scan sig nonce %d: %w", d.nonce, err)
+			}
+			sigs[slotID] = sig
+		}
+		sigRows.Close()
+		if err := sigRows.Err(); err != nil {
+			return fmt.Errorf("iter sigs nonce %d: %w", d.nonce, err)
+		}
+		rec.Signatures = sigs
+
+		if err := dest.AppendDiff(escrowID, rec); err != nil {
+			return fmt.Errorf("append diff nonce %d: %w", d.nonce, err)
+		}
+	}
+	return nil
+}

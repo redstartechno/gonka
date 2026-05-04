@@ -2,6 +2,7 @@ package storage
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -15,7 +16,7 @@ import (
 
 func newTestSQLite(t *testing.T) *SQLite {
 	t.Helper()
-	db, err := NewSQLite(filepath.Join(t.TempDir(), "test.db"))
+	db, err := NewSQLite(t.TempDir())
 	require.NoError(t, err)
 	t.Cleanup(func() { db.Close() })
 	return db
@@ -59,13 +60,25 @@ func TestSQLite_ListActiveSessions(t *testing.T) {
 	runListActiveSessions(t, newTestSQLite(t))
 }
 
+func TestSQLite_PruneEpoch_RemovesOnlyTarget(t *testing.T) {
+	runPruneEpoch_RemovesOnlyTarget(t, newTestSQLite(t))
+}
+
+func TestSQLite_PruneEpoch_Idempotent(t *testing.T) {
+	runPruneEpoch_Idempotent(t, newTestSQLite(t))
+}
+
+func TestSQLite_PruneEpoch_WriteAfter(t *testing.T) {
+	runPruneEpoch_WriteAfter(t, newTestSQLite(t))
+}
+
 // SQLite-specific durability tests.
 
 func TestSQLite_PersistAcrossReopen(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "persist.db")
+	dir := t.TempDir()
 
 	// Phase 1: write data.
-	db1, err := NewSQLite(dbPath)
+	db1, err := NewSQLite(dir)
 	require.NoError(t, err)
 
 	require.NoError(t, db1.CreateSession(defaultParams()))
@@ -90,13 +103,14 @@ func TestSQLite_PersistAcrossReopen(t *testing.T) {
 	require.NoError(t, db1.Close())
 
 	// Phase 2: reopen and verify.
-	db2, err := NewSQLite(dbPath)
+	db2, err := NewSQLite(dir)
 	require.NoError(t, err)
 	defer db2.Close()
 
 	meta, err := db2.GetSessionMeta("escrow-1")
 	require.NoError(t, err)
 	require.Equal(t, "escrow-1", meta.EscrowID)
+	require.Equal(t, defaultParams().EpochID, meta.EpochID)
 	require.Equal(t, "creator", meta.CreatorAddr)
 	require.Equal(t, uint64(1000), meta.InitialBalance)
 	require.Equal(t, uint64(10), meta.LatestNonce)
@@ -139,6 +153,7 @@ func TestSQLite_ConcurrentSessions(t *testing.T) {
 			escrowID := fmt.Sprintf("escrow-%d", sessionIdx)
 			params := CreateSessionParams{
 				EscrowID:       escrowID,
+				EpochID:        7,
 				CreatorAddr:    "creator",
 				Config:         types.SessionConfig{},
 				Group:          defaultGroup(),
@@ -335,13 +350,17 @@ func TestSQLite_ReadsDuringWrite(t *testing.T) {
 		numReaders = 10
 	)
 
+	// Resolve the per-epoch pool that holds escrow-1 and reach into it.
+	pool, _, err := db.poolFor("escrow-1")
+	require.NoError(t, err)
+
 	writerReady := make(chan struct{})
 	writerDone := make(chan struct{})
 
 	// Writer: hold a long transaction inserting many rows.
 	go func() {
 		defer close(writerDone)
-		tx, err := db.writeDB.Begin()
+		tx, err := pool.writeDB.Begin()
 		if err != nil {
 			t.Errorf("begin write tx: %v", err)
 			return
@@ -410,16 +429,18 @@ func TestSQLite_StressMultiSessionRecovery(t *testing.T) {
 	const numSessions = 50
 	const diffsPerSession = 200
 
-	dbPath := filepath.Join(t.TempDir(), "stress.db")
+	dir := t.TempDir()
 
-	// Phase 1: populate.
-	db1, err := NewSQLite(dbPath)
+	// Phase 1: populate. Spread sessions across two epochs to also exercise
+	// the per-epoch routing.
+	db1, err := NewSQLite(dir)
 	require.NoError(t, err)
 
 	for s := 0; s < numSessions; s++ {
 		escrowID := fmt.Sprintf("escrow-%d", s)
 		params := CreateSessionParams{
 			EscrowID:       escrowID,
+			EpochID:        uint64(s % 2),
 			CreatorAddr:    fmt.Sprintf("creator-%d", s),
 			Config:         types.SessionConfig{TokenPrice: 1},
 			Group:          defaultGroup(),
@@ -448,7 +469,7 @@ func TestSQLite_StressMultiSessionRecovery(t *testing.T) {
 	require.NoError(t, db1.Close())
 
 	// Phase 2: reopen and verify all data.
-	db2, err := NewSQLite(dbPath)
+	db2, err := NewSQLite(dir)
 	require.NoError(t, err)
 	defer db2.Close()
 
@@ -461,6 +482,7 @@ func TestSQLite_StressMultiSessionRecovery(t *testing.T) {
 
 		meta, err := db2.GetSessionMeta(escrowID)
 		require.NoError(t, err)
+		require.Equal(t, uint64(s%2), meta.EpochID, "session %s", escrowID)
 		require.Equal(t, uint64(diffsPerSession), meta.LatestNonce, "session %s", escrowID)
 		require.Equal(t, uint64(diffsPerSession/2), meta.LastFinalized, "session %s", escrowID)
 		require.Equal(t, "active", meta.Status)
@@ -477,4 +499,136 @@ func TestSQLite_StressMultiSessionRecovery(t *testing.T) {
 			require.NotNil(t, d.WarmKeyDelta)
 		}
 	}
+}
+
+// TestSQLite_MetaIndex_PersistsAcrossReboot proves the explicit
+// _meta.db sidecar is the authoritative escrow_id -> epoch_id index:
+// after closing and reopening the store, all routing decisions still
+// work without having to scan per-epoch sessions tables. We additionally
+// verify _meta.db was actually created on disk and that the meta survives
+// even if a per-epoch file is read fresh by a new process.
+func TestSQLite_MetaIndex_PersistsAcrossReboot(t *testing.T) {
+	dir := t.TempDir()
+
+	db1, err := NewSQLite(dir)
+	require.NoError(t, err)
+
+	require.NoError(t, db1.CreateSession(paramsForEpoch("e7-a", 7)))
+	require.NoError(t, db1.CreateSession(paramsForEpoch("e7-b", 7)))
+	require.NoError(t, db1.CreateSession(paramsForEpoch("e9", 9)))
+	require.NoError(t, db1.AppendDiff("e7-a", makeDiffRecord(1)))
+	require.NoError(t, db1.Close())
+
+	// Meta sidecar exists.
+	_, err = os.Stat(filepath.Join(dir, "_meta.db"))
+	require.NoError(t, err, "_meta.db must be present after CreateSession")
+
+	// Reopen. Routing for every escrow must work immediately (no
+	// per-epoch sessions scan required because meta carries the index).
+	db2, err := NewSQLite(dir)
+	require.NoError(t, err)
+	defer db2.Close()
+
+	for _, esc := range []string{"e7-a", "e7-b", "e9"} {
+		meta, err := db2.GetSessionMeta(esc)
+		require.NoError(t, err, "session %s should resolve via meta index", esc)
+		switch esc {
+		case "e7-a", "e7-b":
+			require.Equal(t, uint64(7), meta.EpochID)
+		case "e9":
+			require.Equal(t, uint64(9), meta.EpochID)
+		}
+	}
+
+	// Pruning epoch 7 must clear those rows from the meta index.
+	require.NoError(t, db2.PruneEpoch(7))
+	for _, esc := range []string{"e7-a", "e7-b"} {
+		_, err := db2.GetSessionMeta(esc)
+		require.Error(t, err, "session %s should be unrouteable after prune", esc)
+	}
+	// e9 still resolvable.
+	_, err = db2.GetSessionMeta("e9")
+	require.NoError(t, err)
+}
+
+// TestSQLite_MetaIndex_RebuildsFromEpochFiles is the disaster-recovery
+// path: if _meta.db is missing or empty (e.g. operator restored only the
+// epoch_*.db files from a backup, or _meta.db was corrupted), the next
+// boot must rebuild the index by scanning the per-epoch sessions tables.
+func TestSQLite_MetaIndex_RebuildsFromEpochFiles(t *testing.T) {
+	dir := t.TempDir()
+
+	db1, err := NewSQLite(dir)
+	require.NoError(t, err)
+
+	require.NoError(t, db1.CreateSession(paramsForEpoch("e7", 7)))
+	require.NoError(t, db1.CreateSession(paramsForEpoch("e8", 8)))
+	require.NoError(t, db1.AppendDiff("e7", makeDiffRecord(1)))
+	require.NoError(t, db1.AppendDiff("e8", makeDiffRecord(1)))
+	require.NoError(t, db1.Close())
+
+	// Simulate _meta.db loss.
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		_ = os.Remove(filepath.Join(dir, "_meta.db"+suffix))
+	}
+
+	db2, err := NewSQLite(dir)
+	require.NoError(t, err)
+	defer db2.Close()
+
+	// reconcile must have rebuilt the index from epoch_*.db sessions tables.
+	for _, esc := range []string{"e7", "e8"} {
+		meta, err := db2.GetSessionMeta(esc)
+		require.NoError(t, err, "session %s recovered after meta loss", esc)
+		require.Equal(t, uint64(1), meta.LatestNonce)
+	}
+
+	// And the rebuilt _meta.db is back on disk for next boot.
+	_, err = os.Stat(filepath.Join(dir, "_meta.db"))
+	require.NoError(t, err)
+}
+
+// TestSQLite_PerEpochFile_Layout verifies the on-disk layout: each epoch
+// gets its own .db file under the base dir, and prune physically removes
+// only that epoch's files.
+func TestSQLite_PerEpochFile_Layout(t *testing.T) {
+	dir := t.TempDir()
+	db, err := NewSQLite(dir)
+	require.NoError(t, err)
+	defer db.Close()
+
+	require.NoError(t, db.CreateSession(paramsForEpoch("e7", 7)))
+	require.NoError(t, db.CreateSession(paramsForEpoch("e8", 8)))
+
+	// Force at least one write to each pool so WAL/shm sidecars exist.
+	require.NoError(t, db.AppendDiff("e7", makeDiffRecord(1)))
+	require.NoError(t, db.AppendDiff("e8", makeDiffRecord(1)))
+
+	mustExist := func(p string) {
+		t.Helper()
+		_, err := os.Stat(p)
+		require.NoError(t, err, "expected %s to exist", p)
+	}
+	mustNotExist := func(p string) {
+		t.Helper()
+		_, err := os.Stat(p)
+		require.True(t, os.IsNotExist(err), "expected %s to be gone, got err=%v", p, err)
+	}
+
+	e7 := filepath.Join(dir, "epoch_7.db")
+	e8 := filepath.Join(dir, "epoch_8.db")
+	mustExist(e7)
+	mustExist(e8)
+
+	require.NoError(t, db.PruneEpoch(7))
+
+	mustNotExist(e7)
+	mustNotExist(e7 + "-wal")
+	mustNotExist(e7 + "-shm")
+	mustExist(e8)
+
+	// Epoch 8 still readable.
+	diffs, err := db.GetDiffs("e8", 1, 1)
+	require.NoError(t, err)
+	require.Len(t, diffs, 1)
 }

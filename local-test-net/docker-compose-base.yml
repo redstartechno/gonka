@@ -55,6 +55,14 @@ services:
       - IS_TEST_NET=true
       - ENFORCED_MODEL_ID=disabled
       - DAPI_STATS_FILE_STORAGE_ENABLED=true
+      # Postgres for payload + devshard storage. When PGHOST is empty
+      # (default), dapi falls back to SQLite/file. Set by docker-compose
+      # .postgres.yml overlay + LOCAL_TESTNET_POSTGRES=1 in launch scripts.
+      - PGHOST=${PGHOST:-}
+      - PGPORT=${PGPORT:-5432}
+      - PGDATABASE=${PGDATABASE:-payloads}
+      - PGUSER=${PGUSER:-payloads}
+      - PGPASSWORD=${PGPASSWORD:-}
     networks:
       - chain-public
 

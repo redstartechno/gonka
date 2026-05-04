@@ -38,6 +38,18 @@ func TestMemory_ListActiveSessions(t *testing.T) {
 	runListActiveSessions(t, NewMemory())
 }
 
+func TestMemory_PruneEpoch_RemovesOnlyTarget(t *testing.T) {
+	runPruneEpoch_RemovesOnlyTarget(t, NewMemory())
+}
+
+func TestMemory_PruneEpoch_Idempotent(t *testing.T) {
+	runPruneEpoch_Idempotent(t, NewMemory())
+}
+
+func TestMemory_PruneEpoch_WriteAfter(t *testing.T) {
+	runPruneEpoch_WriteAfter(t, NewMemory())
+}
+
 func TestMemory_DuplicateNonce(t *testing.T) {
 	store := NewMemory()
 	err := store.CreateSession(defaultParams())
