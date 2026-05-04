@@ -736,6 +736,11 @@ func (am AppModule) onEndOfPoCValidationStage(ctx context.Context, blockHeight i
 		participationState.participationByModel,
 		am.delegationVotingPowerCapParams(params),
 	)
+	confirmationWeightScales := buildConfirmationWeightScales(
+		participationState.eligibleModels,
+		activeParticipants,
+		params.PocParams,
+	)
 
 	emitWeightPipelineLogs(am, upcomingEpoch.Index, groupSummaries,
 		participationState.eligibleModels, activeParticipants,
@@ -774,6 +779,9 @@ func (am AppModule) onEndOfPoCValidationStage(ctx context.Context, blockHeight i
 			"upcomingEpoch.Index", upcomingEpoch.Index, "upcomingEpoch.PocStartBlockHeight", upcomingEpoch.PocStartBlockHeight, "error", err.Error())
 		return
 	}
+
+	upcomingEg.GroupData.ConfirmationWeightScales = confirmationWeightScales
+	am.keeper.SetEpochGroupData(ctx, *upcomingEg.GroupData)
 
 	am.addEpochMembers(ctx, upcomingEg, activeParticipants)
 
@@ -1116,7 +1124,7 @@ func (am AppModule) addEpochMembers(ctx context.Context, upcomingEg *epochgroup.
 		return
 	}
 	validationParams := params.ValidationParams
-	coefficients := ModelCoefficients(params.PocParams)
+	scales := upcomingEg.GroupData.ConfirmationWeightScales
 
 	for _, p := range activeParticipants {
 		reputation, err := am.calculateParticipantReputation(ctx, p, validationParams)
@@ -1131,8 +1139,8 @@ func (am AppModule) addEpochMembers(ctx context.Context, upcomingEg *epochgroup.
 		}
 
 		// Confirmation events can only lower ConfirmationWeight via min-take, never raise it.
-		initialConfirmationWeight := epochgroup.CalculateMLNodesTotalWeight(p.Models, p.MlNodes, coefficients)
-		member := epochgroup.NewEpochMemberFromActiveParticipant(p, reputation, initialConfirmationWeight, coefficients)
+		initialConfirmationWeight := types.ConfirmationWeightOfParticipant(p, scales)
+		member := epochgroup.NewEpochMemberFromActiveParticipant(p, reputation, initialConfirmationWeight)
 		err = upcomingEg.AddMember(ctx, member)
 		if err != nil {
 			am.LogError("onSetNewValidatorsStage: Unable to add member", types.EpochGroup, "error", err.Error())

@@ -1,7 +1,9 @@
 package v0_2_13
 
 import (
+	"cmp"
 	"context"
+	"slices"
 
 	upgradetypes "cosmossdk.io/x/upgrade/types"
 	"github.com/cosmos/cosmos-sdk/types/module"
@@ -27,6 +29,9 @@ func CreateUpgradeHandler(
 		}
 
 		if err := setDevshardEscrowParams(ctx, k); err != nil {
+			return nil, err
+		}
+		if err := backfillConfirmationWeightScales(ctx, k); err != nil {
 			return nil, err
 		}
 
@@ -57,4 +62,106 @@ func setDevshardEscrowParams(ctx context.Context, k keeper.Keeper) error {
 		"max_escrows_per_epoch", MaxEscrowsPerEpoch,
 		"max_nonce", MaxNonce)
 	return nil
+}
+
+func backfillConfirmationWeightScales(ctx context.Context, k keeper.Keeper) error {
+	epochIndex, found := k.GetEffectiveEpochIndex(ctx)
+	if !found {
+		k.LogWarn("confirmation weight scales backfill skipped: no effective epoch", types.Upgrades)
+		return nil
+	}
+	root, found := k.GetEpochGroupData(ctx, epochIndex, "")
+	if !found {
+		k.LogWarn("confirmation weight scales backfill skipped: root epoch group missing", types.Upgrades,
+			"epoch", epochIndex)
+		return nil
+	}
+	activeParticipants, found := k.GetActiveParticipants(ctx, epochIndex)
+	if !found {
+		k.LogWarn("confirmation weight scales backfill skipped: active participants missing", types.Upgrades,
+			"epoch", epochIndex)
+		return nil
+	}
+	params, err := k.GetParams(ctx)
+	if err != nil {
+		return err
+	}
+
+	confirmableModels := make(map[string]bool)
+	for _, groupData := range k.GetAllEpochGroupData(ctx) {
+		if groupData.EpochIndex != epochIndex || groupData.ModelId == "" {
+			continue
+		}
+		for _, vw := range groupData.ValidationWeights {
+			if vw != nil && vw.VotingPower > 0 {
+				confirmableModels[groupData.ModelId] = true
+				break
+			}
+		}
+	}
+
+	root.ConfirmationWeightScales = confirmationWeightScalesFromModels(confirmableModels, params.PocParams)
+	activeByAddress := make(map[string]*types.ActiveParticipant, len(activeParticipants.Participants))
+	for _, p := range activeParticipants.Participants {
+		if p != nil {
+			activeByAddress[p.Index] = p
+		}
+	}
+	for _, vw := range root.ValidationWeights {
+		if vw == nil {
+			continue
+		}
+		p := activeByAddress[vw.MemberAddress]
+		if p == nil {
+			continue
+		}
+		expected := types.ConfirmationWeightOfParticipant(p, root.ConfirmationWeightScales)
+		if vw.ConfirmationWeight > expected {
+			vw.ConfirmationWeight = expected
+		}
+	}
+	k.SetEpochGroupData(ctx, root)
+	k.LogInfo("backfilled confirmation weight scales", types.Upgrades,
+		"epoch", epochIndex,
+		"models", len(root.ConfirmationWeightScales))
+	return nil
+}
+
+func confirmationWeightScalesFromModels(
+	models map[string]bool,
+	pocParams *types.PocParams,
+) []*types.ConfirmationWeightScale {
+	coefficients := make(map[string]*types.Decimal)
+	for _, config := range pocParams.GetModelConfigs() {
+		if config == nil || config.ModelId == "" {
+			continue
+		}
+		coefficients[config.ModelId] = cloneDecimal(config.WeightScaleFactor)
+	}
+
+	modelIDs := make([]string, 0, len(models))
+	for modelID := range models {
+		modelIDs = append(modelIDs, modelID)
+	}
+	slices.SortFunc(modelIDs, cmp.Compare)
+
+	scales := make([]*types.ConfirmationWeightScale, 0, len(modelIDs))
+	for _, modelID := range modelIDs {
+		scaleFactor := coefficients[modelID]
+		if scaleFactor == nil {
+			scaleFactor = &types.Decimal{Value: 1, Exponent: 0}
+		}
+		scales = append(scales, &types.ConfirmationWeightScale{
+			ModelId:           modelID,
+			WeightScaleFactor: scaleFactor,
+		})
+	}
+	return scales
+}
+
+func cloneDecimal(d *types.Decimal) *types.Decimal {
+	if d == nil || (d.Value == 0 && d.Exponent == 0) {
+		return &types.Decimal{Value: 1, Exponent: 0}
+	}
+	return &types.Decimal{Value: d.Value, Exponent: d.Exponent}
 }

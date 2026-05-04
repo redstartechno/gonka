@@ -4,9 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/hex"
-	"errors"
 	"fmt"
-	"strconv"
 
 	mathsdk "cosmossdk.io/math"
 	sdk "github.com/cosmos/cosmos-sdk/types"
@@ -379,12 +377,7 @@ func (am AppModule) updateConfirmationWeights(ctx context.Context, event *types.
 		return fmt.Errorf("epoch group data not found for epoch %d", event.EpochIndex)
 	}
 
-	params, err := am.keeper.GetParams(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to get params: %w", err)
-	}
-
-	return am.evaluateConfirmation(ctx, event, &epochGroupData, params.PocParams)
+	return am.evaluateConfirmation(ctx, event, &epochGroupData)
 }
 
 // evaluateConfirmation lowers each participant's ConfirmationWeight to
@@ -394,31 +387,54 @@ func (am AppModule) evaluateConfirmation(
 	ctx context.Context,
 	event *types.ConfirmationPoCEvent,
 	epochGroupData *types.EpochGroupData,
-	pocParams *types.PocParams,
 ) error {
-	coefficients := ModelCoefficients(pocParams)
-
-	confirmationParticipants := am.updateConfirmationWeightsV2(ctx, event)
-	measured := make(map[string]int64, len(confirmationParticipants))
-	for _, p := range confirmationParticipants {
-		p.Weight = AggregateConsensusWeight(ExtractModelWeights(p), coefficients)
-		measured[p.Index] = p.Weight
+	scales := epochGroupData.GetConfirmationWeightScales()
+	if len(scales) == 0 {
+		am.LogWarn("evaluateConfirmation: no confirmation weight scales, skipping event", types.PoC,
+			"epochIndex", event.EpochIndex,
+			"triggerHeight", event.TriggerHeight)
+		return nil
+	}
+	snapshot, found, err := am.keeper.GetPoCValidationSnapshot(ctx, event.TriggerHeight)
+	if err != nil {
+		return fmt.Errorf("evaluateConfirmation: failed to read validation snapshot: %w", err)
+	}
+	if !found {
+		am.LogWarn("evaluateConfirmation: validation snapshot missing, skipping event", types.PoC,
+			"epochIndex", event.EpochIndex,
+			"triggerHeight", event.TriggerHeight)
+		return nil
+	}
+	if missingModels := missingConfirmationModels(scales, snapshot.ModelVotingPowers); len(missingModels) > 0 {
+		am.LogWarn("evaluateConfirmation: validation snapshot missing confirmation models, skipping event", types.PoC,
+			"epochIndex", event.EpochIndex,
+			"triggerHeight", event.TriggerHeight,
+			"missingModels", missingModels)
+		return nil
 	}
 
-	// Missing snapshot collapses the preserved side to zero; min-take and slashing
-	// then behave as if no node was preserved for this event.
-	preservedSnapshot, _, err := am.keeper.GetPreservedNodesSnapshot(ctx)
+	confirmationParticipants := am.updateConfirmationWeightsV2(ctx, event)
+	measured := weightByParticipant(confirmationParticipants, scales)
+
+	participants, found := am.keeper.GetActiveParticipants(ctx, event.EpochIndex)
+	if !found {
+		return fmt.Errorf("evaluateConfirmation: active participants not found for epoch %d", event.EpochIndex)
+	}
+	activeParticipants := participants.Participants
+
+	preservedSnapshot, snapshotFound, err := am.keeper.GetPreservedNodesSnapshot(ctx)
 	if err != nil {
 		am.LogWarn("evaluateConfirmation: failed to read preserved snapshot, using empty set",
 			types.PoC, "triggerHeight", event.TriggerHeight, "error", err)
 	}
-
-	preserved, notPreserved, err := am.partitionWeightByPreservation(ctx, event.EpochIndex, coefficients, &preservedSnapshot)
-	if err != nil {
-		return fmt.Errorf("evaluateConfirmation: failed to partition weights: %w", err)
+	if !snapshotFound || preservedSnapshot.EpisodeAnchorHeight != event.TriggerHeight {
+		preservedSnapshot = types.PreservedNodesSnapshot{}
 	}
 
-	updated, ratios := foldEventReadings(epochGroupData, measured, preserved, notPreserved)
+	preserved := preservedWeightByParticipant(activeParticipants, &preservedSnapshot, scales)
+	totalExpected := weightByParticipant(activeParticipants, scales)
+
+	updated, ratios := foldEventReadings(epochGroupData, measured, preserved, totalExpected)
 	if updated {
 		am.LogInfo("evaluateConfirmation: confirmation weights lowered", types.PoC,
 			"epochIndex", event.EpochIndex,
@@ -455,7 +471,7 @@ func (am AppModule) evaluateConfirmation(
 // Pure: no keeper reads, no logging. Caller persists the result.
 func foldEventReadings(
 	epochGroupData *types.EpochGroupData,
-	measured, preserved, notPreserved map[string]int64,
+	measured, preserved, totalExpected map[string]int64,
 ) (updated bool, ratios map[string]*types.Decimal) {
 	ratios = make(map[string]*types.Decimal, len(epochGroupData.ValidationWeights))
 	for i, vw := range epochGroupData.ValidationWeights {
@@ -466,16 +482,17 @@ func foldEventReadings(
 			updated = true
 		}
 
-		totalExpected := preserved[addr] + notPreserved[addr]
-		if totalExpected == 0 {
-			ratios[addr] = types.DecimalFromDecimal(decimal.NewFromInt(1))
-			continue
-		}
-		ratio := decimal.NewFromInt(reading).Div(decimal.NewFromInt(totalExpected))
-		ratio = decimal.Min(ratio.Div(pocDeviationCoeff), decimal.NewFromInt(1))
-		ratios[addr] = types.DecimalFromDecimal(ratio)
+		ratios[addr] = computeRatio(reading, totalExpected[addr])
 	}
 	return updated, ratios
+}
+
+func computeRatio(reading, totalExpected int64) *types.Decimal {
+	if totalExpected == 0 {
+		return types.DecimalFromDecimal(decimal.NewFromInt(1))
+	}
+	ratio := decimal.NewFromInt(reading).Div(decimal.NewFromInt(totalExpected))
+	return types.DecimalFromDecimal(decimal.Min(ratio.Div(pocDeviationCoeff), decimal.NewFromInt(1)))
 }
 
 // updateConfirmationWeightsV2 calculates confirmation weights using off-chain store commits
@@ -615,27 +632,48 @@ func (am AppModule) updateConfirmationWeightsV2(
 	return calculator.Calculate()
 }
 
-// partitionWeightByPreservation splits each participant's coefficient-adjusted
-// MLNode weight into preserved / not-preserved portions based on the given
-// snapshot. The sum of the two maps equals the participant's total expected
-// weight for the episode.
-func (am AppModule) partitionWeightByPreservation(
-	ctx context.Context,
-	epochId uint64,
-	coefficients map[string]mathsdk.LegacyDec,
-	preservedSnapshot *types.PreservedNodesSnapshot,
-) (preserved, notPreserved map[string]int64, err error) {
-	participants, found := am.keeper.GetActiveParticipants(ctx, epochId)
-	if !found {
-		am.LogError("partitionWeightByPreservation: Active participants not found", types.PoC, "epochId", epochId)
-		return nil, nil, errors.New("partitionWeightByPreservation: active participants not found. epochId: " + strconv.FormatUint(epochId, 10))
+func missingConfirmationModels(
+	scales []*types.ConfirmationWeightScale,
+	modelVotingPowers []*types.ModelVotingPowers,
+) []string {
+	required := make(map[string]bool, len(scales))
+	for _, scale := range scales {
+		if scale != nil && scale.ModelId != "" {
+			required[scale.ModelId] = true
+		}
 	}
+	for _, mvw := range modelVotingPowers {
+		if mvw != nil {
+			delete(required, mvw.ModelId)
+		}
+	}
+	return sortedKeys(required)
+}
 
-	preserved = make(map[string]int64, len(participants.Participants))
-	notPreserved = make(map[string]int64, len(participants.Participants))
+func weightByParticipant(
+	participants []*types.ActiveParticipant,
+	scales []*types.ConfirmationWeightScale,
+) map[string]int64 {
+	weights := make(map[string]int64, len(participants))
+	for _, p := range participants {
+		if p != nil {
+			weights[p.Index] = types.ConfirmationWeightOfParticipant(p, scales)
+		}
+	}
+	return weights
+}
 
-	for _, p := range participants.Participants {
-		var preservedTotal, notPreservedTotal int64
+func preservedWeightByParticipant(
+	participants []*types.ActiveParticipant,
+	preservedSnapshot *types.PreservedNodesSnapshot,
+	scales []*types.ConfirmationWeightScale,
+) map[string]int64 {
+	preserved := make(map[string]int64, len(participants))
+	for _, p := range participants {
+		if p == nil {
+			continue
+		}
+		modelNodes := make(map[string][]*types.MLNodeInfo)
 		for i, nodeArray := range p.MlNodes {
 			if nodeArray == nil {
 				continue
@@ -645,27 +683,16 @@ func (am AppModule) partitionWeightByPreservation(
 			}
 			modelId := p.Models[i]
 			preservedNodeSet := keeper.PreservedNodeSetByModel(preservedSnapshot, modelId)
-			coeff, ok := coefficients[modelId]
-			if !ok {
-				coeff = mathsdk.LegacyOneDec()
-			}
-			var rawPreserved, rawNotPreserved int64
 			for _, mlNode := range nodeArray.MlNodes {
 				if mlNode == nil {
 					continue
 				}
 				if keeper.IsPreservedNode(preservedNodeSet, p.Index, mlNode.NodeId) {
-					rawPreserved += mlNode.PocWeight
-				} else {
-					rawNotPreserved += mlNode.PocWeight
+					modelNodes[modelId] = append(modelNodes[modelId], mlNode)
 				}
 			}
-			preservedTotal += coeff.MulInt64(rawPreserved).TruncateInt64()
-			notPreservedTotal += coeff.MulInt64(rawNotPreserved).TruncateInt64()
 		}
-		preserved[p.Index] = preservedTotal
-		notPreserved[p.Index] = notPreservedTotal
+		preserved[p.Index] = types.ConfirmationWeightOfModelNodes(modelNodes, scales)
 	}
-
-	return preserved, notPreserved, nil
+	return preserved
 }

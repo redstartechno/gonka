@@ -33,7 +33,6 @@ func GetBitcoinSettleAmounts(
 	validationParams *types.ValidationParams,
 	settleParams *SettleParameters,
 	participantMLNodes map[string]map[string][]*types.MLNodeInfo,
-	coefficients map[string]mathsdk.LegacyDec,
 	logger log.Logger,
 ) ([]*SettleResult, BitcoinResult, error) {
 	if participants == nil {
@@ -62,7 +61,6 @@ func GetBitcoinSettleAmounts(
 		bitcoinParams,
 		validationParams,
 		participantMLNodes,
-		coefficients,
 		logger,
 	)
 	if err != nil {
@@ -118,7 +116,7 @@ func GetBitcoinSettleAmounts(
 }
 
 func saturatingAddUint64Max(a int64, b uint64) int64 {
-	if a >= math.MaxInt64 {
+	if a == math.MaxInt64 {
 		return math.MaxInt64
 	}
 	headroom := uint64(math.MaxInt64 - a) // safe because a >= 0
@@ -545,7 +543,6 @@ func CalculateParticipantBitcoinRewards(
 	bitcoinParams *types.BitcoinRewardParams,
 	validationParams *types.ValidationParams,
 	participantMLNodes map[string]map[string][]*types.MLNodeInfo,
-	coefficients map[string]mathsdk.LegacyDec,
 	logger log.Logger,
 ) ([]*SettleResult, BitcoinResult, error) {
 	// Parameter validation
@@ -612,15 +609,17 @@ func CalculateParticipantBitcoinRewards(
 			continue
 		}
 
-		// Rescale ConfirmationWeight (raw MLNode scale) into fullWeight's
-		// (consensus-weight) scale so the numerator matches the denominator.
-		effectiveWeight := vw.ConfirmationWeight
-		if effectiveWeight < 0 {
-			effectiveWeight = 0
-		}
-		rawTotal := CoefficientAdjustedWeight(participantMLNodes[participant.Address], coefficients, nil)
-		if rawTotal > 0 && vw.Weight < rawTotal {
-			ewBig := big.NewInt(effectiveWeight)
+		rawTotal := types.ConfirmationWeightOfModelNodes(
+			participantMLNodes[participant.Address],
+			epochGroupData.ConfirmationWeightScales,
+		)
+		effectiveWeight := int64(0)
+		if rawTotal > 0 {
+			confirmed := vw.ConfirmationWeight
+			if confirmed < 0 {
+				confirmed = 0
+			}
+			ewBig := big.NewInt(confirmed)
 			ewBig.Mul(ewBig, big.NewInt(vw.Weight))
 			ewBig.Div(ewBig, big.NewInt(rawTotal))
 			effectiveWeight = ewBig.Int64()

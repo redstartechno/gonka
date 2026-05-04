@@ -26,7 +26,7 @@ func TestFoldEventReadings_RotatingPreservedHonestThenDishonest(t *testing.T) {
 		initial,
 		map[string]int64{addr: 1},  // measured from node-B
 		map[string]int64{addr: 10}, // preservedHere
-		map[string]int64{addr: 1},  // notPreservedHere
+		map[string]int64{addr: 11}, // formation-time expected
 	)
 	require.False(t, updated, "honest reading equal to initial must not lower ConfirmationWeight")
 	require.Equal(t, int64(11), initial.ValidationWeights[0].ConfirmationWeight)
@@ -38,7 +38,7 @@ func TestFoldEventReadings_RotatingPreservedHonestThenDishonest(t *testing.T) {
 		initial,
 		map[string]int64{addr: 10},
 		map[string]int64{addr: 1},
-		map[string]int64{addr: 10},
+		map[string]int64{addr: 11},
 	)
 	require.False(t, updated, "honest reading with rotated preservation must also stay at 11")
 	require.Equal(t, int64(11), initial.ValidationWeights[0].ConfirmationWeight)
@@ -50,7 +50,7 @@ func TestFoldEventReadings_RotatingPreservedHonestThenDishonest(t *testing.T) {
 		initial,
 		map[string]int64{addr: 4},
 		map[string]int64{addr: 1},
-		map[string]int64{addr: 10},
+		map[string]int64{addr: 11},
 	)
 	require.True(t, updated, "dishonest event must lower ConfirmationWeight")
 	require.Equal(t, int64(5), initial.ValidationWeights[0].ConfirmationWeight)
@@ -77,7 +77,7 @@ func TestFoldEventReadings_AllPreservedZeroMeasuredIsNotPenalized(t *testing.T) 
 		ege,
 		map[string]int64{addr: 0},   // participant submitted nothing for this event
 		map[string]int64{addr: 100}, // every one of their nodes was preserved this event
-		map[string]int64{addr: 0},
+		map[string]int64{addr: 100},
 	)
 
 	require.False(t, updated)
@@ -85,7 +85,7 @@ func TestFoldEventReadings_AllPreservedZeroMeasuredIsNotPenalized(t *testing.T) 
 	requireRatioEqual(t, ratios[addr], 1, 1)
 }
 
-// No confirmation at all (empty measured/preserved/notPreserved) results in a ratio
+// No expected confirmation at all results in a ratio
 // of 1 (no slashing) and no change to ConfirmationWeight, because totalExpected = 0.
 func TestFoldEventReadings_EmptyEventKeepsRatioAtOne(t *testing.T) {
 	addr := "participant1"

@@ -526,7 +526,7 @@ func (ma *ModelAssigner) SamplePreservedForEpisode(
 		totalCurrentEpochWeight += currentEpochData.GetTotalWeightForModel(modelId)
 	}
 
-	coefficients := ModelCoefficients(params.PocParams)
+	coefficients := modelCoefficients(params.PocParams)
 	eligibleNodesData := ma.filterEligibleMLNodes(epoch, previousEpochData, currentEpochData, totalCurrentEpochWeight, coefficients, anchorHeight)
 
 	modelPreservedNodes := make([]*types.ModelPreservedNodes, 0, len(sortedModelIds))
