@@ -46,18 +46,13 @@ func NewValidationAdapter(
 }
 
 func (v *ValidationAdapter) Validate(ctx context.Context, req devshard.ValidateRequest) (*devshard.ValidateResult, error) {
-	epochID := req.EpochID
-	if epochID == 0 {
-		epochID = currentEpochID(v.phaseTracker)
-	}
-
 	return ValidateInferenceWithExecutor(
 		ctx,
 		req,
 		v.httpClient,
 		v.bridge,
 		v.recorder,
-		epochID,
+		req.EpochID,
 		devshard.LegacySessionPayloadPath(req.EscrowID),
 		v.executeMLRequest,
 		"devshard",

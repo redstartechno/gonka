@@ -23,9 +23,9 @@ import (
 // O(1) and never touches other epochs' pages.
 //
 // Layout mirrors the per-epoch SQLite backend so that callers behave identically
-// against both. An in-memory escrowID -> epochID index, populated at boot from
-// devshard_sessions and on CreateSession, lets escrow-keyed methods route to
-// the right partition without scanning.
+// against both. A small unpartitioned escrowID -> epochID index enforces the
+// mainnet-pinned mapping, and the in-memory copy lets escrow-keyed methods
+// route to the right partition without scanning.
 type Postgres struct {
 	pool *pgxpool.Pool
 
@@ -38,6 +38,7 @@ const (
 	pgSessionsParent   = "devshard_sessions"
 	pgDiffsParent      = "devshard_diffs"
 	pgSignaturesParent = "devshard_signatures"
+	pgSessionIndex     = "devshard_session_index"
 )
 
 func pgSessionsPartition(epochID uint64) string {
@@ -51,6 +52,12 @@ func pgSignaturesPartition(epochID uint64) string {
 }
 
 const pgCreateParents = `
+CREATE TABLE IF NOT EXISTS devshard_session_index (
+    escrow_id TEXT   PRIMARY KEY,
+    epoch_id  BIGINT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS devshard_session_index_by_epoch ON devshard_session_index(epoch_id);
+
 CREATE TABLE IF NOT EXISTS devshard_sessions (
     epoch_id        BIGINT NOT NULL,
     escrow_id       TEXT   NOT NULL,
@@ -120,21 +127,70 @@ func NewPostgres(ctx context.Context) (*Postgres, error) {
 }
 
 func (s *Postgres) indexExisting(ctx context.Context) error {
+	sessionsOnDisk := make(map[string]uint64)
 	rows, err := s.pool.Query(ctx, `SELECT epoch_id, escrow_id FROM devshard_sessions`)
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
 	for rows.Next() {
 		var epochID uint64
 		var escrowID string
 		if err := rows.Scan(&epochID, &escrowID); err != nil {
+			rows.Close()
 			return err
+		}
+		if existingEpoch, ok := sessionsOnDisk[escrowID]; ok && existingEpoch != epochID {
+			rows.Close()
+			return fmt.Errorf("%w: escrow %s exists in epochs %d and %d",
+				ErrSessionEpochConflict, escrowID, existingEpoch, epochID)
+		}
+		sessionsOnDisk[escrowID] = epochID
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	indexRows, err := s.pool.Query(ctx, `SELECT escrow_id, epoch_id FROM devshard_session_index`)
+	if err != nil {
+		return err
+	}
+	for indexRows.Next() {
+		var escrowID string
+		var epochID uint64
+		if err := indexRows.Scan(&escrowID, &epochID); err != nil {
+			indexRows.Close()
+			return err
+		}
+		if diskEpoch, ok := sessionsOnDisk[escrowID]; ok && diskEpoch == epochID {
+			continue
+		}
+		if _, err := s.pool.Exec(ctx,
+			`DELETE FROM devshard_session_index WHERE escrow_id = $1 AND epoch_id = $2`,
+			escrowID, epochID,
+		); err != nil {
+			indexRows.Close()
+			return fmt.Errorf("remove stale session index for %s: %w", escrowID, err)
+		}
+	}
+	indexRows.Close()
+	if err := indexRows.Err(); err != nil {
+		return err
+	}
+
+	for escrowID, epochID := range sessionsOnDisk {
+		if _, err := s.pool.Exec(ctx,
+			`INSERT INTO devshard_session_index (escrow_id, epoch_id)
+			 VALUES ($1, $2)
+			 ON CONFLICT (escrow_id) DO NOTHING`,
+			escrowID, epochID,
+		); err != nil {
+			return fmt.Errorf("repair session index for %s: %w", escrowID, err)
 		}
 		s.escrowIdx[escrowID] = epochID
 		s.knownEpochs[epochID] = struct{}{}
 	}
-	return rows.Err()
+	return nil
 }
 
 // Close releases the pool. Subsequent calls return immediately.
@@ -211,7 +267,46 @@ func (s *Postgres) CreateSession(params CreateSessionParams) error {
 		return err
 	}
 
-	_, err = s.pool.Exec(ctx,
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	var indexedEpoch uint64
+	indexErr := tx.QueryRow(ctx,
+		`SELECT epoch_id FROM devshard_session_index WHERE escrow_id = $1`,
+		params.EscrowID,
+	).Scan(&indexedEpoch)
+	if indexErr == nil {
+		if indexedEpoch != params.EpochID {
+			return fmt.Errorf("%w: escrow %s exists in epoch %d, requested epoch %d",
+				ErrSessionEpochConflict, params.EscrowID, indexedEpoch, params.EpochID)
+		}
+	} else if errors.Is(indexErr, pgx.ErrNoRows) {
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO devshard_session_index (escrow_id, epoch_id)
+			 VALUES ($1, $2)
+			 ON CONFLICT (escrow_id) DO NOTHING`,
+			params.EscrowID, params.EpochID,
+		); err != nil {
+			return fmt.Errorf("insert session index: %w", err)
+		}
+		if err := tx.QueryRow(ctx,
+			`SELECT epoch_id FROM devshard_session_index WHERE escrow_id = $1`,
+			params.EscrowID,
+		).Scan(&indexedEpoch); err != nil {
+			return fmt.Errorf("read session index: %w", err)
+		}
+		if indexedEpoch != params.EpochID {
+			return fmt.Errorf("%w: escrow %s exists in epoch %d, requested epoch %d",
+				ErrSessionEpochConflict, params.EscrowID, indexedEpoch, params.EpochID)
+		}
+	} else {
+		return fmt.Errorf("read session index: %w", indexErr)
+	}
+
+	_, err = tx.Exec(ctx,
 		`INSERT INTO devshard_sessions
 		    (epoch_id, escrow_id, version, creator_addr, config_json, group_json, initial_balance)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -221,6 +316,9 @@ func (s *Postgres) CreateSession(params CreateSessionParams) error {
 	)
 	if err != nil {
 		return fmt.Errorf("insert session: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return err
 	}
 
 	s.mu.Lock()
@@ -543,6 +641,9 @@ func (s *Postgres) PruneEpoch(epochID uint64) error {
 		if err != nil {
 			return fmt.Errorf("drop %s: %w", partition, err)
 		}
+	}
+	if _, err := s.pool.Exec(ctx, `DELETE FROM devshard_session_index WHERE epoch_id = $1`, epochID); err != nil {
+		return fmt.Errorf("prune session index for epoch %d: %w", epochID, err)
 	}
 
 	s.mu.Lock()

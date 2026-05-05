@@ -61,11 +61,13 @@ type ActiveSession struct {
 }
 ```
 
-EpochID is the partition key. CreateSession is the only call that introduces a new EpochID. All other session-keyed methods route internally via an `escrow_id -> epoch_id` cache.
+EpochID is the partition key. CreateSession is the only call that introduces a new EpochID. All other session-keyed methods route internally via a local `escrow_id -> epoch_id` index.
 
 ## Partition Key
 
 `epoch_id = escrow.epoch_index` from the chain (`DevshardEscrow` proto, `devshard/bridge/interface.go:EscrowInfo.EpochID`).
+
+The authoritative `escrow_id -> epoch_id` mapping is pinned on mainnet by design. Local storage persists the mapping only as a routing index so escrow-keyed requests do not need to query the chain. If local storage finds the same escrow in two epochs, it must return a corruption/conflict error rather than choose one.
 
 A session's epoch is fixed at create time. All diffs and signatures for a session live in the same partition for the session's lifetime, even if the session settles after an epoch boundary.
 
@@ -75,9 +77,13 @@ Sessions are expected to settle within 1-2 epochs. With retain=3 the session has
 
 ### Postgres (`devshard/storage/postgres.go`)
 
-Three parents, each `PARTITION BY RANGE (epoch_id)`:
+One global routing index plus three parents, each `PARTITION BY RANGE (epoch_id)`:
 
 ```sql
+CREATE TABLE devshard_session_index (
+    escrow_id TEXT PRIMARY KEY,
+    epoch_id  BIGINT NOT NULL
+);
 CREATE TABLE devshard_sessions   (..., PRIMARY KEY (epoch_id, escrow_id))         PARTITION BY RANGE (epoch_id);
 CREATE TABLE devshard_diffs      (..., PRIMARY KEY (epoch_id, escrow_id, nonce))  PARTITION BY RANGE (epoch_id);
 CREATE TABLE devshard_signatures (..., PRIMARY KEY (epoch_id, escrow_id, nonce, slot_id)) PARTITION BY RANGE (epoch_id);
@@ -87,7 +93,7 @@ Per-epoch partitions `devshard_sessions_epoch_<N>`, `devshard_diffs_epoch_<N>`, 
 
 `PruneEpoch(N)` issues `DROP TABLE IF EXISTS` on all three per-epoch partitions. Constant-time, no row scan, no vacuum.
 
-`escrow_id -> epoch_id` index is rebuilt on `NewPostgres` by `SELECT epoch_id, escrow_id FROM devshard_sessions` against the parent. The parent table IS the index; no sidecar.
+`devshard_session_index` enforces one epoch per escrow. `NewPostgres` verifies it against `devshard_sessions`, repairs missing rows, removes stale rows, and errors if the parent partitions contain the same escrow in multiple epochs.
 
 Mirrors `decentralized-api/payloadstorage/postgres_storage.go` style: same env vars, same pgx pool, same lazy partitioning.
 
@@ -120,6 +126,7 @@ WAL mode, separate writer (1 conn) and reader (10 conn) pools per per-epoch DB.
 1. Close pool for epoch N.
 2. `os.Remove` of `epoch_<N>.db`, `.db-wal`, `.db-shm`.
 3. `DELETE FROM escrow_epoch WHERE epoch_id = N` in `_meta.db`.
+4. Remove epoch N from the in-memory index.
 
 Other epoch files are not touched. No SQLite VACUUM ever runs.
 
@@ -150,14 +157,14 @@ Env vars used (same as `payloadstorage`): `PGHOST`, `PGPORT`, `PGDATABASE`, `PGU
 1. Updates `max_observed_epoch` from CreateSession calls and from an optional `EpochProvider` (chain).
 2. Computes `cutoff = max_observed_epoch + 1 - retain` (retain=3 in production).
 3. Calls `inner.PruneEpoch(e)` for every `e` in `[prunedUpTo, cutoff)`.
-4. Advances `prunedUpTo = cutoff`. Cursor is monotonic: a late-arriving epoch below `prunedUpTo` is not re-swept.
+4. Advances `prunedUpTo` only after each successful epoch prune. A failed prune is retried on the next pass.
 
 `EpochProvider` lets the pruner advance even on quiet hosts:
 
 - dapi (in `decentralized-api/main.go`): wraps `chainphase.ChainPhaseTracker.GetCurrentEpochState().LatestEpoch.EpochIndex`.
 - standalone devshardd (in `decentralized-api/cmd/devshardd/main.go`): polls `QueryEpochInfo` every 60s, exposes `LatestEpoch.Index`.
 
-A session created in an already-pruned epoch (operator error) survives until the next process restart. The wrapper does not regress its sweep cursor.
+A session created in an already-pruned epoch is rejected by `ManagedStorage` with `ErrEpochPruned`.
 
 ## Reboot / Recovery
 
@@ -170,15 +177,15 @@ The chain bridge is consulted only when a brand-new escrow is opened by `HostMan
 
 ### SQLite reboot path
 
-1. `NewSQLite(baseDir)` opens `_meta.db` only.
+1. `NewSQLite(baseDir)` opens `_meta.db`.
 2. `loadIndexFromMeta` populates the in-memory `escrow_id -> epoch_id` map.
-3. `reconcileMetaFromEpochFiles` is a defensive pass: for every `epoch_<N>.db` on disk, scan its `sessions` table and repair any missing `_meta` rows. Handles partial writes and the upgrade path from a pre-`_meta.db` layout.
+3. `reconcileMetaFromEpochFiles` verifies the index against existing `epoch_<N>.db` files. It deletes only proven-stale `_meta` rows, adds missing rows for real session records, and errors if one escrow appears in more than one epoch file.
 4. Per-epoch DBs open lazily on the first request that touches them.
 
 ### Postgres reboot path
 
-1. `NewPostgres(ctx)` runs `pgCreateParents` (idempotent) then `SELECT epoch_id, escrow_id FROM devshard_sessions`.
-2. Index is rebuilt in one query against the parent. Partitions are routed automatically.
+1. `NewPostgres(ctx)` runs `pgCreateParents` (idempotent), including `devshard_session_index`.
+2. Startup verifies `devshard_session_index` against `devshard_sessions`, repairs missing/stale index rows, and rebuilds the in-memory cache.
 
 ## Request Routing
 
@@ -189,8 +196,8 @@ POST /sessions/<escrow_id>/diff
     miss: HostManager.create(escrowID)
       bridge.GetEscrow(escrowID)            -- one chain RPC per session lifetime
       store.CreateSession(EscrowID, EpochID, ...)
-        SQLite:   INSERT _meta.db; INSERT epoch_<EpochID>.db sessions
-        Postgres: INSERT devshard_sessions (routes to partition)
+        SQLite:   INSERT epoch_<EpochID>.db sessions; INSERT _meta.db
+        Postgres: INSERT devshard_session_index; INSERT devshard_sessions
   storage.AppendDiff(escrowID, rec)
     lookup escrow_id -> epoch_id from in-memory cache (O(1))
     SQLite:   open epoch_<EpochID>.db lazily; INSERT into diffs + signatures
@@ -198,6 +205,8 @@ POST /sessions/<escrow_id>/diff
 ```
 
 Chain bridge: one call per session lifetime, at first contact only.
+
+Payload storage uses the same session epoch. HostManager passes the epoch from storage into the Host, execution stores payloads under that epoch, and validation retrieves payloads from that epoch even if the chain has advanced.
 
 ## Legacy Migration
 
@@ -219,10 +228,10 @@ Wired in `decentralized-api/main.go` and `decentralized-api/cmd/devshardd/main.g
 |---|---|---|
 | Conformance suite | `devshard/storage/shared_test.go` | One set of tests run against Memory, SQLite, and Postgres. Includes prune semantics. |
 | SQLite per-epoch layout | `devshard/storage/sqlite_test.go::TestSQLite_PerEpochFile_Layout` | Verifies `epoch_<N>.db` files exist; prune removes only target's files. |
-| SQLite meta sidecar | `sqlite_test.go::TestSQLite_MetaIndex_*` | Persistence across reboot; rebuild from per-epoch files when `_meta.db` is missing. |
+| SQLite meta sidecar | `sqlite_test.go::TestSQLite_MetaIndex_*` | Persistence across reboot; conservative repair of stale/missing `_meta.db` rows. |
 | Postgres partition drop | `devshard/storage/postgres_test.go::TestPostgres_PartitionTablesPhysicallyDropped` | Queries `pg_class`/`pg_inherits` to confirm partitions are physically gone after PruneEpoch. |
 | Migration round-trip | `devshard/storage/migrate_test.go` | Legacy DB -> new layout, including settled status and unknown-escrow skip path. |
-| Managed retention | `devshard/storage/managed_test.go` | Retain-last-N math, EpochProvider advances on quiet hosts, monotonic cursor. |
+| Managed retention | `devshard/storage/managed_test.go` | Retain-last-N math, EpochProvider advances on quiet hosts, retry failed prunes, reject late creates. |
 | Integration (dapi+PG) | `testermint/src/test/kotlin/DevshardPostgresStorageTests.kt` | End-to-end: create escrow, drive inferences, settle, assert rows in `devshard_sessions/diffs/signatures` and absence of SQLite files in dapi container. Pruning test waits for ManagedStorage to drop the older partition. |
 
 ## Key Files

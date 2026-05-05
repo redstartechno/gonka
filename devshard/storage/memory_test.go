@@ -10,6 +10,10 @@ func TestMemory_CreateSession_Idempotent(t *testing.T) {
 	runCreateSession_Idempotent(t, NewMemory())
 }
 
+func TestMemory_CreateSession_ConflictingEpoch(t *testing.T) {
+	runCreateSession_ConflictingEpoch(t, NewMemory())
+}
+
 func TestMemory_AppendDiff_GetDiffs(t *testing.T) {
 	runAppendDiff_GetDiffs(t, NewMemory())
 }

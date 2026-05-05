@@ -83,6 +83,18 @@ func runCreateSession_Idempotent(t *testing.T, store Storage) {
 	require.Equal(t, uint64(1000), meta.InitialBalance)
 }
 
+func runCreateSession_ConflictingEpoch(t *testing.T, store Storage) {
+	t.Helper()
+
+	require.NoError(t, store.CreateSession(defaultParams()))
+	err := store.CreateSession(paramsForEpoch("escrow-1", 8))
+	require.ErrorIs(t, err, ErrSessionEpochConflict)
+
+	meta, metaErr := store.GetSessionMeta("escrow-1")
+	require.NoError(t, metaErr)
+	require.Equal(t, uint64(7), meta.EpochID)
+}
+
 func runAppendDiff_GetDiffs(t *testing.T, store Storage) {
 	t.Helper()
 

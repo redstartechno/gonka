@@ -9,6 +9,15 @@ import (
 // ErrSessionNotFound is returned when a session does not exist in storage.
 var ErrSessionNotFound = errors.New("session not found")
 
+// ErrSessionEpochConflict is returned when local storage finds the same
+// escrow_id mapped to more than one epoch. Mainnet pins this mapping on the
+// DevshardEscrow, so local storage must not choose a different epoch silently.
+var ErrSessionEpochConflict = errors.New("session epoch conflict")
+
+// ErrEpochPruned is returned when a managed store is asked to create a session
+// in an epoch that has already passed the local retention horizon.
+var ErrEpochPruned = errors.New("epoch already pruned")
+
 // Storage persists devshard session state and diffs.
 //
 // The store is partitioned by EpochID. PruneEpoch drops everything that

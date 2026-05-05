@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sync"
 	"sync/atomic"
@@ -31,7 +32,7 @@ type ManagedStorage struct {
 
 	maxObservedEpoch atomic.Uint64
 
-	mu        sync.Mutex
+	mu         sync.Mutex
 	prunedUpTo uint64 // exclusive: every epoch < prunedUpTo has been pruned
 
 	stop chan struct{}
@@ -106,20 +107,18 @@ func (m *ManagedStorage) PruneOnce(_ context.Context) {
 	cutoff := maxE + 1 - m.retain // every epoch < cutoff is pruneable
 
 	m.mu.Lock()
-	start := m.prunedUpTo
-	if start >= cutoff {
-		m.mu.Unlock()
+	defer m.mu.Unlock()
+	if m.prunedUpTo >= cutoff {
 		return
 	}
-	m.prunedUpTo = cutoff
-	m.mu.Unlock()
 
-	for e := start; e < cutoff; e++ {
+	for e := m.prunedUpTo; e < cutoff; e++ {
 		if err := m.inner.PruneEpoch(e); err != nil {
 			slog.Warn("devshard prune failed", "epoch", e, "error", err)
-		} else {
-			slog.Info("devshard pruned epoch", "epoch", e, "max_observed", maxE, "retain", m.retain)
+			return
 		}
+		m.prunedUpTo = e + 1
+		slog.Info("devshard pruned epoch", "epoch", e, "max_observed", maxE, "retain", m.retain)
 	}
 }
 
@@ -133,9 +132,16 @@ func (m *ManagedStorage) Close() error {
 // --- Storage delegation ---
 
 func (m *ManagedStorage) CreateSession(params CreateSessionParams) error {
+	m.mu.Lock()
+	if params.EpochID < m.prunedUpTo {
+		m.mu.Unlock()
+		return fmt.Errorf("%w: epoch %d below prune cursor %d", ErrEpochPruned, params.EpochID, m.prunedUpTo)
+	}
 	if err := m.inner.CreateSession(params); err != nil {
+		m.mu.Unlock()
 		return err
 	}
+	m.mu.Unlock()
 	m.observe(params.EpochID)
 	return nil
 }

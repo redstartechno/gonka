@@ -32,6 +32,10 @@ func TestSQLite_CreateSession_Idempotent(t *testing.T) {
 	runCreateSession_Idempotent(t, newTestSQLite(t))
 }
 
+func TestSQLite_CreateSession_ConflictingEpoch(t *testing.T) {
+	runCreateSession_ConflictingEpoch(t, newTestSQLite(t))
+}
+
 func TestSQLite_AppendDiff_GetDiffs(t *testing.T) {
 	runAppendDiff_GetDiffs(t, newTestSQLite(t))
 }
@@ -586,6 +590,54 @@ func TestSQLite_MetaIndex_RebuildsFromEpochFiles(t *testing.T) {
 	// And the rebuilt _meta.db is back on disk for next boot.
 	_, err = os.Stat(filepath.Join(dir, "_meta.db"))
 	require.NoError(t, err)
+}
+
+func TestSQLite_MetaIndex_RemovesStaleRows(t *testing.T) {
+	dir := t.TempDir()
+
+	db1, err := NewSQLite(dir)
+	require.NoError(t, err)
+	require.NoError(t, db1.CreateSession(paramsForEpoch("live", 7)))
+	_, err = db1.metaDB.Exec(`INSERT INTO escrow_epoch (escrow_id, epoch_id) VALUES (?, ?)`, "ghost", 99)
+	require.NoError(t, err)
+	require.NoError(t, db1.Close())
+
+	db2, err := NewSQLite(dir)
+	require.NoError(t, err)
+	defer db2.Close()
+
+	_, err = db2.GetSessionMeta("ghost")
+	require.ErrorIs(t, err, ErrSessionNotFound)
+
+	var count int
+	err = db2.metaDB.QueryRow(`SELECT COUNT(*) FROM escrow_epoch WHERE escrow_id = ?`, "ghost").Scan(&count)
+	require.NoError(t, err)
+	require.Zero(t, count)
+}
+
+func TestSQLite_MetaIndex_DuplicateEscrowAcrossEpochFiles(t *testing.T) {
+	dir := t.TempDir()
+
+	db1, err := NewSQLite(dir)
+	require.NoError(t, err)
+	require.NoError(t, db1.CreateSession(paramsForEpoch("dup", 7)))
+	require.NoError(t, db1.Close())
+
+	p, err := openEpochPool(filepath.Join(dir, "epoch_8.db"))
+	require.NoError(t, err)
+	_, err = p.writeDB.Exec(
+		`INSERT INTO sessions (escrow_id, version, creator_addr, config_json, group_json, initial_balance)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		"dup", types.LegacySessionVersion, "creator", `{}`, `[]`, 1000,
+	)
+	require.NoError(t, err)
+	require.NoError(t, p.close())
+
+	db2, err := NewSQLite(dir)
+	require.ErrorIs(t, err, ErrSessionEpochConflict)
+	if db2 != nil {
+		_ = db2.Close()
+	}
 }
 
 // TestSQLite_PerEpochFile_Layout verifies the on-disk layout: each epoch

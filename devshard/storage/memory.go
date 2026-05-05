@@ -65,7 +65,11 @@ func (m *Memory) CreateSession(params CreateSessionParams) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if _, exists := m.sessions[params.EscrowID]; exists {
+	if existing, exists := m.sessions[params.EscrowID]; exists {
+		if existing.epochID != params.EpochID {
+			return fmt.Errorf("%w: escrow %s exists in epoch %d, requested epoch %d",
+				ErrSessionEpochConflict, params.EscrowID, existing.epochID, params.EpochID)
+		}
 		return nil
 	}
 

@@ -158,6 +158,7 @@ func (m *HostManager) create(escrowID string) (*transport.Server, error) {
 	h, err := host.NewHost(sm, m.signer, m.engine, escrowID, group, nil,
 		host.WithValidator(m.validator),
 		host.WithStorage(m.store),
+		host.WithEpochID(escrow.EpochID),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("create host: %w", err)
@@ -242,6 +243,7 @@ func (m *HostManager) recoverSession(escrowID string) error {
 	h, err := host.NewHost(sm, m.signer, m.engine, escrowID, meta.Group, nil,
 		host.WithValidator(m.validator),
 		host.WithStorage(m.store),
+		host.WithEpochID(meta.EpochID),
 	)
 	if err != nil {
 		return fmt.Errorf("create host: %w", err)

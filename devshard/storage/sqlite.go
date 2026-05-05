@@ -23,8 +23,9 @@ import (
 // plus a small _meta.db sidecar that holds the escrow_id -> epoch_id mapping.
 //
 // Layout:
-//   <baseDir>/_meta.db           shared escrow_id -> epoch_id index
-//   <baseDir>/epoch_<id>.db      per-epoch sessions/diffs/signatures
+//
+//	<baseDir>/_meta.db           shared escrow_id -> epoch_id index
+//	<baseDir>/epoch_<id>.db      per-epoch sessions/diffs/signatures
 //
 // Per-epoch files give us O(1) pruning (close handles + os.Remove) without
 // touching any other epoch's pages, and they cap the active SQLite file count
@@ -153,19 +154,16 @@ func (s *SQLite) loadIndexFromMeta() error {
 	return rows.Err()
 }
 
-// reconcileMetaFromEpochFiles is the recovery path for partial writes.
-// For every epoch_*.db on disk it makes sure the meta index has an entry
-// for each session in that file. Cheap when meta is already consistent
-// (it just verifies); expensive only if meta is missing entries.
-//
-// This is also how an upgrade from the pre-_meta layout completes: the
-// first boot finds an empty meta and a populated set of epoch_*.db files,
-// and rebuilds the index from them.
+// reconcileMetaFromEpochFiles is the conservative recovery path for partial
+// writes. _meta.db remains only a routing index: startup verifies it against
+// real session rows, removes proven-stale mappings, and adds mappings for
+// sessions that exist on disk but are missing from _meta.db.
 func (s *SQLite) reconcileMetaFromEpochFiles() error {
 	entries, err := os.ReadDir(s.baseDir)
 	if err != nil {
 		return fmt.Errorf("read base dir %s: %w", s.baseDir, err)
 	}
+	sessionsOnDisk := make(map[string]uint64)
 	for _, ent := range entries {
 		if ent.IsDir() {
 			continue
@@ -178,14 +176,45 @@ func (s *SQLite) reconcileMetaFromEpochFiles() error {
 		if err != nil {
 			continue
 		}
-		if err := s.reconcileEpoch(epochID); err != nil {
+		if err := s.collectEpochSessions(epochID, sessionsOnDisk); err != nil {
 			return fmt.Errorf("reconcile epoch %d: %w", epochID, err)
 		}
 	}
+
+	for escrowID, mappedEpoch := range s.escrowIdx {
+		if diskEpoch, ok := sessionsOnDisk[escrowID]; ok && diskEpoch == mappedEpoch {
+			continue
+		}
+		if _, err := s.metaDB.Exec(
+			`DELETE FROM escrow_epoch WHERE escrow_id = ? AND epoch_id = ?`,
+			escrowID, mappedEpoch,
+		); err != nil {
+			return fmt.Errorf("remove stale meta for %s: %w", escrowID, err)
+		}
+		delete(s.escrowIdx, escrowID)
+	}
+
+	for escrowID, epochID := range sessionsOnDisk {
+		if mappedEpoch, ok := s.escrowIdx[escrowID]; ok {
+			if mappedEpoch != epochID {
+				return fmt.Errorf("%w: escrow %s meta epoch %d, disk epoch %d",
+					ErrSessionEpochConflict, escrowID, mappedEpoch, epochID)
+			}
+			continue
+		}
+		if _, err := s.metaDB.Exec(
+			`INSERT INTO escrow_epoch (escrow_id, epoch_id) VALUES (?, ?)`,
+			escrowID, epochID,
+		); err != nil {
+			return fmt.Errorf("repair meta for %s: %w", escrowID, err)
+		}
+		s.escrowIdx[escrowID] = epochID
+	}
+
 	return nil
 }
 
-func (s *SQLite) reconcileEpoch(epochID uint64) error {
+func (s *SQLite) collectEpochSessions(epochID uint64, sessionsOnDisk map[string]uint64) error {
 	p, err := s.openOrLoadPool(epochID)
 	if err != nil {
 		return err
@@ -200,21 +229,11 @@ func (s *SQLite) reconcileEpoch(epochID uint64) error {
 		if err := rows.Scan(&escrowID); err != nil {
 			return err
 		}
-		s.mu.RLock()
-		mapped, ok := s.escrowIdx[escrowID]
-		s.mu.RUnlock()
-		if ok && mapped == epochID {
-			continue
+		if existingEpoch, ok := sessionsOnDisk[escrowID]; ok && existingEpoch != epochID {
+			return fmt.Errorf("%w: escrow %s exists in epochs %d and %d",
+				ErrSessionEpochConflict, escrowID, existingEpoch, epochID)
 		}
-		if _, err := s.metaDB.Exec(
-			`INSERT OR REPLACE INTO escrow_epoch (escrow_id, epoch_id) VALUES (?, ?)`,
-			escrowID, epochID,
-		); err != nil {
-			return fmt.Errorf("repair meta for %s: %w", escrowID, err)
-		}
-		s.mu.Lock()
-		s.escrowIdx[escrowID] = epochID
-		s.mu.Unlock()
+		sessionsOnDisk[escrowID] = epochID
 	}
 	return rows.Err()
 }
@@ -262,7 +281,6 @@ func (s *SQLite) poolFor(escrowID string) (*epochPool, uint64, error) {
 	}
 	return p, epochID, nil
 }
-
 
 func openEpochPool(dbPath string) (*epochPool, error) {
 	openAndConfigure := func(maxConns int) (*sql.DB, error) {
@@ -393,19 +411,21 @@ func (s *SQLite) CreateSession(params CreateSessionParams) error {
 		return fmt.Errorf("marshal group: %w", err)
 	}
 
-	// Write the meta-index entry first. Order matters for crash safety:
-	// if we crash after the meta write but before the per-epoch insert,
-	// the next reconcile pass at boot will repair the meta entry to point
-	// at whichever epoch_*.db actually has the row (or remove it if no
-	// per-epoch row exists yet -- handled by reconcileMetaFromEpochFiles).
-	// If we crash after the per-epoch insert but before the meta write,
-	// reconcile catches that too. Either way, the meta is correct after
-	// the next boot.
-	if _, err := s.metaDB.Exec(
-		`INSERT OR IGNORE INTO escrow_epoch (escrow_id, epoch_id) VALUES (?, ?)`,
-		params.EscrowID, params.EpochID,
-	); err != nil {
-		return fmt.Errorf("insert meta index: %w", err)
+	s.mu.RLock()
+	mappedEpoch, mapped := s.escrowIdx[params.EscrowID]
+	s.mu.RUnlock()
+	if mapped {
+		if mappedEpoch != params.EpochID {
+			return fmt.Errorf("%w: escrow %s exists in epoch %d, requested epoch %d",
+				ErrSessionEpochConflict, params.EscrowID, mappedEpoch, params.EpochID)
+		}
+	} else if diskEpoch, ok, err := s.findSessionEpoch(params.EscrowID); err != nil {
+		return err
+	} else if ok {
+		if diskEpoch != params.EpochID {
+			return fmt.Errorf("%w: escrow %s exists in epoch %d, requested epoch %d",
+				ErrSessionEpochConflict, params.EscrowID, diskEpoch, params.EpochID)
+		}
 	}
 
 	p, err := s.openOrLoadPool(params.EpochID)
@@ -422,10 +442,60 @@ func (s *SQLite) CreateSession(params CreateSessionParams) error {
 		return fmt.Errorf("insert session: %w", err)
 	}
 
+	if !mapped {
+		if _, err := s.metaDB.Exec(
+			`INSERT INTO escrow_epoch (escrow_id, epoch_id) VALUES (?, ?)`,
+			params.EscrowID, params.EpochID,
+		); err != nil {
+			return fmt.Errorf("insert meta index: %w", err)
+		}
+	}
+
 	s.mu.Lock()
 	s.escrowIdx[params.EscrowID] = params.EpochID
 	s.mu.Unlock()
 	return nil
+}
+
+func (s *SQLite) findSessionEpoch(escrowID string) (uint64, bool, error) {
+	entries, err := os.ReadDir(s.baseDir)
+	if err != nil {
+		return 0, false, fmt.Errorf("read base dir %s: %w", s.baseDir, err)
+	}
+	var foundEpoch uint64
+	found := false
+	for _, ent := range entries {
+		if ent.IsDir() {
+			continue
+		}
+		m := epochFileRegex.FindStringSubmatch(ent.Name())
+		if m == nil {
+			continue
+		}
+		epochID, err := strconv.ParseUint(m[1], 10, 64)
+		if err != nil {
+			continue
+		}
+		p, err := s.openOrLoadPool(epochID)
+		if err != nil {
+			return 0, false, err
+		}
+		var exists int
+		err = p.readDB.QueryRow(`SELECT 1 FROM sessions WHERE escrow_id = ?`, escrowID).Scan(&exists)
+		if err == sql.ErrNoRows {
+			continue
+		}
+		if err != nil {
+			return 0, false, fmt.Errorf("check session %s in epoch %d: %w", escrowID, epochID, err)
+		}
+		if found && foundEpoch != epochID {
+			return 0, false, fmt.Errorf("%w: escrow %s exists in epochs %d and %d",
+				ErrSessionEpochConflict, escrowID, foundEpoch, epochID)
+		}
+		foundEpoch = epochID
+		found = true
+	}
+	return foundEpoch, found, nil
 }
 
 func (s *SQLite) MarkSettled(escrowID string) error {
@@ -764,11 +834,6 @@ func (s *SQLite) PruneEpoch(epochID uint64) error {
 	if ok {
 		delete(s.pools, epochID)
 	}
-	for esc, ep := range s.escrowIdx {
-		if ep == epochID {
-			delete(s.escrowIdx, esc)
-		}
-	}
 	s.mu.Unlock()
 
 	if ok {
@@ -788,6 +853,13 @@ func (s *SQLite) PruneEpoch(epochID uint64) error {
 	if _, err := s.metaDB.Exec(`DELETE FROM escrow_epoch WHERE epoch_id = ?`, epochID); err != nil {
 		return fmt.Errorf("prune meta index for epoch %d: %w", epochID, err)
 	}
+	s.mu.Lock()
+	for esc, ep := range s.escrowIdx {
+		if ep == epochID {
+			delete(s.escrowIdx, esc)
+		}
+	}
+	s.mu.Unlock()
 	return nil
 }
 

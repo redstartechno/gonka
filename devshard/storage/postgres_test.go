@@ -71,6 +71,9 @@ func TestPostgres_CreateSession_GetSessionMeta(t *testing.T) {
 func TestPostgres_CreateSession_Idempotent(t *testing.T) {
 	runCreateSession_Idempotent(t, newTestPostgres(t))
 }
+func TestPostgres_CreateSession_ConflictingEpoch(t *testing.T) {
+	runCreateSession_ConflictingEpoch(t, newTestPostgres(t))
+}
 func TestPostgres_AppendDiff_GetDiffs(t *testing.T) {
 	runAppendDiff_GetDiffs(t, newTestPostgres(t))
 }
@@ -118,6 +121,7 @@ func TestPostgres_PartitionTablesPhysicallyDropped(t *testing.T) {
 		require.NoError(t, pg.AppendDiff(esc, makeDiffRecord(1)))
 		require.NoError(t, pg.AddSignature(esc, 1, 1, []byte("sig")))
 	}
+	require.Equal(t, 1, countSessionIndexRows(t, pg.pool, 101))
 
 	// All nine partition tables should exist.
 	require.Equal(t, []string{
@@ -128,6 +132,7 @@ func TestPostgres_PartitionTablesPhysicallyDropped(t *testing.T) {
 
 	// Drop the middle epoch.
 	require.NoError(t, pg.PruneEpoch(101))
+	require.Equal(t, 0, countSessionIndexRows(t, pg.pool, 101))
 
 	// Only epoch 101's three partitions are gone; the others survive.
 	require.Equal(t, []string{
@@ -145,6 +150,17 @@ func TestPostgres_PartitionTablesPhysicallyDropped(t *testing.T) {
 
 	// Pruning a non-existent epoch is a no-op.
 	require.NoError(t, pg.PruneEpoch(999))
+}
+
+func countSessionIndexRows(t *testing.T, pool *pgxpool.Pool, epochID uint64) int {
+	t.Helper()
+	var count int
+	err := pool.QueryRow(context.Background(),
+		`SELECT COUNT(*) FROM devshard_session_index WHERE epoch_id = $1`,
+		epochID,
+	).Scan(&count)
+	require.NoError(t, err)
+	return count
 }
 
 // TestPostgres_RecoversIndexAcrossReopen verifies that a fresh Postgres
@@ -211,4 +227,3 @@ func listDevshardPartitions(t *testing.T, pool *pgxpool.Pool) []string {
 	}
 	return names
 }
-

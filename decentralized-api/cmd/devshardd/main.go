@@ -121,7 +121,11 @@ func main() {
 	if err := os.MkdirAll(payloadDir, 0o755); err != nil {
 		log.Fatalf("create payload dir: %v", err)
 	}
-	payloadStore := payloadstorage.NewPayloadStorage(ctx, payloadDir)
+	payloadStore := payloadstorage.NewManagedStorage(
+		payloadstorage.NewPayloadStorage(ctx, payloadDir),
+		3,
+		3*time.Minute,
+	)
 
 	httpClient := pserver.NewNoRedirectClient(5 * time.Minute)
 

@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"sort"
 	"testing"
 	"time"
@@ -23,6 +24,20 @@ func newManagedForTest(t *testing.T, retain uint64, ep EpochProvider) (*ManagedS
 	m := NewManagedStorage(mem, retain, time.Hour, ep)
 	t.Cleanup(func() { _ = m.Close() })
 	return m, mem
+}
+
+type failOncePruneStorage struct {
+	*Memory
+	epoch  uint64
+	failed bool
+}
+
+func (s *failOncePruneStorage) PruneEpoch(epochID uint64) error {
+	if epochID == s.epoch && !s.failed {
+		s.failed = true
+		return errors.New("forced prune failure")
+	}
+	return s.Memory.PruneEpoch(epochID)
 }
 
 func sessionsAt(t *testing.T, store Storage) []uint64 {
@@ -99,10 +114,8 @@ func TestManaged_DoesNotPruneInsideRetention(t *testing.T) {
 	require.Equal(t, []uint64{5, 6, 7}, sessionsAt(t, m))
 }
 
-// TestManaged_PrunedUpToMonotonic: prunedUpTo must not regress when the
-// observed epoch jumps. The pruner remembers what range it has already swept
-// so a higher max_observed does not cause it to redo work, and a late-arriving
-// CreateSession for an already-pruned epoch is left alone (no sweep regression).
+// TestManaged_RejectsLateCreateBelowPruneCursor: once the managed store has
+// swept an epoch, callers must not recreate sessions in that pruned range.
 func TestManaged_PrunedUpToMonotonic(t *testing.T) {
 	m, _ := newManagedForTest(t, 3, nil)
 
@@ -115,15 +128,26 @@ func TestManaged_PrunedUpToMonotonic(t *testing.T) {
 	m.PruneOnce(context.Background())
 	// cutoff is now 9, prunedUpTo advances 8 -> 9.
 
-	// A late session inserted at epoch 5 is below prunedUpTo. The wrapper
-	// won't redo the sweep, so it survives. This documents the contract:
-	// upstream callers must not insert into pruned epochs.
-	require.NoError(t, m.CreateSession(paramsForEpoch("b", 5)))
-	m.PruneOnce(context.Background())
-	// cutoff is still 9, prunedUpTo stays 9 -- no work redone.
+	// A late session inserted at epoch 5 is below prunedUpTo and is rejected.
+	err := m.CreateSession(paramsForEpoch("b", 5))
+	require.ErrorIs(t, err, ErrEpochPruned)
 
-	// epoch 5 survives (the sweep doesn't regress), 10 and 11 are inside retention.
-	require.Equal(t, []uint64{5, 10, 11}, sessionsAt(t, m))
+	require.Equal(t, []uint64{10, 11}, sessionsAt(t, m))
+}
+
+func TestManaged_RetriesFailedPrune(t *testing.T) {
+	inner := &failOncePruneStorage{Memory: NewMemory(), epoch: 0}
+	m := NewManagedStorage(inner, 1, time.Hour, nil)
+	t.Cleanup(func() { _ = m.Close() })
+
+	require.NoError(t, m.CreateSession(paramsForEpoch("old", 0)))
+	require.NoError(t, m.CreateSession(paramsForEpoch("new", 1)))
+
+	m.PruneOnce(context.Background())
+	require.Equal(t, []uint64{0, 1}, sessionsAt(t, m), "failed epoch should remain for retry")
+
+	m.PruneOnce(context.Background())
+	require.Equal(t, []uint64{1}, sessionsAt(t, m))
 }
 
 // itoa is a tiny strconv-free helper to keep the test file dependency-light.
