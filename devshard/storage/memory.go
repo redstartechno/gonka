@@ -239,6 +239,18 @@ func (m *Memory) PruneEpoch(epochID uint64) error {
 	return nil
 }
 
+func (m *Memory) pruneBefore(cutoff uint64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for id, s := range m.sessions {
+		if s.epochID < cutoff {
+			delete(m.sessions, id)
+		}
+	}
+	return nil
+}
+
 func (m *Memory) Close() error { return nil }
 
 func (m *Memory) GetDiffs(escrowID string, fromNonce, toNonce uint64) ([]types.DiffRecord, error) {

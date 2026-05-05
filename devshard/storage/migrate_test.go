@@ -189,7 +189,7 @@ func TestMigrateLegacy_SkipsUnknownEscrow(t *testing.T) {
 		if escrowID == "good" {
 			return 5, nil
 		}
-		return 0, fmt.Errorf("escrow %s no longer on chain", escrowID)
+		return 0, fmt.Errorf("%w: escrow %s no longer on chain", ErrSkipLegacySession, escrowID)
 	}
 
 	n, err := MigrateLegacySQLite(legacyPath, dest, resolve)
@@ -200,4 +200,35 @@ func TestMigrateLegacy_SkipsUnknownEscrow(t *testing.T) {
 	require.NoError(t, err)
 	_, err = dest.GetSessionMeta("stale")
 	require.Error(t, err)
+
+	_, err = os.Stat(legacyPath)
+	require.True(t, os.IsNotExist(err), "legacy file should be moved after successful skip")
+}
+
+func TestMigrateLegacy_ResolverErrorKeepsLegacyFile(t *testing.T) {
+	legacyPath := writeLegacyDB(t, []legacyTestSession{
+		{escrowID: "good", version: types.LegacySessionVersion, status: "active", balance: 1, latestNonce: 1},
+		{escrowID: "rpc-fails", version: types.LegacySessionVersion, status: "active", balance: 1, latestNonce: 1},
+	})
+
+	dest := NewMemory()
+	resolve := func(escrowID string) (uint64, error) {
+		if escrowID == "good" {
+			return 5, nil
+		}
+		return 0, fmt.Errorf("temporary chain query failure")
+	}
+
+	n, err := MigrateLegacySQLite(legacyPath, dest, resolve)
+	require.Error(t, err)
+	require.Equal(t, 0, n)
+
+	_, statErr := os.Stat(legacyPath)
+	require.NoError(t, statErr, "legacy file must remain for retry")
+	matches, globErr := filepath.Glob(legacyPath + ".migrated.*")
+	require.NoError(t, globErr)
+	require.Empty(t, matches)
+
+	_, err = dest.GetSessionMeta("good")
+	require.ErrorIs(t, err, ErrSessionNotFound)
 }

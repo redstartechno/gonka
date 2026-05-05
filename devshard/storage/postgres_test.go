@@ -1,7 +1,9 @@
 package storage
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"sort"
 	"testing"
 	"time"
@@ -152,6 +154,34 @@ func TestPostgres_PartitionTablesPhysicallyDropped(t *testing.T) {
 	require.NoError(t, pg.PruneEpoch(999))
 }
 
+func TestPostgres_PruneBefore_DropsOnlyExistingOldPartitions(t *testing.T) {
+	pg := newTestPostgres(t)
+
+	require.NoError(t, pg.CreateSession(paramsForEpoch("a", 100)))
+	require.NoError(t, pg.CreateSession(paramsForEpoch("b", 101)))
+	require.NoError(t, pg.CreateSession(paramsForEpoch("c", 105)))
+	for _, esc := range []string{"a", "b", "c"} {
+		require.NoError(t, pg.AppendDiff(esc, makeDiffRecord(1)))
+	}
+
+	require.NoError(t, pg.pruneBefore(102))
+
+	require.Equal(t, []string{
+		"devshard_diffs_epoch_105",
+		"devshard_sessions_epoch_105",
+		"devshard_signatures_epoch_105",
+	}, listDevshardPartitions(t, pg.pool))
+	require.Equal(t, 0, countSessionIndexRows(t, pg.pool, 100))
+	require.Equal(t, 0, countSessionIndexRows(t, pg.pool, 101))
+	require.Equal(t, 1, countSessionIndexRows(t, pg.pool, 105))
+
+	_, err := pg.GetSessionMeta("a")
+	require.ErrorIs(t, err, ErrSessionNotFound)
+	meta, err := pg.GetSessionMeta("c")
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), meta.LatestNonce)
+}
+
 func countSessionIndexRows(t *testing.T, pool *pgxpool.Pool, epochID uint64) int {
 	t.Helper()
 	var count int
@@ -197,6 +227,226 @@ func TestPostgres_RecoversIndexAcrossReopen(t *testing.T) {
 	diffs, err := pg2.GetDiffs("e", 1, 2)
 	require.NoError(t, err)
 	require.Len(t, diffs, 2)
+}
+
+func TestHybrid_StickySQLiteThenPostgresReconnect(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping hybrid postgres test in -short mode (requires Docker)")
+	}
+
+	t.Setenv("PGHOST", "127.0.0.1")
+	t.Setenv("PGPORT", "1")
+	t.Setenv("PGDATABASE", "missing")
+	t.Setenv("PGUSER", "missing")
+	t.Setenv("PGPASSWORD", "missing")
+
+	sqlite, err := NewSQLite(t.TempDir())
+	require.NoError(t, err)
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	hybrid := NewHybridStorage(ctx, sqlite, time.Millisecond, defaultPGConnectTimeout)
+	cancel()
+	defer func() {
+		if hybrid != nil {
+			_ = hybrid.Close()
+		}
+	}()
+
+	require.Nil(t, hybrid.currentPostgres())
+	require.NoError(t, hybrid.CreateSession(paramsForEpoch("sqlite", 1)))
+	require.NoError(t, hybrid.AppendDiff("sqlite", makeDiffRecord(1)))
+
+	cleanup := setupPostgresContainer(t)
+	defer cleanup()
+
+	require.NoError(t, hybrid.CreateSession(paramsForEpoch("pg", 2)))
+	pg := hybrid.currentPostgres()
+	require.NotNil(t, pg)
+
+	_, err = pg.GetSessionMeta("pg")
+	require.NoError(t, err)
+	_, err = pg.GetSessionMeta("sqlite")
+	require.ErrorIs(t, err, ErrSessionNotFound)
+
+	require.NoError(t, hybrid.AppendDiff("sqlite", makeDiffRecord(2)))
+	sqliteMeta, err := sqlite.GetSessionMeta("sqlite")
+	require.NoError(t, err)
+	require.Equal(t, uint64(2), sqliteMeta.LatestNonce)
+
+	require.NoError(t, hybrid.Close())
+	hybrid = nil
+
+	sqliteAfterRestart, err := NewSQLite(sqlite.baseDir)
+	require.NoError(t, err)
+	hybridAfterRestart := NewHybridStorage(context.Background(), sqliteAfterRestart, time.Millisecond, defaultPGConnectTimeout)
+	t.Cleanup(func() { _ = hybridAfterRestart.Close() })
+
+	require.NotNil(t, hybridAfterRestart.currentPostgres())
+	require.NoError(t, hybridAfterRestart.AppendDiff("sqlite", makeDiffRecord(3)))
+	restartedMeta, err := sqliteAfterRestart.GetSessionMeta("sqlite")
+	require.NoError(t, err)
+	require.Equal(t, uint64(3), restartedMeta.LatestNonce)
+}
+
+func TestHybrid_ListActiveSessionsWarnsOnDuplicateEscrow(t *testing.T) {
+	cleanup := setupPostgresContainer(t)
+	defer cleanup()
+
+	sqlite, err := NewSQLite(t.TempDir())
+	require.NoError(t, err)
+	hybrid := NewHybridStorage(context.Background(), sqlite, 240*time.Second, defaultPGConnectTimeout)
+	t.Cleanup(func() { _ = hybrid.Close() })
+	pg := hybrid.currentPostgres()
+	require.NotNil(t, pg)
+
+	require.NoError(t, sqlite.CreateSession(paramsForEpoch("dup", 7)))
+	require.NoError(t, pg.CreateSession(paramsForEpoch("dup", 7)))
+
+	var logs bytes.Buffer
+	oldLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(oldLogger) })
+
+	active, err := hybrid.ListActiveSessions()
+	require.NoError(t, err)
+	require.Len(t, active, 1)
+	require.Equal(t, "dup", active[0].EscrowID)
+	require.Contains(t, logs.String(), "escrow present in sqlite and postgres")
+}
+
+func TestHybrid_PruneEpochPrunesBothBackendsAndRoutes(t *testing.T) {
+	cleanup := setupPostgresContainer(t)
+	defer cleanup()
+
+	sqlite, err := NewSQLite(t.TempDir())
+	require.NoError(t, err)
+	hybrid := NewHybridStorage(context.Background(), sqlite, 240*time.Second, defaultPGConnectTimeout)
+	t.Cleanup(func() { _ = hybrid.Close() })
+	pg := hybrid.currentPostgres()
+	require.NotNil(t, pg)
+
+	require.NoError(t, sqlite.CreateSession(paramsForEpoch("sqlite", 4)))
+	require.NoError(t, sqlite.AppendDiff("sqlite", makeDiffRecord(1)))
+	_, err = hybrid.GetSessionMeta("sqlite")
+	require.NoError(t, err)
+
+	require.NoError(t, hybrid.CreateSession(paramsForEpoch("pg", 4)))
+	require.NoError(t, hybrid.AppendDiff("pg", makeDiffRecord(1)))
+
+	hybrid.mu.Lock()
+	require.Len(t, hybrid.routes, 2)
+	hybrid.mu.Unlock()
+
+	require.NoError(t, hybrid.PruneEpoch(4))
+
+	_, err = sqlite.GetSessionMeta("sqlite")
+	require.ErrorIs(t, err, ErrSessionNotFound)
+	_, err = pg.GetSessionMeta("pg")
+	require.ErrorIs(t, err, ErrSessionNotFound)
+
+	hybrid.mu.Lock()
+	require.Empty(t, hybrid.routes)
+	hybrid.mu.Unlock()
+}
+
+func TestHybrid_PruneBeforePrunesBothBackendsAndRoutes(t *testing.T) {
+	cleanup := setupPostgresContainer(t)
+	defer cleanup()
+
+	sqlite, err := NewSQLite(t.TempDir())
+	require.NoError(t, err)
+	hybrid := NewHybridStorage(context.Background(), sqlite, 240*time.Second, defaultPGConnectTimeout)
+	t.Cleanup(func() { _ = hybrid.Close() })
+	pg := hybrid.currentPostgres()
+	require.NotNil(t, pg)
+
+	require.NoError(t, sqlite.CreateSession(paramsForEpoch("sqlite-old", 2)))
+	require.NoError(t, sqlite.CreateSession(paramsForEpoch("sqlite-new", 8)))
+	for _, esc := range []string{"sqlite-old", "sqlite-new"} {
+		require.NoError(t, sqlite.AppendDiff(esc, makeDiffRecord(1)))
+		_, err = hybrid.GetSessionMeta(esc)
+		require.NoError(t, err)
+	}
+
+	require.NoError(t, hybrid.CreateSession(paramsForEpoch("pg-old", 2)))
+	require.NoError(t, hybrid.CreateSession(paramsForEpoch("pg-new", 8)))
+	require.NoError(t, hybrid.pruneBefore(5))
+
+	_, err = sqlite.GetSessionMeta("sqlite-old")
+	require.ErrorIs(t, err, ErrSessionNotFound)
+	_, err = pg.GetSessionMeta("pg-old")
+	require.ErrorIs(t, err, ErrSessionNotFound)
+	_, err = sqlite.GetSessionMeta("sqlite-new")
+	require.NoError(t, err)
+	_, err = pg.GetSessionMeta("pg-new")
+	require.NoError(t, err)
+
+	hybrid.mu.Lock()
+	require.NotContains(t, hybrid.routes, "sqlite-old")
+	require.NotContains(t, hybrid.routes, "pg-old")
+	require.Contains(t, hybrid.routes, "sqlite-new")
+	require.Contains(t, hybrid.routes, "pg-new")
+	hybrid.mu.Unlock()
+}
+
+func TestHybrid_PostgresRoutedSessionDoesNotFallbackWhenPostgresUnavailable(t *testing.T) {
+	cleanup := setupPostgresContainer(t)
+	defer cleanup()
+
+	sqlite, err := NewSQLite(t.TempDir())
+	require.NoError(t, err)
+	hybrid := NewHybridStorage(context.Background(), sqlite, 240*time.Second, defaultPGConnectTimeout)
+	t.Cleanup(func() { _ = hybrid.Close() })
+	pg := hybrid.currentPostgres()
+	require.NotNil(t, pg)
+
+	require.NoError(t, hybrid.CreateSession(paramsForEpoch("pg-only", 9)))
+	require.NoError(t, hybrid.AppendDiff("pg-only", makeDiffRecord(1)))
+
+	hybrid.mu.Lock()
+	hybrid.pg = nil
+	hybrid.mu.Unlock()
+	pg.Close()
+
+	err = hybrid.AppendDiff("pg-only", makeDiffRecord(2))
+	require.ErrorContains(t, err, "postgres backend unavailable")
+	_, err = sqlite.GetSessionMeta("pg-only")
+	require.ErrorIs(t, err, ErrSessionNotFound)
+}
+
+func TestMigrateLegacy_IntoHybridUsesPostgresWhenAvailable(t *testing.T) {
+	cleanup := setupPostgresContainer(t)
+	defer cleanup()
+
+	legacyPath := writeLegacyDB(t, []legacyTestSession{
+		{escrowID: "legacy-a", version: "", status: "active", balance: 1000, latestNonce: 2, lastFinalized: 1},
+		{escrowID: "legacy-b", version: "", status: "active", balance: 2000, latestNonce: 1},
+	})
+	sqlite, err := NewSQLite(t.TempDir())
+	require.NoError(t, err)
+	hybrid := NewHybridStorage(context.Background(), sqlite, 240*time.Second, defaultPGConnectTimeout)
+	t.Cleanup(func() { _ = hybrid.Close() })
+	pg := hybrid.currentPostgres()
+	require.NotNil(t, pg)
+
+	n, err := MigrateLegacySQLite(legacyPath, hybrid, func(escrowID string) (uint64, error) {
+		switch escrowID {
+		case "legacy-a":
+			return 20, nil
+		case "legacy-b":
+			return 21, nil
+		default:
+			return 0, ErrSkipLegacySession
+		}
+	})
+	require.NoError(t, err)
+	require.Equal(t, 2, n)
+
+	for _, escrowID := range []string{"legacy-a", "legacy-b"} {
+		_, err = pg.GetSessionMeta(escrowID)
+		require.NoError(t, err)
+		_, err = sqlite.GetSessionMeta(escrowID)
+		require.ErrorIs(t, err, ErrSessionNotFound)
+	}
 }
 
 // listDevshardPartitions returns every devshard_*_epoch_<N> partition that

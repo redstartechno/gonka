@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -655,6 +657,73 @@ func (s *Postgres) PruneEpoch(epochID uint64) error {
 	}
 	s.mu.Unlock()
 	return nil
+}
+
+func (s *Postgres) pruneBefore(cutoff uint64) error {
+	if cutoff == 0 {
+		return nil
+	}
+
+	rows, err := s.pool.Query(context.Background(), `
+		SELECT c.relname
+		FROM pg_class c
+		JOIN pg_inherits i ON i.inhrelid = c.oid
+		JOIN pg_class p ON p.oid = i.inhparent
+		WHERE p.relname IN ('devshard_sessions', 'devshard_diffs', 'devshard_signatures')
+	`)
+	if err != nil {
+		return fmt.Errorf("list devshard partitions: %w", err)
+	}
+	var partitions []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			rows.Close()
+			return err
+		}
+		if epochID, ok := pgPartitionEpoch(name); ok && epochID < cutoff {
+			partitions = append(partitions, name)
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	ctx := context.Background()
+	for _, partition := range partitions {
+		if _, err := s.pool.Exec(ctx, fmt.Sprintf(`DROP TABLE IF EXISTS %s`, partition)); err != nil {
+			return fmt.Errorf("drop %s: %w", partition, err)
+		}
+	}
+	if _, err := s.pool.Exec(ctx, `DELETE FROM devshard_session_index WHERE epoch_id < $1`, cutoff); err != nil {
+		return fmt.Errorf("prune session index before epoch %d: %w", cutoff, err)
+	}
+
+	s.mu.Lock()
+	for epochID := range s.knownEpochs {
+		if epochID < cutoff {
+			delete(s.knownEpochs, epochID)
+		}
+	}
+	for esc, ep := range s.escrowIdx {
+		if ep < cutoff {
+			delete(s.escrowIdx, esc)
+		}
+	}
+	s.mu.Unlock()
+	return nil
+}
+
+func pgPartitionEpoch(name string) (uint64, bool) {
+	for _, parent := range []string{pgSessionsParent, pgDiffsParent, pgSignaturesParent} {
+		prefix := parent + "_epoch_"
+		if strings.HasPrefix(name, prefix) {
+			epochID, err := strconv.ParseUint(strings.TrimPrefix(name, prefix), 10, 64)
+			return epochID, err == nil
+		}
+	}
+	return 0, false
 }
 
 var _ Storage = (*Postgres)(nil)

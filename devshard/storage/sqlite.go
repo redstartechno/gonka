@@ -363,8 +363,18 @@ func openEpochPool(dbPath string) (*epochPool, error) {
 }
 
 func (p *epochPool) close() error {
-	wErr := p.writeDB.Close()
-	rErr := p.readDB.Close()
+	var wErr error
+	if p.writeDB == nil {
+		wErr = fmt.Errorf("write db is nil")
+	} else {
+		wErr = p.writeDB.Close()
+	}
+	var rErr error
+	if p.readDB == nil {
+		rErr = fmt.Errorf("read db is nil")
+	} else {
+		rErr = p.readDB.Close()
+	}
 	if wErr != nil {
 		return wErr
 	}
@@ -860,6 +870,82 @@ func (s *SQLite) PruneEpoch(epochID uint64) error {
 		}
 	}
 	s.mu.Unlock()
+	return nil
+}
+
+func (s *SQLite) pruneBefore(cutoff uint64) error {
+	if cutoff == 0 {
+		return nil
+	}
+
+	type poolToClose struct {
+		epochID uint64
+		pool    *epochPool
+	}
+	var pools []poolToClose
+
+	s.mu.Lock()
+	for epochID, p := range s.pools {
+		if epochID < cutoff {
+			pools = append(pools, poolToClose{epochID: epochID, pool: p})
+			delete(s.pools, epochID)
+		}
+	}
+	s.mu.Unlock()
+
+	epochs := make(map[uint64]struct{}, len(pools))
+	var firstCloseErr error
+	for _, item := range pools {
+		epochs[item.epochID] = struct{}{}
+		if err := item.pool.close(); err != nil {
+			if firstCloseErr == nil {
+				firstCloseErr = fmt.Errorf("close epoch %d pool: %w", item.epochID, err)
+			}
+		}
+	}
+
+	entries, err := os.ReadDir(s.baseDir)
+	if err != nil {
+		return fmt.Errorf("read base dir %s: %w", s.baseDir, err)
+	}
+	for _, ent := range entries {
+		if ent.IsDir() {
+			continue
+		}
+		m := epochFileRegex.FindStringSubmatch(ent.Name())
+		if m == nil {
+			continue
+		}
+		epochID, err := strconv.ParseUint(m[1], 10, 64)
+		if err != nil || epochID >= cutoff {
+			continue
+		}
+		epochs[epochID] = struct{}{}
+	}
+
+	for epochID := range epochs {
+		dbPath := s.epochFilePath(epochID)
+		for _, suffix := range []string{"", "-wal", "-shm"} {
+			path := dbPath + suffix
+			if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+				return fmt.Errorf("remove %s: %w", path, err)
+			}
+		}
+	}
+
+	if _, err := s.metaDB.Exec(`DELETE FROM escrow_epoch WHERE epoch_id < ?`, cutoff); err != nil {
+		return fmt.Errorf("prune meta index before epoch %d: %w", cutoff, err)
+	}
+	s.mu.Lock()
+	for esc, ep := range s.escrowIdx {
+		if ep < cutoff {
+			delete(s.escrowIdx, esc)
+		}
+	}
+	s.mu.Unlock()
+	if firstCloseErr != nil {
+		return firstCloseErr
+	}
 	return nil
 }
 

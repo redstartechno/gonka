@@ -684,3 +684,75 @@ func TestSQLite_PerEpochFile_Layout(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, diffs, 1)
 }
+
+func TestSQLite_PruneBefore_RemovesOnlyExistingOldEpochs(t *testing.T) {
+	dir := t.TempDir()
+	db, err := NewSQLite(dir)
+	require.NoError(t, err)
+	defer db.Close()
+
+	require.NoError(t, db.CreateSession(paramsForEpoch("e2", 2)))
+	require.NoError(t, db.CreateSession(paramsForEpoch("e8", 8)))
+	require.NoError(t, db.CreateSession(paramsForEpoch("e9", 9)))
+	for _, esc := range []string{"e2", "e8", "e9"} {
+		require.NoError(t, db.AppendDiff(esc, makeDiffRecord(1)))
+	}
+
+	require.NoError(t, db.pruneBefore(8))
+
+	_, err = db.GetSessionMeta("e2")
+	require.ErrorIs(t, err, ErrSessionNotFound)
+	for _, esc := range []string{"e8", "e9"} {
+		meta, err := db.GetSessionMeta(esc)
+		require.NoError(t, err)
+		require.Equal(t, uint64(1), meta.LatestNonce)
+	}
+
+	_, err = os.Stat(filepath.Join(dir, "epoch_2.db"))
+	require.True(t, os.IsNotExist(err))
+	_, err = os.Stat(filepath.Join(dir, "epoch_8.db"))
+	require.NoError(t, err)
+}
+
+func TestSQLite_PruneBefore_CloseErrorStillCleansFilesAndMeta(t *testing.T) {
+	dir := t.TempDir()
+	db, err := NewSQLite(dir)
+	require.NoError(t, err)
+	defer db.Close()
+
+	require.NoError(t, db.CreateSession(paramsForEpoch("old-1", 1)))
+	require.NoError(t, db.CreateSession(paramsForEpoch("old-2", 2)))
+	require.NoError(t, db.CreateSession(paramsForEpoch("recent", 3)))
+	for _, esc := range []string{"old-1", "old-2", "recent"} {
+		require.NoError(t, db.AppendDiff(esc, makeDiffRecord(1)))
+	}
+
+	db.mu.RLock()
+	pool := db.pools[1]
+	db.mu.RUnlock()
+	require.NotNil(t, pool)
+	pool.writeDB = nil
+
+	err = db.pruneBefore(3)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "close epoch 1 pool")
+
+	for _, epoch := range []uint64{1, 2} {
+		require.NoFileExists(t, filepath.Join(dir, fmt.Sprintf("epoch_%d.db", epoch)))
+		require.NoFileExists(t, filepath.Join(dir, fmt.Sprintf("epoch_%d.db-wal", epoch)))
+		require.NoFileExists(t, filepath.Join(dir, fmt.Sprintf("epoch_%d.db-shm", epoch)))
+	}
+	require.FileExists(t, filepath.Join(dir, "epoch_3.db"))
+
+	var oldMetaRows int
+	require.NoError(t, db.metaDB.QueryRow(`SELECT COUNT(*) FROM escrow_epoch WHERE epoch_id < 3`).Scan(&oldMetaRows))
+	require.Zero(t, oldMetaRows)
+	_, err = db.GetSessionMeta("old-1")
+	require.ErrorIs(t, err, ErrSessionNotFound)
+	_, err = db.GetSessionMeta("old-2")
+	require.ErrorIs(t, err, ErrSessionNotFound)
+	_, err = db.GetSessionMeta("recent")
+	require.NoError(t, err)
+
+	require.NoError(t, db.pruneBefore(3), "second prune should not retry closed pools")
+}

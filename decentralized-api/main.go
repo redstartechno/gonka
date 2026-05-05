@@ -33,6 +33,7 @@ import (
 	devshardstorage "devshard/storage"
 	devshardtypes "devshard/types"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"log/slog"
@@ -42,6 +43,8 @@ import (
 	"time"
 
 	"github.com/productscience/inference/x/inference/types"
+
+	devshardbridge "devshard/bridge"
 )
 
 func main() {
@@ -252,6 +255,9 @@ func main() {
 			if migrated, mErr := devshardstorage.MigrateLegacySQLite(devshardLegacyDB, devshardInner, func(escrowID string) (uint64, error) {
 				info, err := devshardBridge.GetEscrow(escrowID)
 				if err != nil {
+					if errors.Is(err, devshardbridge.ErrEscrowNotFound) {
+						return 0, devshardstorage.ErrSkipLegacySession
+					}
 					return 0, err
 				}
 				return info.EpochID, nil

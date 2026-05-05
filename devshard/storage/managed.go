@@ -18,6 +18,10 @@ type EpochProvider interface {
 	CurrentEpochID() uint64
 }
 
+type rangePruner interface {
+	pruneBefore(cutoff uint64) error
+}
+
 // ManagedStorage wraps a Storage with periodic per-epoch pruning.
 //
 // Retention math mirrors payloadstorage.ManagedStorage: keep the highest N
@@ -61,6 +65,8 @@ func NewManagedStorage(inner Storage, retain uint64, pruneInterval time.Duration
 		stop:          make(chan struct{}),
 		done:          make(chan struct{}),
 	}
+	_, hasRangePrune := inner.(rangePruner)
+	slog.Info("devshard managed storage initialized", "range_prune", hasRangePrune, "retain", retain)
 	go m.loop()
 	return m
 }
@@ -109,6 +115,16 @@ func (m *ManagedStorage) PruneOnce(_ context.Context) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.prunedUpTo >= cutoff {
+		return
+	}
+
+	if rp, ok := m.inner.(rangePruner); ok {
+		if err := rp.pruneBefore(cutoff); err != nil {
+			slog.Warn("devshard range prune failed", "cutoff", cutoff, "error", err)
+			return
+		}
+		m.prunedUpTo = cutoff
+		slog.Info("devshard pruned epochs", "before", cutoff, "max_observed", maxE, "retain", m.retain)
 		return
 	}
 

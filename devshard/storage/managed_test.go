@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+
+	"devshard/types"
 )
 
 // fixedEpoch implements EpochProvider for tests.
@@ -39,6 +41,79 @@ func (s *failOncePruneStorage) PruneEpoch(epochID uint64) error {
 	}
 	return s.Memory.PruneEpoch(epochID)
 }
+
+func (s *failOncePruneStorage) pruneBefore(cutoff uint64) error {
+	if s.epoch < cutoff && !s.failed {
+		s.failed = true
+		return errors.New("forced prune failure")
+	}
+	return s.Memory.pruneBefore(cutoff)
+}
+
+type rangeCountingStorage struct {
+	*Memory
+	pruneEpochCalls  int
+	pruneBeforeCalls int
+	lastCutoff       uint64
+}
+
+func (s *rangeCountingStorage) PruneEpoch(epochID uint64) error {
+	s.pruneEpochCalls++
+	return s.Memory.PruneEpoch(epochID)
+}
+
+func (s *rangeCountingStorage) pruneBefore(cutoff uint64) error {
+	s.pruneBeforeCalls++
+	s.lastCutoff = cutoff
+	return s.Memory.pruneBefore(cutoff)
+}
+
+type legacyOnlyStorage struct {
+	inner           *Memory
+	failEpoch       uint64
+	failed          bool
+	pruneEpochCalls int
+}
+
+func (s *legacyOnlyStorage) CreateSession(params CreateSessionParams) error {
+	return s.inner.CreateSession(params)
+}
+func (s *legacyOnlyStorage) MarkSettled(escrowID string) error {
+	return s.inner.MarkSettled(escrowID)
+}
+func (s *legacyOnlyStorage) ListActiveSessions() ([]ActiveSession, error) {
+	return s.inner.ListActiveSessions()
+}
+func (s *legacyOnlyStorage) AppendDiff(escrowID string, rec types.DiffRecord) error {
+	return s.inner.AppendDiff(escrowID, rec)
+}
+func (s *legacyOnlyStorage) GetDiffs(escrowID string, fromNonce, toNonce uint64) ([]types.DiffRecord, error) {
+	return s.inner.GetDiffs(escrowID, fromNonce, toNonce)
+}
+func (s *legacyOnlyStorage) AddSignature(escrowID string, nonce uint64, slotID uint32, sig []byte) error {
+	return s.inner.AddSignature(escrowID, nonce, slotID, sig)
+}
+func (s *legacyOnlyStorage) GetSignatures(escrowID string, nonce uint64) (map[uint32][]byte, error) {
+	return s.inner.GetSignatures(escrowID, nonce)
+}
+func (s *legacyOnlyStorage) GetSessionMeta(escrowID string) (*SessionMeta, error) {
+	return s.inner.GetSessionMeta(escrowID)
+}
+func (s *legacyOnlyStorage) MarkFinalized(escrowID string, nonce uint64) error {
+	return s.inner.MarkFinalized(escrowID, nonce)
+}
+func (s *legacyOnlyStorage) LastFinalized(escrowID string) (uint64, error) {
+	return s.inner.LastFinalized(escrowID)
+}
+func (s *legacyOnlyStorage) PruneEpoch(epochID uint64) error {
+	s.pruneEpochCalls++
+	if epochID == s.failEpoch && !s.failed {
+		s.failed = true
+		return errors.New("forced prune failure")
+	}
+	return s.inner.PruneEpoch(epochID)
+}
+func (s *legacyOnlyStorage) Close() error { return s.inner.Close() }
 
 func sessionsAt(t *testing.T, store Storage) []uint64 {
 	t.Helper()
@@ -148,6 +223,39 @@ func TestManaged_RetriesFailedPrune(t *testing.T) {
 
 	m.PruneOnce(context.Background())
 	require.Equal(t, []uint64{1}, sessionsAt(t, m))
+}
+
+func TestManaged_RetriesFailedPrune_LegacyLoopPath(t *testing.T) {
+	inner := &legacyOnlyStorage{inner: NewMemory(), failEpoch: 0}
+	m := NewManagedStorage(inner, 1, time.Hour, nil)
+	t.Cleanup(func() { _ = m.Close() })
+
+	require.NoError(t, m.CreateSession(paramsForEpoch("old", 0)))
+	require.NoError(t, m.CreateSession(paramsForEpoch("new", 1)))
+
+	m.PruneOnce(context.Background())
+	require.Equal(t, []uint64{0, 1}, sessionsAt(t, m), "failed epoch should remain for retry")
+	require.Equal(t, 1, inner.pruneEpochCalls)
+
+	m.PruneOnce(context.Background())
+	require.Equal(t, []uint64{1}, sessionsAt(t, m))
+	require.Equal(t, 2, inner.pruneEpochCalls)
+}
+
+func TestManaged_UsesRangePruneWhenAvailable(t *testing.T) {
+	inner := &rangeCountingStorage{Memory: NewMemory()}
+	m := NewManagedStorage(inner, 3, time.Hour, nil)
+	t.Cleanup(func() { _ = m.Close() })
+
+	require.NoError(t, m.CreateSession(paramsForEpoch("old", 1)))
+	require.NoError(t, m.CreateSession(paramsForEpoch("new", 10)))
+
+	m.PruneOnce(context.Background())
+
+	require.Equal(t, 1, inner.pruneBeforeCalls)
+	require.Equal(t, 0, inner.pruneEpochCalls)
+	require.Equal(t, uint64(8), inner.lastCutoff)
+	require.Equal(t, []uint64{10}, sessionsAt(t, m))
 }
 
 // itoa is a tiny strconv-free helper to keep the test file dependency-light.

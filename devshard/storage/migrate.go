@@ -3,6 +3,7 @@ package storage
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -19,6 +20,11 @@ import (
 // with the right partition key so they land in the new layout.
 type EpochResolver func(escrowID string) (uint64, error)
 
+// ErrSkipLegacySession tells migration to skip a stale legacy session while
+// still treating the migration as successful. Other resolver errors abort the
+// migration and leave the legacy DB in place.
+var ErrSkipLegacySession = errors.New("skip legacy session")
+
 // MigrateLegacySQLite copies sessions, diffs and signatures from the legacy
 // single-file SQLite store at legacyPath into dest. After a successful
 // migration the legacy file is renamed to legacyPath + ".migrated.<ts>" so
@@ -28,8 +34,9 @@ type EpochResolver func(escrowID string) (uint64, error)
 //
 // Migration runs through the public Storage API of dest, so it works against
 // both the per-epoch SQLite backend and the Postgres backend. Sessions whose
-// escrow can no longer be resolved on chain are skipped with a warning rather
-// than aborting the whole migration.
+// escrow is explicitly marked with ErrSkipLegacySession are skipped with a
+// warning. Other resolver errors abort before copying and leave legacyPath in
+// place for a retry.
 func MigrateLegacySQLite(legacyPath string, dest Storage, resolveEpoch EpochResolver) (int, error) {
 	info, err := os.Stat(legacyPath)
 	if err != nil {
@@ -47,7 +54,12 @@ func MigrateLegacySQLite(legacyPath string, dest Storage, resolveEpoch EpochReso
 	if err != nil {
 		return 0, fmt.Errorf("open legacy %s: %w", legacyPath, err)
 	}
-	defer src.Close()
+	closed := false
+	defer func() {
+		if !closed {
+			_ = src.Close()
+		}
+	}()
 
 	for _, p := range []string{
 		"PRAGMA query_only=ON",
@@ -92,12 +104,24 @@ func MigrateLegacySQLite(legacyPath string, dest Storage, resolveEpoch EpochReso
 		return 0, fmt.Errorf("iter legacy sessions: %w", err)
 	}
 
-	migrated := 0
+	resolved := make(map[string]uint64, len(sessions))
 	for _, ls := range sessions {
 		epochID, err := resolveEpoch(ls.escrowID)
 		if err != nil {
-			slog.Warn("devshard migrate: skipping session, epoch unresolved",
-				"escrow_id", ls.escrowID, "error", err)
+			if errors.Is(err, ErrSkipLegacySession) {
+				slog.Warn("devshard migrate: skipping stale legacy session",
+					"escrow_id", ls.escrowID, "error", err)
+				continue
+			}
+			return 0, fmt.Errorf("resolve epoch for %s: %w", ls.escrowID, err)
+		}
+		resolved[ls.escrowID] = epochID
+	}
+
+	migrated := 0
+	for _, ls := range sessions {
+		epochID, ok := resolved[ls.escrowID]
+		if !ok {
 			continue
 		}
 
@@ -142,6 +166,7 @@ func MigrateLegacySQLite(legacyPath string, dest Storage, resolveEpoch EpochReso
 	if err := src.Close(); err != nil {
 		return migrated, fmt.Errorf("close legacy: %w", err)
 	}
+	closed = true
 
 	stamped := fmt.Sprintf("%s.migrated.%d", legacyPath, time.Now().Unix())
 	if err := os.Rename(legacyPath, stamped); err != nil {

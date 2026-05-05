@@ -16,14 +16,17 @@ HostManager (decentralized-api/internal/devshard)
     |
     +---> ManagedStorage (background pruner, N=3)
               |
-              +---> Postgres   (parents partitioned by epoch_id)
-              |     OR
-              +---> SQLite     (per-epoch .db files + _meta.db sidecar)
+              +---> Hybrid     (Postgres primary + SQLite fallback, when PGHOST is set)
+              |       |
+              |       +---> Postgres   (parents partitioned by epoch_id)
+              |       +---> SQLite     (per-epoch .db files + _meta.db sidecar)
+              |
+              +---> SQLite     (when PGHOST is unset)
               |     OR
               +---> Memory     (tests)
 ```
 
-Backend choice is made once per process by `factory.go` based on `PGHOST`. No mid-flight switching.
+Backend choice is made by `factory.go` based on `PGHOST`. If `PGHOST` is unset, the process uses SQLite only. If `PGHOST` is set, the process uses `HybridStorage`: new sessions go to Postgres while it is available, fall back to SQLite while Postgres is down, and retry Postgres in the background path for later sessions. Routing is sticky per escrow so one session's metadata, diffs, and signatures stay in one backend.
 
 ## Storage Interface
 
@@ -134,21 +137,36 @@ Other epoch files are not touched. No SQLite VACUUM ever runs.
 
 Map-of-sessions for tests. Same Storage contract. PruneEpoch removes every session whose `epochID` matches.
 
+### Hybrid (`devshard/storage/hybrid.go`)
+
+Hybrid storage is used only when `PGHOST` is set. It opens SQLite fallback immediately, attempts Postgres on startup, and retries Postgres lazily when a session operation needs routing.
+
+Routing rules:
+
+- If an escrow is already cached, use the cached backend. This is the main invariant: all data for one escrow must live in one backend.
+- On a cache miss, check Postgres first when it is available. If the escrow is not found in Postgres, check SQLite before treating the session as missing.
+- `CreateSession` first checks whether the escrow already exists in either backend. Existing escrows keep using that backend. New escrows use Postgres when available, otherwise SQLite.
+- `ListActiveSessions` returns the union of both backends and warns if the same escrow appears in both.
+- `PruneEpoch` and range pruning apply to both backends when Postgres is connected.
+
+Hybrid never intentionally spreads one escrow across both stores. If an escrow was created in SQLite while Postgres was down, later diffs, signatures, finalization, and settlement continue to use SQLite even after Postgres reconnects. If an escrow was created in Postgres and Postgres is unavailable, session-keyed operations fail instead of falling back to SQLite, because falling back would split the escrow's state.
+
+Retry controls:
+
+- `PG_RETRY_INTERVAL` controls how often a failed Postgres connection is retried. Default: `240s`.
+- `PG_CONNECT_TIMEOUT` controls each lazy Postgres connect attempt. Default: `2s`.
+
 ## Factory (`devshard/storage/factory.go`)
 
 ```
 NewStorage(ctx, sqliteDir):
-  if PGHOST != "":
-      pg = NewPostgres(ctx)
-      if pg connects:
-          return pg
-      log warning, fall through
-  return NewSQLite(sqliteDir)
+  sqlite = NewSQLite(sqliteDir)
+  if PGHOST == "":
+      return sqlite
+  return NewHybridStorage(sqlite, PG_RETRY_INTERVAL, PG_CONNECT_TIMEOUT)
 ```
 
-Decision is locked for the lifetime of the process. No mid-flight reconnect, no hybrid sync. Operators that need PG must restart the process when PG comes back.
-
-Env vars used (same as `payloadstorage`): `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, `PGPASSWORD`.
+Env vars used for Postgres are the same as `payloadstorage`: `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, `PGPASSWORD`. Hybrid retry also reads `PG_RETRY_INTERVAL` and `PG_CONNECT_TIMEOUT`.
 
 ## Pruning (`devshard/storage/managed.go`)
 
@@ -156,8 +174,9 @@ Env vars used (same as `payloadstorage`): `PGHOST`, `PGPORT`, `PGDATABASE`, `PGU
 
 1. Updates `max_observed_epoch` from CreateSession calls and from an optional `EpochProvider` (chain).
 2. Computes `cutoff = max_observed_epoch + 1 - retain` (retain=3 in production).
-3. Calls `inner.PruneEpoch(e)` for every `e` in `[prunedUpTo, cutoff)`.
-4. Advances `prunedUpTo` only after each successful epoch prune. A failed prune is retried on the next pass.
+3. If the backend supports range pruning, calls `pruneBefore(cutoff)` so only existing old partitions/files are touched.
+4. Otherwise calls `inner.PruneEpoch(e)` for every `e` in `[prunedUpTo, cutoff)`.
+5. Advances `prunedUpTo` only after a successful prune. A failed prune is retried on the next pass.
 
 `EpochProvider` lets the pruner advance even on quiet hosts:
 
@@ -214,11 +233,11 @@ Payload storage uses the same session epoch. HostManager passes the epoch from s
 
 1. If `legacyPath` does not exist, return.
 2. Open the legacy single-file SQLite read-only.
-3. For each session row, call `epochResolver(escrow_id)` (typically `bridge.GetEscrow().EpochID`).
-4. Replay session + diffs + signatures into `dest` via the public Storage API.
-5. Rename legacy file to `<legacyPath>.migrated.<unix-ts>`.
+3. Resolve every session epoch before writing. Only `ErrSkipLegacySession` is treated as a safe skip.
+4. Replay resolved sessions + diffs + signatures into `dest` via the public Storage API.
+5. Rename legacy file to `<legacyPath>.migrated.<unix-ts>` only after all resolved sessions copy successfully.
 
-Idempotent. Sessions whose escrow no longer resolves on chain are skipped with a warning.
+Idempotent. Sessions whose escrow no longer exists on chain are skipped with a warning. Transient resolver errors abort migration and leave the legacy file in place for retry.
 
 Wired in `decentralized-api/main.go` and `decentralized-api/cmd/devshardd/main.go` before `HostManager.RecoverSessions`.
 
@@ -230,8 +249,9 @@ Wired in `decentralized-api/main.go` and `decentralized-api/cmd/devshardd/main.g
 | SQLite per-epoch layout | `devshard/storage/sqlite_test.go::TestSQLite_PerEpochFile_Layout` | Verifies `epoch_<N>.db` files exist; prune removes only target's files. |
 | SQLite meta sidecar | `sqlite_test.go::TestSQLite_MetaIndex_*` | Persistence across reboot; conservative repair of stale/missing `_meta.db` rows. |
 | Postgres partition drop | `devshard/storage/postgres_test.go::TestPostgres_PartitionTablesPhysicallyDropped` | Queries `pg_class`/`pg_inherits` to confirm partitions are physically gone after PruneEpoch. |
+| Hybrid routing | `devshard/storage/postgres_test.go::TestHybrid_StickySQLiteThenPostgresReconnect` | Verifies SQLite fallback during PG outage and PG routing after reconnect. |
 | Migration round-trip | `devshard/storage/migrate_test.go` | Legacy DB -> new layout, including settled status and unknown-escrow skip path. |
-| Managed retention | `devshard/storage/managed_test.go` | Retain-last-N math, EpochProvider advances on quiet hosts, retry failed prunes, reject late creates. |
+| Managed retention | `devshard/storage/managed_test.go` | Retain-last-N math, EpochProvider advances on quiet hosts, range prune, retry failed prunes, reject late creates. |
 | Integration (dapi+PG) | `testermint/src/test/kotlin/DevshardPostgresStorageTests.kt` | End-to-end: create escrow, drive inferences, settle, assert rows in `devshard_sessions/diffs/signatures` and absence of SQLite files in dapi container. Pruning test waits for ManagedStorage to drop the older partition. |
 
 ## Key Files

@@ -17,6 +17,7 @@ package main
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -45,6 +46,7 @@ import (
 	"github.com/cosmos/cosmos-sdk/crypto/keyring"
 	"github.com/cosmos/cosmos-sdk/crypto/keys/secp256k1"
 
+	devshardbridge "devshard/bridge"
 	mlnodeclient "devshard/mlnode"
 	devshardstorage "devshard/storage"
 	devshardtypes "devshard/types"
@@ -143,6 +145,9 @@ func main() {
 	if migrated, mErr := devshardstorage.MigrateLegacySQLite(legacyDB, inner, func(escrowID string) (uint64, error) {
 		info, gErr := br.GetEscrow(escrowID)
 		if gErr != nil {
+			if errors.Is(gErr, devshardbridge.ErrEscrowNotFound) {
+				return 0, devshardstorage.ErrSkipLegacySession
+			}
 			return 0, gErr
 		}
 		return info.EpochID, nil
