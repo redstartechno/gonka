@@ -2,6 +2,7 @@ package devshard
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 
@@ -309,6 +310,16 @@ func TestSessionServer_DefaultsToInitializing(t *testing.T) {
 
 	_, err := mgr.SessionServer("escrow-1")
 	require.ErrorIs(t, err, devshardserver.ErrInitializing)
+}
+
+func TestSessionServer_UnavailableIncludesCause(t *testing.T) {
+	store := newManagerTestStore(t)
+	mgr := NewHostManager(store, mustGenerateKey(t), stub.NewInferenceEngine(), stub.NewValidationEngine(), types.LegacySessionVersion, &mockBridge{}, nil, nil)
+	mgr.SetUnavailable(errors.New("boom"))
+
+	_, err := mgr.SessionServer("escrow-1")
+	require.ErrorIs(t, err, devshardserver.ErrInitializing)
+	require.Contains(t, err.Error(), "boom")
 }
 
 func TestSessionServer_GatedUntilReady(t *testing.T) {
