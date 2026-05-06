@@ -33,6 +33,7 @@ import (
 	devshardstorage "devshard/storage"
 	devshardtypes "devshard/types"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"log/slog"
@@ -42,6 +43,8 @@ import (
 	"time"
 
 	"github.com/productscience/inference/x/inference/types"
+
+	devshardbridge "devshard/bridge"
 )
 
 func main() {
@@ -238,16 +241,40 @@ func main() {
 		chainParams := &configParamsProvider{cm: configManager}
 		devshardEngine := internaldevshard.NewEngineAdapter(nodeBroker, configManager.GetCurrentNodeVersion(), payloadStore, chainPhaseTracker, httpClient, chainParams)
 		devshardValidator := internaldevshard.NewValidationAdapter(nodeBroker, configManager.GetCurrentNodeVersion(), chainPhaseTracker, httpClient, devshardBridge, recorder, chainParams)
+
+		// Per-epoch SQLite under /root/.dapi/data/devshard/, or shared Postgres
+		// (same PG vars as payloadstorage) when PGHOST is set. ManagedStorage
+		// runs the background pruner with N=3 retention.
 		// TODO: move to DevshardConfig when config consolidation happens.
-		devshardStore, storeErr := devshardstorage.NewSQLite("/root/.dapi/data/devshard.db")
+		const devshardDir = "/root/.dapi/data/devshard"
+		const devshardLegacyDB = "/root/.dapi/data/devshard.db"
+		devshardInner, storeErr := devshardstorage.NewStorage(ctx, devshardDir)
 		if storeErr != nil {
 			logging.Error("devshard storage init failed", types.System, "error", storeErr)
 		} else {
+			if migrated, mErr := devshardstorage.MigrateLegacySQLite(devshardLegacyDB, devshardInner, func(escrowID string) (uint64, error) {
+				info, err := devshardBridge.GetEscrow(escrowID)
+				if err != nil {
+					if errors.Is(err, devshardbridge.ErrEscrowNotFound) {
+						return 0, devshardstorage.ErrSkipLegacySession
+					}
+					return 0, err
+				}
+				return info.EpochID, nil
+			}); mErr != nil {
+				logging.Error("devshard legacy migration failed", types.System, "error", mErr)
+			} else if migrated > 0 {
+				logging.Info("devshard legacy migration complete", types.System, "sessions_migrated", migrated)
+			}
+
+			devshardStore := devshardstorage.NewManagedStorage(devshardInner, 3, 30*time.Second, &chainPhaseEpochProvider{tracker: chainPhaseTracker})
 			defer devshardStore.Close()
+
 			hostManager := internaldevshard.NewHostManager(devshardStore, devshardSigner, devshardEngine, devshardValidator, devshardtypes.LegacySessionVersion, devshardBridge, payloadStore, recorder)
 			if err := hostManager.RecoverSessions(); err != nil {
 				logging.Error("devshard recovery failed", types.System, "error", err)
 			}
+			devshardStore.Start()
 			hostManager.Register(publicServer.DevshardGroup())
 		}
 	}
@@ -351,4 +378,22 @@ func (p *configParamsProvider) LogprobsMode() string {
 		return types.DefaultLogprobsMode
 	}
 	return mode
+}
+
+// chainPhaseEpochProvider exposes the current chain epoch to ManagedStorage
+// so the pruner advances the retention horizon even when the host has no
+// CreateSession activity to bump max_observed_epoch from.
+type chainPhaseEpochProvider struct {
+	tracker *chainphase.ChainPhaseTracker
+}
+
+func (p *chainPhaseEpochProvider) CurrentEpochID() uint64 {
+	if p.tracker == nil {
+		return 0
+	}
+	st := p.tracker.GetCurrentEpochState()
+	if st == nil {
+		return 0
+	}
+	return st.LatestEpoch.EpochIndex
 }

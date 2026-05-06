@@ -712,11 +712,38 @@ func TestHost_ExecuteFailure_ReturnsReceiptNoMempool(t *testing.T) {
 type countingEngine struct {
 	inner *stub.InferenceEngine
 	calls int
+	last  devshard.ExecuteRequest
 }
 
 func (e *countingEngine) Execute(ctx context.Context, req devshard.ExecuteRequest) (*devshard.ExecuteResult, error) {
 	e.calls++
+	e.last = req
 	return e.inner.Execute(ctx, req)
+}
+
+func TestHost_ExecutionPayloadEpoch(t *testing.T) {
+	hosts := []*signing.Secp256k1Signer{testutil.MustGenerateKey(t), testutil.MustGenerateKey(t), testutil.MustGenerateKey(t)}
+	user := testutil.MustGenerateKey(t)
+	group := testutil.MakeGroup(hosts)
+	config := testutil.DefaultConfig(len(hosts))
+	verifier := signing.NewSecp256k1Verifier()
+	sm, err := state.NewStateMachine("escrow-1", config, group, 10000, user.Address(), verifier)
+	require.NoError(t, err)
+	engine := &countingEngine{inner: stub.NewInferenceEngine()}
+	h, err := NewHost(sm, hosts[1], engine, "escrow-1", group, nil, WithGrace(10), WithEpochID(42))
+	require.NoError(t, err)
+
+	diff := testutil.SignDiff(t, user, "escrow-1", 1, []*types.DevshardTx{testutil.StartTx(1)})
+	resp, err := h.HandleRequest(context.Background(), HostRequest{
+		Diffs: []types.Diff{diff}, Nonce: 1, Payload: defaultPayload(),
+	})
+	require.NoError(t, err)
+	require.NotNil(t, resp.ExecutionJob)
+	require.Equal(t, uint64(42), resp.ExecutionJob.EpochID)
+
+	_, err = h.RunExecution(context.Background(), resp.ExecutionJob)
+	require.NoError(t, err)
+	require.Equal(t, uint64(42), engine.last.EpochID)
 }
 
 func TestHost_SignReceipt_NoDuplicateExecution(t *testing.T) {
@@ -934,7 +961,7 @@ func TestHost_ValidationTriggersOnFinishedInference(t *testing.T) {
 	valEngine := &trackingValidationEngine{valid: true}
 	engine := stub.NewInferenceEngine()
 	h, err := NewHost(sm, hosts[0], engine, "escrow-1", group, nil,
-		WithGrace(10), WithValidator(valEngine))
+		WithGrace(10), WithValidator(valEngine), WithEpochID(42))
 	require.NoError(t, err)
 
 	// Nonce 1: StartInference (executor = slot 1, not host 0).
@@ -979,6 +1006,7 @@ func TestHost_ValidationTriggersOnFinishedInference(t *testing.T) {
 	}, 2*time.Second, 10*time.Millisecond, "validation should have been triggered")
 
 	require.Equal(t, uint64(1), valEngine.getCalls()[0].InferenceID)
+	require.Equal(t, uint64(42), valEngine.getCalls()[0].EpochID)
 
 	// MsgValidation should appear in mempool.
 	require.Eventually(t, func() bool {

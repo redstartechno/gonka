@@ -17,6 +17,7 @@ package main
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -45,6 +46,7 @@ import (
 	"github.com/cosmos/cosmos-sdk/crypto/keyring"
 	"github.com/cosmos/cosmos-sdk/crypto/keys/secp256k1"
 
+	devshardbridge "devshard/bridge"
 	mlnodeclient "devshard/mlnode"
 	devshardstorage "devshard/storage"
 	devshardtypes "devshard/types"
@@ -121,7 +123,11 @@ func main() {
 	if err := os.MkdirAll(payloadDir, 0o755); err != nil {
 		log.Fatalf("create payload dir: %v", err)
 	}
-	payloadStore := payloadstorage.NewPayloadStorage(ctx, payloadDir)
+	payloadStore := payloadstorage.NewManagedStorage(
+		payloadstorage.NewPayloadStorage(ctx, payloadDir),
+		3,
+		3*time.Minute,
+	)
 
 	httpClient := pserver.NewNoRedirectClient(5 * time.Minute)
 
@@ -130,17 +136,34 @@ func main() {
 	engine := newDevshardEngine(mlClient, payloadStore, httpClient, chainParams)
 	validator := newDevshardValidator(mlClient, httpClient, br, recorder, engine, chainParams)
 
-	storePath := filepath.Join(*dataDir, "devshardd.db")
-	store, err := devshardstorage.NewSQLite(storePath)
+	storeDir := filepath.Join(*dataDir, "devshardd")
+	legacyDB := filepath.Join(*dataDir, "devshardd.db")
+	inner, err := devshardstorage.NewStorage(ctx, storeDir)
 	if err != nil {
-		log.Fatalf("devshard sqlite: %v", err)
+		log.Fatalf("devshard storage: %v", err)
 	}
+	if migrated, mErr := devshardstorage.MigrateLegacySQLite(legacyDB, inner, func(escrowID string) (uint64, error) {
+		info, gErr := br.GetEscrow(escrowID)
+		if gErr != nil {
+			if errors.Is(gErr, devshardbridge.ErrEscrowNotFound) {
+				return 0, devshardstorage.ErrSkipLegacySession
+			}
+			return 0, gErr
+		}
+		return info.EpochID, nil
+	}); mErr != nil {
+		slog.Error("devshardd legacy migration failed", "error", mErr)
+	} else if migrated > 0 {
+		slog.Info("devshardd legacy migration complete", "sessions_migrated", migrated)
+	}
+	store := devshardstorage.NewManagedStorage(inner, 3, 30*time.Second, chainParams)
 	defer store.Close()
 
 	manager := internaldevshard.NewHostManager(store, signer, engine, validator, devshardtypes.NormalizeSessionVersion(runtimeVersion), br, payloadStore, recorder)
 	if err := manager.RecoverSessions(); err != nil {
 		slog.Warn("recover sessions failed", "error", err)
 	}
+	store.Start()
 
 	e := echo.New()
 	e.HideBanner = true
@@ -289,13 +312,16 @@ func newIgniteClient(ctx context.Context, nodeConfig apiconfig.ChainNodeConfig) 
 	return &c, nil
 }
 
-// chainParamsProvider implements internaldevshard.ChainParamsProvider for the
-// standalone devshardd binary. It queries chain params on construction and
-// refreshes in the background every 60s so long-lived processes pick up
-// governance changes without a restart.
+// chainParamsProvider implements internaldevshard.ChainParamsProvider and
+// devshardstorage.EpochProvider for the standalone devshardd binary. It
+// queries chain params + the latest epoch on construction and refreshes in
+// the background every 60s so long-lived processes pick up governance changes
+// (and so the storage pruner advances even when the host is quiet) without a
+// restart.
 type chainParamsProvider struct {
 	mu           sync.Mutex
 	logprobsMode string
+	currentEpoch uint64
 }
 
 func newChainParamsProvider(ctx context.Context, recorder internaldevshard.PayloadAuthClient) *chainParamsProvider {
@@ -306,16 +332,28 @@ func newChainParamsProvider(ctx context.Context, recorder internaldevshard.Paylo
 		resp, err := qc.Params(ctx, &chaintypes.QueryParamsRequest{})
 		if err != nil {
 			slog.Warn("failed to query chain params, keeping current values", "error", err)
+		} else {
+			mode := resp.Params.ValidationParams.GetLogprobsMode()
+			if mode == "" {
+				mode = chaintypes.DefaultLogprobsMode
+			}
+			p.mu.Lock()
+			if mode != p.logprobsMode {
+				slog.Info("logprobs_mode updated from chain", "old", p.logprobsMode, "new", mode)
+				p.logprobsMode = mode
+			}
+			p.mu.Unlock()
+		}
+
+		epochResp, eErr := qc.EpochInfo(ctx, &chaintypes.QueryEpochInfoRequest{})
+		if eErr != nil {
+			slog.Warn("failed to query current epoch", "error", eErr)
 			return
 		}
-		mode := resp.Params.ValidationParams.GetLogprobsMode()
-		if mode == "" {
-			mode = chaintypes.DefaultLogprobsMode
-		}
+		idx := epochResp.LatestEpoch.Index
 		p.mu.Lock()
-		if mode != p.logprobsMode {
-			slog.Info("logprobs_mode updated from chain", "old", p.logprobsMode, "new", mode)
-			p.logprobsMode = mode
+		if idx != p.currentEpoch {
+			p.currentEpoch = idx
 		}
 		p.mu.Unlock()
 	}
@@ -342,6 +380,12 @@ func (p *chainParamsProvider) LogprobsMode() string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.logprobsMode
+}
+
+func (p *chainParamsProvider) CurrentEpochID() uint64 {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.currentEpoch
 }
 
 func envOr(key, fallback string) string {

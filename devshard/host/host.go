@@ -46,7 +46,7 @@ type HostResponse struct {
 	ConfirmedAt        int64  // executor wall-clock timestamp, 0 if not executor
 	Mempool            []*types.DevshardTx
 	ExecutionJob       *devshard.ExecuteRequest // non-nil if this host is the executor and execution is deferred
-	CachedResponseBody []byte                 // non-nil when reconnecting to a completed inference
+	CachedResponseBody []byte                   // non-nil when reconnecting to a completed inference
 }
 
 // AcceptanceChecker is an optional hook that lets the host withhold its
@@ -66,6 +66,7 @@ type Host struct {
 	engine    devshard.InferenceEngine
 	validator devshard.ValidationEngine // optional, nil = no validation
 	escrowID  string
+	epochID   uint64
 	slotIDs   map[uint32]bool
 	group     []types.SlotAssignment
 	mempool   *Mempool
@@ -177,6 +178,12 @@ type HostOption func(*Host)
 // WithStorage sets the storage backend for diff persistence.
 func WithStorage(s storage.Storage) HostOption {
 	return func(h *Host) { h.store = s }
+}
+
+// WithEpochID pins the host to the mainnet epoch stored on its DevshardEscrow.
+// Payload storage and validation use this epoch to route across epoch changes.
+func WithEpochID(epochID uint64) HostOption {
+	return func(h *Host) { h.epochID = epochID }
 }
 
 // WithVerifier sets the signature verifier for gossip sig accumulation.
@@ -491,6 +498,7 @@ func (h *Host) signReceipt(req HostRequest) ([]byte, int64, *devshard.ExecuteReq
 			InputLength: start.InputLength,
 			MaxTokens:   start.MaxTokens,
 			EscrowID:    h.escrowID,
+			EpochID:     h.epochID,
 		}
 		return sig, confirmedAt, job, nil, nil
 	}
@@ -692,7 +700,7 @@ func (h *Host) collectValidationJobs() []validateJob {
 			outputTokens:    rec.OutputTokens,
 			escrowID:        h.escrowID,
 			executorAddress: executorAddr,
-			epochID:         0, // ValidationAdapter will use its own phaseTracker
+			epochID:         h.epochID,
 		})
 	}
 
@@ -939,6 +947,7 @@ func (h *Host) challengeReceiptLocked(inferenceID uint64, payload *InferencePayl
 		InputLength: rec.InputLength,
 		MaxTokens:   rec.MaxTokens,
 		EscrowID:    h.escrowID,
+		EpochID:     h.epochID,
 	}
 	return sig, confirmedAt, job, nil
 }

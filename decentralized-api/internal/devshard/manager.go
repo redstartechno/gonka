@@ -137,6 +137,7 @@ func (m *HostManager) create(escrowID string) (*transport.Server, error) {
 
 	if err := m.store.CreateSession(storage.CreateSessionParams{
 		EscrowID:       escrowID,
+		EpochID:        escrow.EpochID,
 		Version:        m.boundVersion,
 		CreatorAddr:    creatorAddr,
 		Config:         config,
@@ -157,6 +158,7 @@ func (m *HostManager) create(escrowID string) (*transport.Server, error) {
 	h, err := host.NewHost(sm, m.signer, m.engine, escrowID, group, nil,
 		host.WithValidator(m.validator),
 		host.WithStorage(m.store),
+		host.WithEpochID(escrow.EpochID),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("create host: %w", err)
@@ -177,7 +179,7 @@ func (m *HostManager) create(escrowID string) (*transport.Server, error) {
 // injecting warm key deltas from the stored DiffRecords. Call this on startup
 // after constructing the HostManager.
 func (m *HostManager) RecoverSessions() error {
-	escrowIDs, err := m.store.ListActiveSessions()
+	active, err := m.store.ListActiveSessions()
 	if err != nil {
 		return fmt.Errorf("list active sessions: %w", err)
 	}
@@ -185,10 +187,10 @@ func (m *HostManager) RecoverSessions() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	for _, escrowID := range escrowIDs {
-		if err := m.recoverSession(escrowID); err != nil {
+	for _, sess := range active {
+		if err := m.recoverSession(sess.EscrowID); err != nil {
 			logging.Error("skipping corrupt session", inferenceTypes.System,
-				"escrow_id", escrowID, "error", err)
+				"escrow_id", sess.EscrowID, "epoch_id", sess.EpochID, "error", err)
 		}
 	}
 
@@ -241,6 +243,7 @@ func (m *HostManager) recoverSession(escrowID string) error {
 	h, err := host.NewHost(sm, m.signer, m.engine, escrowID, meta.Group, nil,
 		host.WithValidator(m.validator),
 		host.WithStorage(m.store),
+		host.WithEpochID(meta.EpochID),
 	)
 	if err != nil {
 		return fmt.Errorf("create host: %w", err)
@@ -277,7 +280,7 @@ func (m *HostManager) HandlePayloads(c echo.Context, srv *transport.Server) erro
 		return err
 	}
 
-	// Retrieve payloads with adjacent epoch fallback
+	// Retrieve payloads with adjacent epoch fallback.
 	promptPayload, responsePayload, _, err := m.retrievePayloadsWithAdjacentEpochs(c.Request().Context(), escrowID, inferenceID, epochID)
 	if err != nil {
 		if errors.Is(err, payloadstorage.ErrNotFound) {
@@ -436,25 +439,57 @@ func (m *HostManager) retrievePayloadsWithAdjacentEpochs(ctx context.Context, es
 		return nil, nil, 0, fmt.Errorf("invalid inference_id %q: %w", inferenceID, err)
 	}
 	storageKey := devshardserver.PayloadKey(escrowID, parsedID)
-	prompt, response, err := m.payloadStore.Retrieve(ctx, storageKey, epochID)
-	if err == nil {
-		return prompt, response, epochID, nil
+
+	seen := map[uint64]struct{}{}
+	var epochs []uint64
+	addEpoch := func(epoch uint64) {
+		if _, ok := seen[epoch]; ok {
+			return
+		}
+		seen[epoch] = struct{}{}
+		epochs = append(epochs, epoch)
 	}
-	if !errors.Is(err, payloadstorage.ErrNotFound) {
-		return nil, nil, 0, err
+	addEpochWithAdjacent := func(epoch uint64) {
+		addEpoch(epoch)
+		if epoch > 0 {
+			addEpoch(epoch - 1)
+		}
+		addEpoch(epoch + 1)
 	}
 
-	// Try adjacent epochs (epoch boundary race condition)
-	adjacentEpochs := []uint64{}
-	if epochID > 0 {
-		adjacentEpochs = append(adjacentEpochs, epochID-1)
-	}
-	adjacentEpochs = append(adjacentEpochs, epochID+1)
+	addEpochWithAdjacent(epochID)
 
-	for _, adjEpoch := range adjacentEpochs {
-		prompt, response, err := m.payloadStore.Retrieve(ctx, storageKey, adjEpoch)
+	// TODO: remove after epoch-0 devshardd migration window closes.
+	// Older devshardd versions requested payloads under epoch 0. When they
+	// coexist with fixed binaries, validators can still send epoch 0 while the
+	// executor stored the immutable, hash-verified payload under the escrow epoch.
+	if meta, err := m.store.GetSessionMeta(escrowID); err == nil {
+		addEpochWithAdjacent(meta.EpochID)
+	}
+	if m.bridge != nil {
+		if info, err := m.bridge.GetEscrow(escrowID); err == nil && info != nil {
+			addEpochWithAdjacent(info.EpochID)
+		}
+	}
+	if epochID == 0 {
+		if current := currentEpochIDFromStore(m.store); current > 0 {
+			addEpoch(current)
+			addEpoch(current - 1)
+		}
+	}
+	addEpoch(0)
+
+	for _, candidateEpoch := range epochs {
+		prompt, response, err := m.payloadStore.Retrieve(ctx, storageKey, candidateEpoch)
 		if err == nil {
-			return prompt, response, adjEpoch, nil
+			if candidateEpoch != epochID {
+				logging.Info("served devshard payload from fallback epoch", inferenceTypes.System,
+					"escrow_id", escrowID,
+					"inference_id", inferenceID,
+					"requested_epoch", epochID,
+					"served_epoch", candidateEpoch)
+			}
+			return prompt, response, candidateEpoch, nil
 		}
 		if !errors.Is(err, payloadstorage.ErrNotFound) {
 			return nil, nil, 0, err
@@ -462,6 +497,16 @@ func (m *HostManager) retrievePayloadsWithAdjacentEpochs(ctx context.Context, es
 	}
 
 	return nil, nil, 0, payloadstorage.ErrNotFound
+}
+
+func currentEpochIDFromStore(store storage.Storage) uint64 {
+	type currentEpochProvider interface {
+		CurrentEpochID() uint64
+	}
+	if p, ok := store.(currentEpochProvider); ok {
+		return p.CurrentEpochID()
+	}
+	return 0
 }
 
 // signPayloadResponse signs the payload response using the same scheme as the public endpoint.
