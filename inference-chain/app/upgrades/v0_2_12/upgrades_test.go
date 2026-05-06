@@ -199,7 +199,7 @@ func TestMigrateParams(t *testing.T) {
 	require.Equal(t, int64(5), got.DelegationParams.DeployWindow)
 	require.Equal(t, defaults.VMin, got.DelegationParams.VMin)
 	require.Equal(t, defaults.WThreshold, got.DelegationParams.WThreshold)
-	require.Equal(t, inferencetypes.DecimalFromFloat(1.5), got.DelegationParams.CapFactor)
+	require.Equal(t, inferencetypes.DecimalFromFloat(0.75), got.DelegationParams.CapFactor)
 	require.Equal(t, inferencetypes.DecimalFromFloat(0.05), got.DelegationParams.DelegationShare)
 	require.Equal(t, inferencetypes.DecimalFromFloat(0.1), got.DelegationParams.RefusalPenalty)
 	require.Equal(t, inferencetypes.DecimalFromFloat(0.15), got.DelegationParams.NoParticipationPenalty)

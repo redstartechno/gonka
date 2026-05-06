@@ -512,7 +512,7 @@ func (am AppModule) EndBlock(ctx context.Context) error {
 	if epochContext.IsStartOfPoCValidationStage(blockHeight) {
 		upcomingEpoch, found := am.keeper.GetUpcomingEpoch(ctx)
 		if found && upcomingEpoch != nil {
-			am.captureDelegationSnapshot(ctx, blockHeight)
+			am.captureDelegationSnapshot(ctx, blockHeight, upcomingEpoch.PocStartBlockHeight)
 			am.captureValidationSnapshot(ctx, blockHeight, upcomingEpoch.PocStartBlockHeight, "regular PoC")
 		} else {
 			am.LogError("captureValidationSnapshot: Unable to get upcoming epoch", types.PoC)
@@ -896,7 +896,6 @@ type effectiveValidationBaseState struct {
 	weights                   map[string]int64
 	totalWeight               int64
 	existingModelVotingPowers []*types.ModelVotingPowers
-	perModelPocWeights        map[string]map[string]int64 // model_id -> member -> raw pocWeight from N-1
 }
 
 // getEffectiveValidationBaseState reads consensus weights and per-model voting
@@ -952,7 +951,6 @@ func (am AppModule) getEffectiveValidationBaseState(ctx context.Context) effecti
 	}
 
 	modelVPMap := make(map[string]map[string]int64)
-	perModelPocWeights := make(map[string]map[string]int64)
 	for _, modelID := range rootGroupData.SubGroupModels {
 		subGroup, err := currentGroup.GetSubGroup(ctx, modelID)
 		if err != nil || subGroup == nil {
@@ -976,12 +974,6 @@ func (am AppModule) getEffectiveValidationBaseState(ctx context.Context) effecti
 				}
 				modelVPMap[modelID][vw.MemberAddress] = vw.VotingPower
 			}
-			if vw.Weight > 0 {
-				if perModelPocWeights[modelID] == nil {
-					perModelPocWeights[modelID] = make(map[string]int64)
-				}
-				perModelPocWeights[modelID][vw.MemberAddress] = vw.Weight
-			}
 		}
 	}
 
@@ -990,7 +982,6 @@ func (am AppModule) getEffectiveValidationBaseState(ctx context.Context) effecti
 		weights:                   consensusWeights,
 		totalWeight:               totalWeight,
 		existingModelVotingPowers: modelVPMapToSlice(modelVPMap),
-		perModelPocWeights:        perModelPocWeights,
 	}
 }
 

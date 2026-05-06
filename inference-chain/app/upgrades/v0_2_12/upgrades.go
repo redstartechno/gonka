@@ -603,7 +603,7 @@ func modelActivationEpoch(ctx context.Context, k keeper.Keeper, modelID string) 
 			"model_id", modelID, "penalty_start_epoch", 2)
 		return 2
 	}
-	return epochIndex + 2
+	return epochIndex + 3
 }
 
 func ensureKimiPoCModelConfig(ctx context.Context, k keeper.Keeper, poc *types.PocParams) bool {
@@ -689,7 +689,7 @@ func migrateParams(ctx context.Context, k keeper.Keeper) error {
 	params.DelegationParams.RefusalPenalty = types.DecimalFromFloat(0.1)
 	params.DelegationParams.NoParticipationPenalty = types.DecimalFromFloat(0.15)
 	params.DelegationParams.DelegationShare = types.DecimalFromFloat(0.05)
-	params.DelegationParams.CapFactor = types.DecimalFromFloat(1.5)
+	params.DelegationParams.CapFactor = types.DecimalFromFloat(0.75)
 	params.DelegationParams.DeployWindow = 500
 	if isTestnet {
 		params.DelegationParams.DeployWindow = 5
