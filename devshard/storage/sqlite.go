@@ -418,6 +418,7 @@ func (s *SQLite) CreateSession(params CreateSessionParams) error {
 	if err != nil {
 		return fmt.Errorf("marshal group: %w", err)
 	}
+	requestedVersion := types.NormalizeSessionVersion(params.Version)
 
 	s.createMu.Lock()
 	defer s.createMu.Unlock()
@@ -443,11 +444,21 @@ func (s *SQLite) CreateSession(params CreateSessionParams) error {
 	if err != nil {
 		return err
 	}
+	if mapped || s.sessionExists(p, params.EscrowID) {
+		version, err := s.sessionVersion(p, params.EscrowID)
+		if err != nil {
+			return err
+		}
+		if version != requestedVersion {
+			return fmt.Errorf("%w: escrow %s exists with version %s, requested %s",
+				ErrSessionVersionConflict, params.EscrowID, version, requestedVersion)
+		}
+	}
 
 	_, err = p.writeDB.Exec(
 		`INSERT OR IGNORE INTO sessions (escrow_id, version, creator_addr, config_json, group_json, initial_balance)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
-		params.EscrowID, types.NormalizeSessionVersion(params.Version), params.CreatorAddr, string(configJSON), string(groupJSON), params.InitialBalance,
+		params.EscrowID, requestedVersion, params.CreatorAddr, string(configJSON), string(groupJSON), params.InitialBalance,
 	)
 	if err != nil {
 		return fmt.Errorf("insert session: %w", err)
@@ -466,6 +477,27 @@ func (s *SQLite) CreateSession(params CreateSessionParams) error {
 	s.escrowIdx[params.EscrowID] = params.EpochID
 	s.mu.Unlock()
 	return nil
+}
+
+func (s *SQLite) sessionExists(p *epochPool, escrowID string) bool {
+	var exists int
+	err := p.readDB.QueryRow(`SELECT 1 FROM sessions WHERE escrow_id = ?`, escrowID).Scan(&exists)
+	return err == nil
+}
+
+func (s *SQLite) sessionVersion(p *epochPool, escrowID string) (string, error) {
+	var version sql.NullString
+	err := p.readDB.QueryRow(`SELECT version FROM sessions WHERE escrow_id = ?`, escrowID).Scan(&version)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return "", fmt.Errorf("%w: %s", ErrSessionNotFound, escrowID)
+		}
+		return "", err
+	}
+	if version.Valid {
+		return types.NormalizeSessionVersion(version.String), nil
+	}
+	return types.LegacySessionVersion, nil
 }
 
 func (s *SQLite) findSessionEpoch(escrowID string) (uint64, bool, error) {

@@ -172,16 +172,31 @@ Consequence:
 - The legacy DB is renamed only after all resolved sessions are copied or
   verified.
 
+### Escrow ID Is Pinned To One Version
+
+Decision: `escrow_id` maps to exactly one `(epoch_id, version)` pair.
+
+Why: `versiond` can run multiple `devshardd` versions at the same time, and
+Postgres is shared across those processes. A request routed to the wrong version
+must not attach to an existing escrow and replay it with different state-machine
+rules.
+
+Consequence: `CreateSession` is idempotent only when both epoch and version
+match. Same escrow and epoch with a different version returns a version conflict.
+Recovery also skips sessions whose stored version does not match the running
+binary.
+
 ### Duplicate Create Metadata Is Not Rewritten
 
 Decision: `CreateSession` is idempotent for the same `(escrow_id, epoch_id)` and
-does not update existing metadata.
+version and does not update existing metadata.
 
 Why: The chain pins the escrow. Recreating a session should not mutate its local
 state after diffs may already exist.
 
 Consequence: Callers that attempt to create the same escrow with different
-metadata keep the first row. Conflicting epoch creates return an error.
+non-version metadata keep the first row. Conflicting epoch or version creates
+return an error.
 
 ## Load Readiness
 

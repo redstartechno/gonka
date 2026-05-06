@@ -74,6 +74,9 @@ func TestPostgres_CreateSession_Idempotent(t *testing.T) {
 func TestPostgres_CreateSession_ConflictingEpoch(t *testing.T) {
 	runCreateSession_ConflictingEpoch(t, newTestPostgres(t))
 }
+func TestPostgres_CreateSession_ConflictingVersion(t *testing.T) {
+	runCreateSession_ConflictingVersion(t, newTestPostgres(t))
+}
 func TestPostgres_AppendDiff_GetDiffs(t *testing.T) {
 	runAppendDiff_GetDiffs(t, newTestPostgres(t))
 }

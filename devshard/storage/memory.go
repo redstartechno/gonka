@@ -65,10 +65,15 @@ func (m *Memory) CreateSession(params CreateSessionParams) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	requestedVersion := types.NormalizeSessionVersion(params.Version)
 	if existing, exists := m.sessions[params.EscrowID]; exists {
 		if existing.epochID != params.EpochID {
 			return fmt.Errorf("%w: escrow %s exists in epoch %d, requested epoch %d",
 				ErrSessionEpochConflict, params.EscrowID, existing.epochID, params.EpochID)
+		}
+		if existing.version != requestedVersion {
+			return fmt.Errorf("%w: escrow %s exists with version %s, requested %s",
+				ErrSessionVersionConflict, params.EscrowID, existing.version, requestedVersion)
 		}
 		return nil
 	}
@@ -76,7 +81,7 @@ func (m *Memory) CreateSession(params CreateSessionParams) error {
 	m.sessions[params.EscrowID] = &sessionData{
 		escrowID:     params.EscrowID,
 		epochID:      params.EpochID,
-		version:      types.NormalizeSessionVersion(params.Version),
+		version:      requestedVersion,
 		creatorAddr:  params.CreatorAddr,
 		config:       params.Config,
 		group:        copyGroup(params.Group),

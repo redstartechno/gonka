@@ -100,6 +100,10 @@ func TestSQLite_CreateSession_ConflictingEpoch(t *testing.T) {
 	runCreateSession_ConflictingEpoch(t, newTestSQLite(t))
 }
 
+func TestSQLite_CreateSession_ConflictingVersion(t *testing.T) {
+	runCreateSession_ConflictingVersion(t, newTestSQLite(t))
+}
+
 func TestSQLite_AppendDiff_GetDiffs(t *testing.T) {
 	runAppendDiff_GetDiffs(t, newTestSQLite(t))
 }

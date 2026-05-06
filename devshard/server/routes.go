@@ -1,10 +1,12 @@
 package server
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/labstack/echo/v4"
 
+	"devshard/storage"
 	"devshard/transport"
 )
 
@@ -43,7 +45,7 @@ func RegisterLazySessionRoutes(g *echo.Group, resolver SessionResolver, payloadH
 		g.GET("/sessions/:id/payloads", func(c echo.Context) error {
 			srv, err := resolver.SessionServer(c.Param("id"))
 			if err != nil {
-				return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+				return sessionHTTPError(err)
 			}
 			return payloadHandler.HandlePayloads(c, srv)
 		})
@@ -57,7 +59,7 @@ func withSession(
 	return func(c echo.Context) error {
 		srv, err := resolver.SessionServer(c.Param("id"))
 		if err != nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+			return sessionHTTPError(err)
 		}
 		return pick(srv)(c)
 	}
@@ -70,8 +72,15 @@ func withSessionAuth(
 	return func(c echo.Context) error {
 		srv, err := resolver.SessionServer(c.Param("id"))
 		if err != nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+			return sessionHTTPError(err)
 		}
 		return srv.AuthMiddleware(pick(srv))(c)
 	}
+}
+
+func sessionHTTPError(err error) error {
+	if errors.Is(err, storage.ErrSessionVersionConflict) || errors.Is(err, storage.ErrSessionEpochConflict) {
+		return echo.NewHTTPError(http.StatusConflict, err.Error())
+	}
+	return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 }

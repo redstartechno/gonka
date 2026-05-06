@@ -295,6 +295,44 @@ func TestCreateSession_BindsConfiguredVersion(t *testing.T) {
 	require.Equal(t, standaloneVersion, meta.Version)
 }
 
+func TestCreateSession_RejectsExistingDifferentVersion(t *testing.T) {
+	store := newManagerTestStore(t)
+	hosts := make([]*signing.Secp256k1Signer, 3)
+	for i := range hosts {
+		hosts[i] = mustGenerateKey(t)
+	}
+	user := mustGenerateKey(t)
+	group := makeGroup(hosts)
+	addresses := make([]string, len(group))
+	for i, s := range group {
+		addresses[i] = s.ValidatorAddress
+	}
+	require.NoError(t, store.CreateSession(storage.CreateSessionParams{
+		EscrowID:       "escrow-1",
+		EpochID:        7,
+		Version:        "v1",
+		CreatorAddr:    user.Address(),
+		Config:         types.SessionConfigWithPrice(len(group), 1),
+		Group:          group,
+		InitialBalance: 100000,
+	}))
+
+	br := &mockBridge{
+		escrow: &bridge.EscrowInfo{
+			EscrowID:       "escrow-1",
+			Amount:         100000,
+			CreatorAddress: user.Address(),
+			Slots:          addresses,
+			EpochID:        7,
+			TokenPrice:     1,
+		},
+	}
+
+	mgr := NewHostManager(store, hosts[0], stub.NewInferenceEngine(), stub.NewValidationEngine(), "v2", br, nil, nil)
+	_, err := mgr.getOrCreate("escrow-1")
+	require.ErrorIs(t, err, storage.ErrSessionVersionConflict)
+}
+
 func TestRetrievePayloadsFallsBackToChainEscrowEpoch(t *testing.T) {
 	store := newManagerTestStore(t)
 	payloadStore := &mockPayloadStore{}

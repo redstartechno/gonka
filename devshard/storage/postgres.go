@@ -263,6 +263,7 @@ func (s *Postgres) CreateSession(params CreateSessionParams) error {
 	if err != nil {
 		return fmt.Errorf("marshal group: %w", err)
 	}
+	requestedVersion := types.NormalizeSessionVersion(params.Version)
 
 	ctx := context.Background()
 	if err := s.ensurePartition(ctx, params.EpochID); err != nil {
@@ -313,11 +314,26 @@ func (s *Postgres) CreateSession(params CreateSessionParams) error {
 		    (epoch_id, escrow_id, version, creator_addr, config_json, group_json, initial_balance)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7)
 		 ON CONFLICT (epoch_id, escrow_id) DO NOTHING`,
-		params.EpochID, params.EscrowID, types.NormalizeSessionVersion(params.Version),
+		params.EpochID, params.EscrowID, requestedVersion,
 		params.CreatorAddr, string(configJSON), string(groupJSON), params.InitialBalance,
 	)
 	if err != nil {
 		return fmt.Errorf("insert session: %w", err)
+	}
+	var storedVersion *string
+	if err := tx.QueryRow(ctx,
+		`SELECT version FROM devshard_sessions WHERE epoch_id = $1 AND escrow_id = $2`,
+		params.EpochID, params.EscrowID,
+	).Scan(&storedVersion); err != nil {
+		return fmt.Errorf("read session version: %w", err)
+	}
+	normalizedStoredVersion := types.LegacySessionVersion
+	if storedVersion != nil {
+		normalizedStoredVersion = types.NormalizeSessionVersion(*storedVersion)
+	}
+	if normalizedStoredVersion != requestedVersion {
+		return fmt.Errorf("%w: escrow %s exists with version %s, requested %s",
+			ErrSessionVersionConflict, params.EscrowID, normalizedStoredVersion, requestedVersion)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return err

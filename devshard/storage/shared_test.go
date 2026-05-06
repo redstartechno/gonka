@@ -95,6 +95,20 @@ func runCreateSession_ConflictingEpoch(t *testing.T, store Storage) {
 	require.Equal(t, uint64(7), meta.EpochID)
 }
 
+func runCreateSession_ConflictingVersion(t *testing.T, store Storage) {
+	t.Helper()
+
+	require.NoError(t, store.CreateSession(defaultParams()))
+	p := defaultParams()
+	p.Version = "v2"
+	err := store.CreateSession(p)
+	require.ErrorIs(t, err, ErrSessionVersionConflict)
+
+	meta, metaErr := store.GetSessionMeta("escrow-1")
+	require.NoError(t, metaErr)
+	require.Equal(t, types.LegacySessionVersion, meta.Version)
+}
+
 func runAppendDiff_GetDiffs(t *testing.T, store Storage) {
 	t.Helper()
 

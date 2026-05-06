@@ -14,6 +14,12 @@ var ErrSessionNotFound = errors.New("session not found")
 // DevshardEscrow, so local storage must not choose a different epoch silently.
 var ErrSessionEpochConflict = errors.New("session epoch conflict")
 
+// ErrSessionVersionConflict is returned when an escrow already belongs to a
+// different devshard protocol version. Versiond can run multiple devshardd
+// versions against the same Postgres database, so storage pins one version per
+// escrow to prevent wrong-version state machines from attaching to live state.
+var ErrSessionVersionConflict = errors.New("session version conflict")
+
 // ErrEpochPruned is returned when a managed store is asked to create a session
 // in an epoch that has already passed the local retention horizon.
 var ErrEpochPruned = errors.New("epoch already pruned")
