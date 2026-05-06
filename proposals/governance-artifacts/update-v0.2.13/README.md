@@ -6,6 +6,9 @@ The release fixes confirmation PoC reward accounting, devshard escrow params,
 complaint-response authz grants, upstream response parsing, participant
 reactivation, node-manager gRPC defaults, and devshard storage growth.
 
+The upgrade also disables confirmation PoC for the rest of the upgrade epoch
+so the new snapshot logic starts cleanly from the next epoch.
+
 ## Upgrade Plan
 
 The node binary is upgraded through an on-chain software upgrade proposal.
@@ -36,6 +39,9 @@ Migrations:
   ML ops pairs. v0.2.12 added this message to the permission list but did not
   migrate existing grants, so DAPIs that joined before v0.2.12 could not respond
   to dealer complaints.
+- Disables confirmation PoC triggers for the rest of the upgrade epoch via a
+  grace-epoch `UpgradeProtectionWindow` of 3000 blocks. The new snapshot logic
+  starts from the next epoch.
 
 ## Changes
 
