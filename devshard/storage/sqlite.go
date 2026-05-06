@@ -32,11 +32,8 @@ import (
 // at the retention horizon.
 //
 // _meta.db is the explicit, persistent home for the escrow_id -> epoch_id
-// mapping. It is the single source of truth at boot: NewSQLite reads only
-// _meta.db, and per-epoch DBs open lazily on first access. This avoids
-// touching every epoch_*.db just to learn which escrow lives where, and it
-// gives us an explicit table to reason about instead of an implicit cache
-// derived from per-row scans.
+// mapping. NewSQLite reads it first, then runs an eager reconcile over existing
+// epoch_*.db files to repair crash leftovers and detect split escrows.
 //
 // Each epoch file still holds the three-table schema: sessions, diffs,
 // signatures. The session row carries the same metadata it always did
@@ -46,6 +43,7 @@ type SQLite struct {
 	metaDB  *sql.DB
 
 	mu        sync.RWMutex
+	createMu  sync.Mutex
 	pools     map[uint64]*epochPool
 	escrowIdx map[string]uint64
 }
@@ -420,6 +418,9 @@ func (s *SQLite) CreateSession(params CreateSessionParams) error {
 	if err != nil {
 		return fmt.Errorf("marshal group: %w", err)
 	}
+
+	s.createMu.Lock()
+	defer s.createMu.Unlock()
 
 	s.mu.RLock()
 	mappedEpoch, mapped := s.escrowIdx[params.EscrowID]

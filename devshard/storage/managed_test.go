@@ -20,9 +20,8 @@ func (f *fixedEpoch) CurrentEpochID() uint64 { return f.n }
 func newManagedForTest(t *testing.T, retain uint64, ep EpochProvider) (*ManagedStorage, *Memory) {
 	t.Helper()
 	mem := NewMemory()
-	// Long pruneInterval so the background goroutine does not race with
-	// our explicit PruneOnce calls. The constructor still runs one initial
-	// pass; we will trigger the rest manually.
+	// Long pruneInterval because tests drive pruning with explicit PruneOnce
+	// calls instead of starting the background loop.
 	m := NewManagedStorage(mem, retain, time.Hour, ep)
 	t.Cleanup(func() { _ = m.Close() })
 	return m, mem

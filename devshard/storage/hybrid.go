@@ -26,8 +26,9 @@ type hybridRoute struct {
 }
 
 // HybridStorage uses Postgres for new sessions when it is available and keeps
-// SQLite as a local fallback while Postgres is down. Once an escrow is found in
-// a backend, all future session-keyed calls for that escrow are routed there.
+// SQLite as a local-only fallback while Postgres is down. Once an escrow is
+// found in a backend, all future session-keyed calls for that escrow are routed
+// there; devshard state is never merged between backends.
 type HybridStorage struct {
 	sqlite *SQLite
 
@@ -219,8 +220,8 @@ func (h *HybridStorage) ListActiveSessions() ([]ActiveSession, error) {
 	}
 	for _, sess := range pgActive {
 		if _, ok := seen[sess.EscrowID]; ok {
-			slog.Warn("devshard storage: escrow present in sqlite and postgres", "escrow_id", sess.EscrowID)
-			continue
+			return nil, fmt.Errorf("%w: escrow %s present in sqlite and postgres",
+				ErrSessionEpochConflict, sess.EscrowID)
 		}
 		result = append(result, sess)
 		h.remember(sess.EscrowID, hybridPostgres, sess.EpochID)
@@ -289,6 +290,8 @@ func (h *HybridStorage) PruneEpoch(epochID uint64) error {
 	var pgErr error
 	if pg := h.currentPostgres(); pg != nil {
 		pgErr = pg.PruneEpoch(epochID)
+	} else {
+		pgErr = fmt.Errorf("postgres backend unavailable for prune")
 	}
 	h.forgetPruned(func(ep uint64) bool { return ep == epochID })
 	if pgErr != nil {
@@ -302,6 +305,8 @@ func (h *HybridStorage) pruneBefore(cutoff uint64) error {
 	var pgErr error
 	if pg := h.currentPostgres(); pg != nil {
 		pgErr = pg.pruneBefore(cutoff)
+	} else {
+		pgErr = fmt.Errorf("postgres backend unavailable for prune")
 	}
 	h.forgetPruned(func(ep uint64) bool { return ep < cutoff })
 	if pgErr != nil {

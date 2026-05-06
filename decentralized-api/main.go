@@ -274,6 +274,7 @@ func main() {
 			if err := hostManager.RecoverSessions(); err != nil {
 				logging.Error("devshard recovery failed", types.System, "error", err)
 			}
+			devshardStore.Start()
 			hostManager.Register(publicServer.DevshardGroup())
 		}
 	}

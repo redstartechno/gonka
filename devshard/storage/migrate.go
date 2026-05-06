@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"bytes"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -11,6 +12,8 @@ import (
 	"time"
 
 	"devshard/types"
+
+	"google.golang.org/protobuf/proto"
 
 	_ "modernc.org/sqlite"
 )
@@ -33,10 +36,11 @@ var ErrSkipLegacySession = errors.New("skip legacy session")
 // No-op if legacyPath does not exist. Returns the number of sessions moved.
 //
 // Migration runs through the public Storage API of dest, so it works against
-// both the per-epoch SQLite backend and the Postgres backend. Sessions whose
-// escrow is explicitly marked with ErrSkipLegacySession are skipped with a
-// warning. Other resolver errors abort before copying and leave legacyPath in
-// place for a retry.
+// both the per-epoch SQLite backend and the Postgres backend. The copy path is
+// resumable: already-copied diffs are verified, missing signatures are replayed,
+// and conflicting destination rows stop the migration. Sessions whose escrow is
+// explicitly marked with ErrSkipLegacySession are skipped with a warning. Other
+// resolver errors abort before copying and leave legacyPath in place for a retry.
 func MigrateLegacySQLite(legacyPath string, dest Storage, resolveEpoch EpochResolver) (int, error) {
 	info, err := os.Stat(legacyPath)
 	if err != nil {
@@ -145,8 +149,16 @@ func MigrateLegacySQLite(legacyPath string, dest Storage, resolveEpoch EpochReso
 		}); err != nil {
 			return migrated, fmt.Errorf("create session %s: %w", ls.escrowID, err)
 		}
+		meta, err := dest.GetSessionMeta(ls.escrowID)
+		if err != nil {
+			return migrated, fmt.Errorf("read migrated session %s: %w", ls.escrowID, err)
+		}
+		if meta.EpochID != epochID {
+			return migrated, fmt.Errorf("%w: escrow %s migrated epoch %d, expected %d",
+				ErrSessionEpochConflict, ls.escrowID, meta.EpochID, epochID)
+		}
 
-		if err := migrateLegacyDiffs(src, dest, ls.escrowID); err != nil {
+		if err := migrateLegacyDiffs(src, dest, ls.escrowID, meta.LatestNonce); err != nil {
 			return migrated, fmt.Errorf("migrate diffs for %s: %w", ls.escrowID, err)
 		}
 
@@ -184,7 +196,7 @@ func MigrateLegacySQLite(legacyPath string, dest Storage, resolveEpoch EpochReso
 	return migrated, nil
 }
 
-func migrateLegacyDiffs(src *sql.DB, dest Storage, escrowID string) error {
+func migrateLegacyDiffs(src *sql.DB, dest Storage, escrowID string, copiedThrough uint64) error {
 	rows, err := src.Query(
 		`SELECT nonce, txs_proto, user_sig, post_state_root, state_hash, warm_keys_json, created_at
 		 FROM diffs WHERE escrow_id = ? ORDER BY nonce`,
@@ -264,9 +276,74 @@ func migrateLegacyDiffs(src *sql.DB, dest Storage, escrowID string) error {
 		}
 		rec.Signatures = sigs
 
-		if err := dest.AppendDiff(escrowID, rec); err != nil {
-			return fmt.Errorf("append diff nonce %d: %w", d.nonce, err)
+		if d.nonce > copiedThrough {
+			if err := dest.AppendDiff(escrowID, rec); err != nil {
+				return fmt.Errorf("append diff nonce %d: %w", d.nonce, err)
+			}
+			continue
+		}
+
+		existing, err := dest.GetDiffs(escrowID, d.nonce, d.nonce)
+		if err != nil {
+			return fmt.Errorf("read existing diff nonce %d: %w", d.nonce, err)
+		}
+		if len(existing) != 1 {
+			return fmt.Errorf("expected one copied diff for %s nonce %d, got %d", escrowID, d.nonce, len(existing))
+		}
+		if err := verifyMigratedDiff(escrowID, rec, existing[0]); err != nil {
+			return err
+		}
+		for slotID, sig := range sigs {
+			if err := dest.AddSignature(escrowID, d.nonce, slotID, sig); err != nil {
+				return fmt.Errorf("replay sig nonce %d slot %d: %w", d.nonce, slotID, err)
+			}
 		}
 	}
 	return nil
+}
+
+func verifyMigratedDiff(escrowID string, expected, actual types.DiffRecord) error {
+	if expected.Nonce != actual.Nonce ||
+		!bytes.Equal(expected.UserSig, actual.UserSig) ||
+		!bytes.Equal(expected.PostStateRoot, actual.PostStateRoot) ||
+		!bytes.Equal(expected.StateHash, actual.StateHash) ||
+		expected.CreatedAt != actual.CreatedAt {
+		return fmt.Errorf("migrated diff conflict for %s nonce %d", escrowID, expected.Nonce)
+	}
+	if !equalWarmKeyDelta(expected.WarmKeyDelta, actual.WarmKeyDelta) {
+		return fmt.Errorf("migrated warm-key conflict for %s nonce %d", escrowID, expected.Nonce)
+	}
+	if !equalTxs(expected.Txs, actual.Txs) {
+		return fmt.Errorf("migrated tx conflict for %s nonce %d", escrowID, expected.Nonce)
+	}
+	for slotID, sig := range expected.Signatures {
+		if actualSig, ok := actual.Signatures[slotID]; ok && !bytes.Equal(sig, actualSig) {
+			return fmt.Errorf("migrated signature conflict for %s nonce %d slot %d", escrowID, expected.Nonce, slotID)
+		}
+	}
+	return nil
+}
+
+func equalWarmKeyDelta(a, b map[uint32]string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k, av := range a {
+		if b[k] != av {
+			return false
+		}
+	}
+	return true
+}
+
+func equalTxs(a, b []*types.DevshardTx) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if !proto.Equal(a[i], b[i]) {
+			return false
+		}
+	}
+	return true
 }

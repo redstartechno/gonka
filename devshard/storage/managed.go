@@ -39,13 +39,15 @@ type ManagedStorage struct {
 	mu         sync.Mutex
 	prunedUpTo uint64 // exclusive: every epoch < prunedUpTo has been pruned
 
-	stop chan struct{}
-	done chan struct{}
+	lifecycleMu sync.Mutex
+	started     bool
+	stop        chan struct{}
+	done        chan struct{}
 }
 
-// NewManagedStorage wraps inner with a background pruner that retains the
-// last `retain` epochs (current epoch counts as one of them, so retain=3
-// keeps current + 2 previous).
+// NewManagedStorage wraps inner with a pruner that retains the last `retain`
+// epochs (current epoch counts as one of them, so retain=3 keeps current + 2
+// previous). Call Start after migration/recovery to enable the background loop.
 //
 // epochs is optional. If non-nil, the pruner consults it on every tick so the
 // retention horizon advances even on quiet hosts. Pass nil in tests where you
@@ -67,7 +69,6 @@ func NewManagedStorage(inner Storage, retain uint64, pruneInterval time.Duration
 	}
 	_, hasRangePrune := inner.(rangePruner)
 	slog.Info("devshard managed storage initialized", "range_prune", hasRangePrune, "retain", retain)
-	go m.loop()
 	return m
 }
 
@@ -87,9 +88,6 @@ func (m *ManagedStorage) loop() {
 	defer close(m.done)
 	t := time.NewTicker(m.pruneInterval)
 	defer t.Stop()
-	// Run one pass immediately so a fresh process catches up on stale epochs
-	// without waiting for the first tick.
-	m.PruneOnce(context.Background())
 	for {
 		select {
 		case <-m.stop:
@@ -98,6 +96,18 @@ func (m *ManagedStorage) loop() {
 			m.PruneOnce(context.Background())
 		}
 	}
+}
+
+// Start enables the background pruning loop. It is idempotent so callers can
+// wire it after recovery without coordinating ownership.
+func (m *ManagedStorage) Start() {
+	m.lifecycleMu.Lock()
+	defer m.lifecycleMu.Unlock()
+	if m.started {
+		return
+	}
+	m.started = true
+	go m.loop()
 }
 
 // PruneOnce runs a single retention pass. Exported so tests can drive the
@@ -140,8 +150,16 @@ func (m *ManagedStorage) PruneOnce(_ context.Context) {
 
 // Close stops the background pruner and closes the wrapped store.
 func (m *ManagedStorage) Close() error {
+	m.lifecycleMu.Lock()
+	if !m.started {
+		m.lifecycleMu.Unlock()
+		return m.inner.Close()
+	}
 	close(m.stop)
-	<-m.done
+	m.started = false
+	done := m.done
+	m.lifecycleMu.Unlock()
+	<-done
 	return m.inner.Close()
 }
 

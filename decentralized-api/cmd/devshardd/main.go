@@ -163,6 +163,7 @@ func main() {
 	if err := manager.RecoverSessions(); err != nil {
 		slog.Warn("recover sessions failed", "error", err)
 	}
+	store.Start()
 
 	e := echo.New()
 	e.HideBanner = true

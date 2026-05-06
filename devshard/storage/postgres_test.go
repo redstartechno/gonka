@@ -1,9 +1,7 @@
 package storage
 
 import (
-	"bytes"
 	"context"
-	"log/slog"
 	"sort"
 	"testing"
 	"time"
@@ -287,7 +285,7 @@ func TestHybrid_StickySQLiteThenPostgresReconnect(t *testing.T) {
 	require.Equal(t, uint64(3), restartedMeta.LatestNonce)
 }
 
-func TestHybrid_ListActiveSessionsWarnsOnDuplicateEscrow(t *testing.T) {
+func TestHybrid_ListActiveSessionsErrorsOnDuplicateEscrow(t *testing.T) {
 	cleanup := setupPostgresContainer(t)
 	defer cleanup()
 
@@ -301,16 +299,9 @@ func TestHybrid_ListActiveSessionsWarnsOnDuplicateEscrow(t *testing.T) {
 	require.NoError(t, sqlite.CreateSession(paramsForEpoch("dup", 7)))
 	require.NoError(t, pg.CreateSession(paramsForEpoch("dup", 7)))
 
-	var logs bytes.Buffer
-	oldLogger := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
-	t.Cleanup(func() { slog.SetDefault(oldLogger) })
-
 	active, err := hybrid.ListActiveSessions()
-	require.NoError(t, err)
-	require.Len(t, active, 1)
-	require.Equal(t, "dup", active[0].EscrowID)
-	require.Contains(t, logs.String(), "escrow present in sqlite and postgres")
+	require.ErrorIs(t, err, ErrSessionEpochConflict)
+	require.Nil(t, active)
 }
 
 func TestHybrid_PruneEpochPrunesBothBackendsAndRoutes(t *testing.T) {
@@ -386,6 +377,33 @@ func TestHybrid_PruneBeforePrunesBothBackendsAndRoutes(t *testing.T) {
 	require.Contains(t, hybrid.routes, "sqlite-new")
 	require.Contains(t, hybrid.routes, "pg-new")
 	hybrid.mu.Unlock()
+}
+
+func TestHybrid_PruneBeforeReturnsErrorWhenPostgresUnavailable(t *testing.T) {
+	t.Setenv("PGHOST", "127.0.0.1")
+	t.Setenv("PGPORT", "1")
+	t.Setenv("PGDATABASE", "missing")
+	t.Setenv("PGUSER", "missing")
+	t.Setenv("PGPASSWORD", "missing")
+
+	sqlite, err := NewSQLite(t.TempDir())
+	require.NoError(t, err)
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	hybrid := NewHybridStorage(ctx, sqlite, time.Hour, defaultPGConnectTimeout)
+	cancel()
+	t.Cleanup(func() { _ = hybrid.Close() })
+	require.Nil(t, hybrid.currentPostgres())
+
+	require.NoError(t, hybrid.CreateSession(paramsForEpoch("sqlite-old", 2)))
+	require.NoError(t, hybrid.CreateSession(paramsForEpoch("sqlite-new", 8)))
+
+	err = hybrid.pruneBefore(5)
+	require.ErrorContains(t, err, "postgres backend unavailable for prune")
+
+	_, err = sqlite.GetSessionMeta("sqlite-old")
+	require.ErrorIs(t, err, ErrSessionNotFound)
+	_, err = sqlite.GetSessionMeta("sqlite-new")
+	require.NoError(t, err)
 }
 
 func TestHybrid_PostgresRoutedSessionDoesNotFallbackWhenPostgresUnavailable(t *testing.T) {

@@ -92,6 +92,25 @@ type legacyTestSession struct {
 	lastFinalized             uint64
 }
 
+// failAfterAppendStorage simulates the crash window where the destination write
+// committed but migration returned an error before renaming the legacy file.
+type failAfterAppendStorage struct {
+	Storage
+	failAfter int
+	appends   int
+}
+
+func (s *failAfterAppendStorage) AppendDiff(escrowID string, rec types.DiffRecord) error {
+	if err := s.Storage.AppendDiff(escrowID, rec); err != nil {
+		return err
+	}
+	s.appends++
+	if s.appends == s.failAfter {
+		return fmt.Errorf("forced append failure after write")
+	}
+	return nil
+}
+
 func TestMigrateLegacy_RoundTrip(t *testing.T) {
 	legacyPath := writeLegacyDB(t, []legacyTestSession{
 		{escrowID: "esc-a", version: types.LegacySessionVersion, status: "active", balance: 1000, latestNonce: 3, lastFinalized: 1},
@@ -231,4 +250,83 @@ func TestMigrateLegacy_ResolverErrorKeepsLegacyFile(t *testing.T) {
 
 	_, err = dest.GetSessionMeta("good")
 	require.ErrorIs(t, err, ErrSessionNotFound)
+}
+
+func TestMigrateLegacy_RetryAfterPartialDiffCopy(t *testing.T) {
+	legacyPath := writeLegacyDB(t, []legacyTestSession{
+		{escrowID: "retry", version: types.LegacySessionVersion, status: "active", balance: 1, latestNonce: 3, lastFinalized: 2},
+	})
+
+	dest := NewMemory()
+	failing := &failAfterAppendStorage{Storage: dest, failAfter: 1}
+	resolve := func(string) (uint64, error) { return 5, nil }
+
+	n, err := MigrateLegacySQLite(legacyPath, failing, resolve)
+	require.Error(t, err)
+	require.Equal(t, 0, n)
+
+	_, statErr := os.Stat(legacyPath)
+	require.NoError(t, statErr, "legacy file must remain for retry")
+
+	n, err = MigrateLegacySQLite(legacyPath, dest, resolve)
+	require.NoError(t, err)
+	require.Equal(t, 1, n)
+
+	meta, err := dest.GetSessionMeta("retry")
+	require.NoError(t, err)
+	require.Equal(t, uint64(3), meta.LatestNonce)
+	require.Equal(t, uint64(2), meta.LastFinalized)
+	diffs, err := dest.GetDiffs("retry", 1, 3)
+	require.NoError(t, err)
+	require.Len(t, diffs, 3)
+}
+
+func TestMigrateLegacy_RetryAfterFullCopyBeforeRename(t *testing.T) {
+	legacyPath := writeLegacyDB(t, []legacyTestSession{
+		{escrowID: "renamed-late", version: types.LegacySessionVersion, status: "settled", balance: 1, latestNonce: 2, lastFinalized: 1},
+	})
+
+	dest := NewMemory()
+	resolve := func(string) (uint64, error) { return 6, nil }
+
+	require.NoError(t, dest.CreateSession(paramsForEpoch("renamed-late", 6)))
+	require.NoError(t, dest.AppendDiff("renamed-late", types.DiffRecord{
+		Diff:       types.Diff{Nonce: 1},
+		StateHash:  []byte{1},
+		CreatedAt:  1,
+		Signatures: map[uint32][]byte{0: {1}},
+	}))
+	require.NoError(t, dest.AppendDiff("renamed-late", types.DiffRecord{
+		Diff:       types.Diff{Nonce: 2},
+		StateHash:  []byte{2},
+		CreatedAt:  2,
+		Signatures: map[uint32][]byte{0: {2}},
+	}))
+	require.NoError(t, dest.MarkFinalized("renamed-late", 1))
+
+	n, err := MigrateLegacySQLite(legacyPath, dest, resolve)
+	require.NoError(t, err)
+	require.Equal(t, 1, n)
+
+	meta, err := dest.GetSessionMeta("renamed-late")
+	require.NoError(t, err)
+	require.Equal(t, "settled", meta.Status)
+	_, err = os.Stat(legacyPath)
+	require.True(t, os.IsNotExist(err), "retry should move legacy file after verifying copied data")
+}
+
+func TestMigrateLegacy_DetectsConflictingCopiedDiff(t *testing.T) {
+	legacyPath := writeLegacyDB(t, []legacyTestSession{
+		{escrowID: "conflict", version: types.LegacySessionVersion, status: "active", balance: 1, latestNonce: 1},
+	})
+
+	dest := NewMemory()
+	require.NoError(t, dest.CreateSession(paramsForEpoch("conflict", 7)))
+	conflicting := makeDiffRecord(1)
+	conflicting.StateHash = []byte("different")
+	require.NoError(t, dest.AppendDiff("conflict", conflicting))
+
+	n, err := MigrateLegacySQLite(legacyPath, dest, func(string) (uint64, error) { return 7, nil })
+	require.ErrorContains(t, err, "migrated diff conflict")
+	require.Equal(t, 0, n)
 }

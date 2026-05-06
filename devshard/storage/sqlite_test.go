@@ -32,6 +32,70 @@ func TestSQLite_CreateSession_Idempotent(t *testing.T) {
 	runCreateSession_Idempotent(t, newTestSQLite(t))
 }
 
+func TestSQLite_CreateSession_ConcurrentIdempotent(t *testing.T) {
+	db := newTestSQLite(t)
+	params := defaultParams()
+
+	const attempts = 20
+	var wg sync.WaitGroup
+	errs := make(chan error, attempts)
+	for i := 0; i < attempts; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs <- db.CreateSession(params)
+		}()
+	}
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		require.NoError(t, err)
+	}
+	meta, err := db.GetSessionMeta(params.EscrowID)
+	require.NoError(t, err)
+	require.Equal(t, params.EpochID, meta.EpochID)
+}
+
+func TestSQLite_CreateSession_ConcurrentEpochConflict(t *testing.T) {
+	db := newTestSQLite(t)
+
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	errs := make(chan error, 2)
+	for _, epochID := range []uint64{7, 8} {
+		wg.Add(1)
+		go func(epochID uint64) {
+			defer wg.Done()
+			<-start
+			errs <- db.CreateSession(paramsForEpoch("same-escrow", epochID))
+		}(epochID)
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+
+	var success, conflict int
+	for err := range errs {
+		if err == nil {
+			success++
+			continue
+		}
+		require.ErrorIs(t, err, ErrSessionEpochConflict)
+		conflict++
+	}
+	require.Equal(t, 1, success)
+	require.Equal(t, 1, conflict)
+
+	active, err := db.ListActiveSessions()
+	require.NoError(t, err)
+	require.Len(t, active, 1)
+	require.Equal(t, "same-escrow", active[0].EscrowID)
+	_, ok, err := db.findSessionEpoch("same-escrow")
+	require.NoError(t, err)
+	require.True(t, ok)
+}
+
 func TestSQLite_CreateSession_ConflictingEpoch(t *testing.T) {
 	runCreateSession_ConflictingEpoch(t, newTestSQLite(t))
 }
