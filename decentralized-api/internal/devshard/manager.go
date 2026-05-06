@@ -56,6 +56,8 @@ type HostManager struct {
 	recorder     PayloadAuthClient
 }
 
+const recoverSessionsConcurrency = 8
+
 func NewHostManager(
 	store storage.Storage,
 	signer *signing.Secp256k1Signer,
@@ -239,13 +241,34 @@ func (m *HostManager) RecoverSessions() error {
 	if err != nil {
 		return fmt.Errorf("list active sessions: %w", err)
 	}
-
-	for _, sess := range active {
-		if _, err := m.recoverAndStoreSession(sess.EscrowID); err != nil {
-			logging.Error("skipping corrupt session", inferenceTypes.System,
-				"escrow_id", sess.EscrowID, "epoch_id", sess.EpochID, "error", err)
-		}
+	if len(active) == 0 {
+		return nil
 	}
+
+	workers := recoverSessionsConcurrency
+	if len(active) < workers {
+		workers = len(active)
+	}
+
+	jobs := make(chan storage.ActiveSession)
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for sess := range jobs {
+				if _, err := m.recoverAndStoreSession(sess.EscrowID); err != nil {
+					logging.Error("skipping corrupt session", inferenceTypes.System,
+						"escrow_id", sess.EscrowID, "epoch_id", sess.EpochID, "error", err)
+				}
+			}
+		}()
+	}
+	for _, sess := range active {
+		jobs <- sess
+	}
+	close(jobs)
+	wg.Wait()
 
 	return nil
 }
@@ -293,8 +316,26 @@ func (m *HostManager) recoverStoredSession(escrowID string) (*transport.Server, 
 		return nil, fmt.Errorf("create state machine: %w", err)
 	}
 
+	replayFrom := uint64(1)
 	if meta.LatestNonce > 0 {
-		records, err := m.store.GetDiffs(escrowID, 1, meta.LatestNonce)
+		snapNonce, snapData, snapErr := m.store.LoadSnapshot(escrowID)
+		if snapErr == nil && snapNonce > 0 && snapNonce <= meta.LatestNonce {
+			snapState, err := host.UnmarshalStateSnapshot(snapData)
+			if err != nil {
+				logging.Error("failed to decode devshard snapshot, replaying full history", inferenceTypes.System,
+					"escrow_id", escrowID, "snapshot_nonce", snapNonce, "error", err)
+			} else {
+				sm.RestoreState(snapState)
+				replayFrom = snapNonce + 1
+				logging.Info("restored devshard snapshot", inferenceTypes.System,
+					"escrow_id", escrowID, "snapshot_nonce", snapNonce, "latest_nonce", meta.LatestNonce)
+			}
+		} else if snapErr != nil && !errors.Is(snapErr, storage.ErrSnapshotNotFound) {
+			logging.Error("failed to load devshard snapshot, replaying full history", inferenceTypes.System,
+				"escrow_id", escrowID, "error", snapErr)
+		}
+
+		records, err := m.store.GetDiffs(escrowID, replayFrom, meta.LatestNonce)
 		if err != nil {
 			return nil, fmt.Errorf("get diffs: %w", err)
 		}
@@ -309,6 +350,13 @@ func (m *HostManager) recoverStoredSession(escrowID string) (*transport.Server, 
 				if !bytes.Equal(root, rec.StateHash) {
 					return nil, fmt.Errorf("state root mismatch at nonce %d", rec.Nonce)
 				}
+			}
+		}
+
+		if replayFrom == 1 || uint64(len(records)) >= host.SnapshotInterval {
+			if err := saveHostSnapshot(m.store, sm, escrowID, meta.LatestNonce); err != nil {
+				logging.Error("failed to save devshard recovery snapshot", inferenceTypes.System,
+					"escrow_id", escrowID, "nonce", meta.LatestNonce, "error", err)
 			}
 		}
 	}
@@ -330,6 +378,17 @@ func (m *HostManager) recoverStoredSession(escrowID string) (*transport.Server, 
 	}
 
 	return srv, nil
+}
+
+func saveHostSnapshot(store storage.Storage, sm *state.StateMachine, escrowID string, nonce uint64) error {
+	data, err := host.MarshalStateSnapshot(sm.ExportState())
+	if err != nil {
+		return fmt.Errorf("marshal snapshot: %w", err)
+	}
+	if err := store.SaveSnapshot(escrowID, nonce, data); err != nil {
+		return fmt.Errorf("save snapshot: %w", err)
+	}
+	return nil
 }
 
 // Register mounts devshard session routes on the given echo group.

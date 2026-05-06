@@ -204,6 +204,40 @@ func runMarkFinalized_LastFinalized(t *testing.T, store Storage) {
 	require.Equal(t, uint64(5), last)
 }
 
+func runSaveLoadSnapshot(t *testing.T, store Storage) {
+	t.Helper()
+
+	require.NoError(t, store.CreateSession(defaultParams()))
+
+	require.ErrorIs(t, func() error {
+		_, _, err := store.LoadSnapshot("escrow-1")
+		return err
+	}(), ErrSnapshotNotFound)
+
+	require.NoError(t, store.SaveSnapshot("escrow-1", 500, []byte("state-500")))
+	nonce, data, err := store.LoadSnapshot("escrow-1")
+	require.NoError(t, err)
+	require.Equal(t, uint64(500), nonce)
+	require.Equal(t, []byte("state-500"), data)
+
+	data[0] = 'X'
+	_, data, err = store.LoadSnapshot("escrow-1")
+	require.NoError(t, err)
+	require.Equal(t, []byte("state-500"), data)
+
+	require.NoError(t, store.SaveSnapshot("escrow-1", 1000, []byte("state-1000")))
+	nonce, data, err = store.LoadSnapshot("escrow-1")
+	require.NoError(t, err)
+	require.Equal(t, uint64(1000), nonce)
+	require.Equal(t, []byte("state-1000"), data)
+
+	require.NoError(t, store.SaveSnapshot("escrow-1", 750, []byte("state-750")))
+	nonce, data, err = store.LoadSnapshot("escrow-1")
+	require.NoError(t, err)
+	require.Equal(t, uint64(1000), nonce)
+	require.Equal(t, []byte("state-1000"), data, "older async snapshots must not overwrite newer snapshots")
+}
+
 func runAddSignature(t *testing.T, store Storage) {
 	t.Helper()
 
