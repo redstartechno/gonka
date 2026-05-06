@@ -202,10 +202,10 @@ func (h *HybridStorage) ListActiveSessions() ([]ActiveSession, error) {
 		return nil, err
 	}
 	result := make([]ActiveSession, 0, len(sqliteActive))
-	seen := make(map[string]struct{}, len(sqliteActive))
+	seen := make(map[string]ActiveSession, len(sqliteActive))
 	for _, sess := range sqliteActive {
 		result = append(result, sess)
-		seen[sess.EscrowID] = struct{}{}
+		seen[sess.EscrowID] = sess
 		h.remember(sess.EscrowID, hybridSQLite, sess.EpochID)
 	}
 
@@ -219,14 +219,37 @@ func (h *HybridStorage) ListActiveSessions() ([]ActiveSession, error) {
 		return result, nil
 	}
 	for _, sess := range pgActive {
-		if _, ok := seen[sess.EscrowID]; ok {
-			return nil, fmt.Errorf("%w: escrow %s present in sqlite and postgres",
-				ErrSessionEpochConflict, sess.EscrowID)
+		if existing, ok := seen[sess.EscrowID]; ok {
+			sqliteVersion, sqliteVersionErr := sessionVersionForLog(h.sqlite, sess.EscrowID)
+			postgresVersion, postgresVersionErr := sessionVersionForLog(pg, sess.EscrowID)
+			keyvals := []any{
+				"escrow_id", sess.EscrowID,
+				"sqlite_epoch_id", existing.EpochID,
+				"sqlite_version", sqliteVersion,
+				"postgres_epoch_id", sess.EpochID,
+				"postgres_version", postgresVersion,
+			}
+			if sqliteVersionErr != nil {
+				keyvals = append(keyvals, "sqlite_version_error", sqliteVersionErr)
+			}
+			if postgresVersionErr != nil {
+				keyvals = append(keyvals, "postgres_version_error", postgresVersionErr)
+			}
+			slog.Warn("devshard storage: duplicate active session in sqlite and postgres, using sqlite copy", keyvals...)
+			continue
 		}
 		result = append(result, sess)
 		h.remember(sess.EscrowID, hybridPostgres, sess.EpochID)
 	}
 	return result, nil
+}
+
+func sessionVersionForLog(store Storage, escrowID string) (string, error) {
+	meta, err := store.GetSessionMeta(escrowID)
+	if err != nil {
+		return "", err
+	}
+	return types.NormalizeSessionVersion(meta.Version), nil
 }
 
 func (h *HybridStorage) AppendDiff(escrowID string, rec types.DiffRecord) error {

@@ -109,7 +109,8 @@ Consequence:
 
 - Existing Postgres-backed escrow + Postgres unavailable: fail the operation.
 - Existing SQLite-backed escrow + Postgres reconnects: continue using SQLite.
-- Same active escrow in both backends: return a corruption error.
+- Same active escrow in both backends during startup scan: log a warning, keep
+  the SQLite-routed copy, and continue recovering other sessions.
 
 ### SQLite Fallback Is Local-Only
 

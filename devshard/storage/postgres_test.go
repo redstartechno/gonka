@@ -1,7 +1,12 @@
 package storage
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"log/slog"
 	"sort"
 	"testing"
 	"time"
@@ -11,6 +16,8 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/wait"
+
+	"devshard/types"
 )
 
 // setupPostgresContainer spins a fresh PG container per test and points the
@@ -60,6 +67,41 @@ func newTestPostgres(t *testing.T) *Postgres {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = pg.Close() })
 	return pg
+}
+
+func captureStorageLogs(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	currentLogger := slog.Default()
+	t.Cleanup(func() { slog.SetDefault(currentLogger) })
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	return &buf
+}
+
+func readStorageLogEntries(t *testing.T, buf *bytes.Buffer) []map[string]any {
+	t.Helper()
+	decoder := json.NewDecoder(bytes.NewReader(buf.Bytes()))
+	var entries []map[string]any
+	for {
+		var entry map[string]any
+		err := decoder.Decode(&entry)
+		if errors.Is(err, io.EOF) {
+			return entries
+		}
+		require.NoError(t, err)
+		entries = append(entries, entry)
+	}
+}
+
+func requireStorageLogEntry(t *testing.T, entries []map[string]any, msg string) map[string]any {
+	t.Helper()
+	for _, entry := range entries {
+		if entry["msg"] == msg {
+			return entry
+		}
+	}
+	require.Failf(t, "missing log entry", "msg=%q entries=%v", msg, entries)
+	return nil
 }
 
 // Conformance suite -- every test that the Memory and SQLite backends pass
@@ -294,7 +336,7 @@ func TestHybrid_StickySQLiteThenPostgresReconnect(t *testing.T) {
 	require.Equal(t, uint64(3), restartedMeta.LatestNonce)
 }
 
-func TestHybrid_ListActiveSessionsErrorsOnDuplicateEscrow(t *testing.T) {
+func TestHybrid_ListActiveSessionsSkipsDuplicateEscrow(t *testing.T) {
 	cleanup := setupPostgresContainer(t)
 	defer cleanup()
 
@@ -308,9 +350,19 @@ func TestHybrid_ListActiveSessionsErrorsOnDuplicateEscrow(t *testing.T) {
 	require.NoError(t, sqlite.CreateSession(paramsForEpoch("dup", 7)))
 	require.NoError(t, pg.CreateSession(paramsForEpoch("dup", 7)))
 
+	logs := captureStorageLogs(t)
 	active, err := hybrid.ListActiveSessions()
-	require.ErrorIs(t, err, ErrSessionEpochConflict)
-	require.Nil(t, active)
+	require.NoError(t, err)
+	require.Equal(t, []ActiveSession{{EscrowID: "dup", EpochID: 7}}, active)
+
+	route, ok := hybrid.remembered("dup")
+	require.True(t, ok)
+	require.Equal(t, hybridSQLite, route.backend)
+
+	duplicateLog := requireStorageLogEntry(t, readStorageLogEntries(t, logs),
+		"devshard storage: duplicate active session in sqlite and postgres, using sqlite copy")
+	require.Equal(t, types.LegacySessionVersion, duplicateLog["sqlite_version"])
+	require.Equal(t, types.LegacySessionVersion, duplicateLog["postgres_version"])
 }
 
 func TestHybrid_PruneEpochPrunesBothBackendsAndRoutes(t *testing.T) {
