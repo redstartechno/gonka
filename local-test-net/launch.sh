@@ -1,17 +1,6 @@
 # This script runs 1 genesis node, which is used as seed node also, and 2 full nodes
 set -e
 
-# Postgres is always part of the cluster: a single testermint-postgres
-# container is brought up alongside genesis, and every node's dapi +
-# devshardd reaches it via the shared chain-public network. Mirrors the
-# CI/CD path so behavior is identical between local and pipeline runs.
-export PGHOST="testermint-postgres"
-export PGPORT="5432"
-export PGDATABASE="payloads"
-export PGUSER="payloads"
-export PGPASSWORD="test"
-echo "Postgres enabled (PGHOST=$PGHOST, host port ${TESTERMINT_PG_PORT:-15432})"
-
 # launch genesis node
 export PUBLIC_SERVER_PORT=9000
 export ML_SERVER_PORT=9001

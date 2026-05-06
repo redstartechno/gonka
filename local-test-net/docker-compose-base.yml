@@ -55,14 +55,15 @@ services:
       - IS_TEST_NET=true
       - ENFORCED_MODEL_ID=disabled
       - DAPI_STATS_FILE_STORAGE_ENABLED=true
-      # Postgres for payload + devshard storage. When PGHOST is empty
-      # (default), dapi falls back to SQLite/file. Set by docker-compose
-      # .postgres.yml overlay + LOCAL_TESTNET_POSTGRES=1 in launch scripts.
-      - PGHOST=${PGHOST:-}
+      # Empty PGHOST falls back to SQLite/file storage in dapi.
+      - PGHOST=${PGHOST:-${KEY_NAME}-postgres}
       - PGPORT=${PGPORT:-5432}
       - PGDATABASE=${PGDATABASE:-payloads}
       - PGUSER=${PGUSER:-payloads}
-      - PGPASSWORD=${PGPASSWORD:-}
+      - PGPASSWORD=${PGPASSWORD:-test}
+    depends_on:
+      postgres:
+        condition: service_healthy
     networks:
       - chain-public
 
@@ -106,6 +107,26 @@ services:
       - "${WIREMOCK_PORT}:8080"
     networks:
       - chain-public
+
+  postgres:
+    container_name: ${KEY_NAME}-postgres
+    image: postgres:18.1-bookworm
+    environment:
+      POSTGRES_DB: payloads
+      POSTGRES_USER: payloads
+      POSTGRES_PASSWORD: test
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U payloads -d payloads"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    networks:
+      - chain-public
+
+volumes:
+  postgres-data:
 
 networks:
   chain-public:
