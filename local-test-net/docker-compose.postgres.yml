@@ -27,7 +27,7 @@ services:
       timeout: 3s
       retries: 30
     volumes:
-      - testermint-postgres-data:/var/lib/postgresql/data
+      - testermint-postgres-data:/var/lib/postgresql
     networks:
       - chain-public
 
