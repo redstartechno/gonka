@@ -1,13 +1,17 @@
 package devshard
 
 import (
+	"context"
 	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 
+	"decentralized-api/payloadstorage"
+
 	"devshard/bridge"
+	devshardserver "devshard/server"
 	"devshard/signing"
 	"devshard/state"
 	"devshard/storage"
@@ -40,6 +44,44 @@ func (b *mockBridge) SubmitDisputeState(string, []byte, uint64, map[uint32][]byt
 }
 
 var _ bridge.MainnetBridge = (*mockBridge)(nil)
+
+type payloadEntry struct {
+	prompt   []byte
+	response []byte
+}
+
+type mockPayloadStore struct {
+	byEpoch map[uint64]map[string]payloadEntry
+}
+
+func (m *mockPayloadStore) Store(_ context.Context, inferenceID string, epochID uint64, prompt, response []byte) error {
+	if m.byEpoch == nil {
+		m.byEpoch = make(map[uint64]map[string]payloadEntry)
+	}
+	if m.byEpoch[epochID] == nil {
+		m.byEpoch[epochID] = make(map[string]payloadEntry)
+	}
+	m.byEpoch[epochID][inferenceID] = payloadEntry{prompt: prompt, response: response}
+	return nil
+}
+
+func (m *mockPayloadStore) Retrieve(_ context.Context, inferenceID string, epochID uint64) ([]byte, []byte, error) {
+	if entries := m.byEpoch[epochID]; entries != nil {
+		if entry, ok := entries[inferenceID]; ok {
+			return entry.prompt, entry.response, nil
+		}
+	}
+	return nil, nil, payloadstorage.ErrNotFound
+}
+
+func (m *mockPayloadStore) PruneEpoch(context.Context, uint64) error { return nil }
+
+type currentEpochStore struct {
+	storage.Storage
+	epoch uint64
+}
+
+func (s currentEpochStore) CurrentEpochID() uint64 { return s.epoch }
 
 func mustGenerateKey(t *testing.T) *signing.Secp256k1Signer {
 	t.Helper()
@@ -251,6 +293,80 @@ func TestCreateSession_BindsConfiguredVersion(t *testing.T) {
 	meta, err := store.GetSessionMeta("escrow-1")
 	require.NoError(t, err)
 	require.Equal(t, standaloneVersion, meta.Version)
+}
+
+func TestRetrievePayloadsFallsBackToChainEscrowEpoch(t *testing.T) {
+	store := newManagerTestStore(t)
+	payloadStore := &mockPayloadStore{}
+	key := devshardserver.PayloadKey("460", 70)
+	require.NoError(t, payloadStore.Store(context.Background(), key, 254, []byte("prompt"), []byte("response")))
+
+	mgr := NewHostManager(
+		store,
+		mustGenerateKey(t),
+		stub.NewInferenceEngine(),
+		stub.NewValidationEngine(),
+		types.LegacySessionVersion,
+		&mockBridge{escrow: &bridge.EscrowInfo{EscrowID: "460", EpochID: 254}},
+		payloadStore,
+		nil,
+	)
+
+	prompt, response, epoch, err := mgr.retrievePayloadsWithAdjacentEpochs(context.Background(), "460", "70", 0)
+	require.NoError(t, err)
+	require.Equal(t, []byte("prompt"), prompt)
+	require.Equal(t, []byte("response"), response)
+	require.Equal(t, uint64(254), epoch)
+}
+
+func TestRetrievePayloadsKeyIncludesEscrowID(t *testing.T) {
+	store := newManagerTestStore(t)
+	payloadStore := &mockPayloadStore{}
+	require.NoError(t, payloadStore.Store(
+		context.Background(),
+		devshardserver.PayloadKey("other", 70),
+		254,
+		[]byte("wrong"),
+		[]byte("wrong"),
+	))
+
+	mgr := NewHostManager(
+		store,
+		mustGenerateKey(t),
+		stub.NewInferenceEngine(),
+		stub.NewValidationEngine(),
+		types.LegacySessionVersion,
+		&mockBridge{escrow: &bridge.EscrowInfo{EscrowID: "460", EpochID: 254}},
+		payloadStore,
+		nil,
+	)
+
+	_, _, _, err := mgr.retrievePayloadsWithAdjacentEpochs(context.Background(), "460", "70", 254)
+	require.ErrorIs(t, err, payloadstorage.ErrNotFound)
+}
+
+func TestRetrievePayloadsEpochZeroFallsBackToCurrentEpoch(t *testing.T) {
+	store := currentEpochStore{Storage: newManagerTestStore(t), epoch: 254}
+	payloadStore := &mockPayloadStore{}
+	key := devshardserver.PayloadKey("460", 70)
+	require.NoError(t, payloadStore.Store(context.Background(), key, 253, []byte("prompt"), []byte("response")))
+
+	mgr := NewHostManager(
+		store,
+		mustGenerateKey(t),
+		stub.NewInferenceEngine(),
+		stub.NewValidationEngine(),
+		types.LegacySessionVersion,
+		&mockBridge{},
+		payloadStore,
+		nil,
+	)
+
+	prompt, response, epoch, err := mgr.retrievePayloadsWithAdjacentEpochs(context.Background(), "460", "70", 0)
+	require.NoError(t, err)
+	require.Equal(t, []byte("prompt"), prompt)
+	require.Equal(t, []byte("response"), response)
+	require.Equal(t, uint64(253), epoch)
 }
 
 func TestRecoverSessions_EmptyStore(t *testing.T) {

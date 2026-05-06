@@ -84,6 +84,15 @@ func (m *ManagedStorage) observe(epochID uint64) {
 	}
 }
 
+// CurrentEpochID returns the epoch observed by the managed pruner. It is used
+// only for temporary payload fallback during epoch-0 migration.
+func (m *ManagedStorage) CurrentEpochID() uint64 {
+	if m.epochs != nil {
+		m.observe(m.epochs.CurrentEpochID())
+	}
+	return m.maxObservedEpoch.Load()
+}
+
 func (m *ManagedStorage) loop() {
 	defer close(m.done)
 	t := time.NewTicker(m.pruneInterval)
