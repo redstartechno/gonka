@@ -1,9 +1,12 @@
 package devshard
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"log/slog"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -87,6 +90,41 @@ type currentEpochStore struct {
 }
 
 func (s currentEpochStore) CurrentEpochID() uint64 { return s.epoch }
+
+func captureInfoLogs(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	currentLogger := slog.Default()
+	t.Cleanup(func() { slog.SetDefault(currentLogger) })
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	return &buf
+}
+
+func readLogEntries(t *testing.T, buf *bytes.Buffer) []map[string]any {
+	t.Helper()
+	decoder := json.NewDecoder(bytes.NewReader(buf.Bytes()))
+	var entries []map[string]any
+	for {
+		var entry map[string]any
+		err := decoder.Decode(&entry)
+		if errors.Is(err, io.EOF) {
+			return entries
+		}
+		require.NoError(t, err)
+		entries = append(entries, entry)
+	}
+}
+
+func requireLogEntry(t *testing.T, entries []map[string]any, msg string) map[string]any {
+	t.Helper()
+	for _, entry := range entries {
+		if entry["msg"] == msg {
+			return entry
+		}
+	}
+	require.Failf(t, "missing log entry", "msg=%q entries=%v", msg, entries)
+	return nil
+}
 
 type rangeRecordingStore struct {
 	storage.Storage
@@ -249,6 +287,41 @@ func TestRecoverSessions_HappyPath(t *testing.T) {
 	require.True(t, ok, "session should exist after recovery")
 	require.NotNil(t, srv)
 	require.NotNil(t, srv.Host())
+}
+
+func TestRecoverSessions_LogsRecoveryDurations(t *testing.T) {
+	store := newManagerTestStore(t)
+	group, user, hostSigner := populateStore(t, store, 1)
+	addresses := make([]string, len(group))
+	for i, s := range group {
+		addresses[i] = s.ValidatorAddress
+	}
+	br := &mockBridge{
+		escrow: &bridge.EscrowInfo{
+			EscrowID:       "escrow-1",
+			Amount:         100000,
+			CreatorAddress: user.Address(),
+			Slots:          addresses,
+		},
+	}
+	logs := captureInfoLogs(t)
+
+	mgr := NewHostManager(store, hostSigner, stub.NewInferenceEngine(), stub.NewValidationEngine(), types.LegacySessionVersion, br, nil, nil)
+	require.NoError(t, mgr.RecoverSessions())
+
+	entries := readLogEntries(t, logs)
+	started := requireLogEntry(t, entries, "starting devshard session recovery")
+	require.Equal(t, float64(1), started["session_count"])
+	require.Equal(t, float64(1), started["worker_count"])
+
+	session := requireLogEntry(t, entries, "recovered devshard session")
+	require.Equal(t, "escrow-1", session["escrow_id"])
+	require.Contains(t, session, "duration")
+
+	completed := requireLogEntry(t, entries, "completed devshard session recovery")
+	require.Equal(t, float64(1), completed["session_count"])
+	require.Equal(t, float64(1), completed["worker_count"])
+	require.Contains(t, completed, "duration")
 }
 
 func TestRecoverSessions_LoadsEscrowsInParallel(t *testing.T) {

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/sync/singleflight"
@@ -237,11 +238,15 @@ func (m *HostManager) create(escrowID string) (*transport.Server, error) {
 // injecting warm key deltas from the stored DiffRecords. Call this on startup
 // after constructing the HostManager.
 func (m *HostManager) RecoverSessions() error {
+	startedAt := time.Now()
 	active, err := m.store.ListActiveSessions()
 	if err != nil {
 		return fmt.Errorf("list active sessions: %w", err)
 	}
 	if len(active) == 0 {
+		logging.Info("completed devshard session recovery", inferenceTypes.System,
+			"session_count", 0, "worker_count", 0, "recovered_count", 0, "failed_count", 0,
+			"duration", time.Since(startedAt))
 		return nil
 	}
 
@@ -249,18 +254,30 @@ func (m *HostManager) RecoverSessions() error {
 	if len(active) < workers {
 		workers = len(active)
 	}
+	logging.Info("starting devshard session recovery", inferenceTypes.System,
+		"session_count", len(active), "worker_count", workers)
 
 	jobs := make(chan storage.ActiveSession)
 	var wg sync.WaitGroup
+	var recoveredCount int64
+	var failedCount int64
 	for i := 0; i < workers; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			for sess := range jobs {
+				sessionStartedAt := time.Now()
 				if _, err := m.recoverAndStoreSession(sess.EscrowID); err != nil {
-					logging.Error("skipping corrupt session", inferenceTypes.System,
-						"escrow_id", sess.EscrowID, "epoch_id", sess.EpochID, "error", err)
+					atomic.AddInt64(&failedCount, 1)
+					logging.Error("failed to recover devshard session", inferenceTypes.System,
+						"escrow_id", sess.EscrowID, "epoch_id", sess.EpochID,
+						"duration", time.Since(sessionStartedAt), "error", err)
+					continue
 				}
+				atomic.AddInt64(&recoveredCount, 1)
+				logging.Info("recovered devshard session", inferenceTypes.System,
+					"escrow_id", sess.EscrowID, "epoch_id", sess.EpochID,
+					"duration", time.Since(sessionStartedAt))
 			}
 		}()
 	}
@@ -269,6 +286,12 @@ func (m *HostManager) RecoverSessions() error {
 	}
 	close(jobs)
 	wg.Wait()
+
+	logging.Info("completed devshard session recovery", inferenceTypes.System,
+		"session_count", len(active), "worker_count", workers,
+		"recovered_count", atomic.LoadInt64(&recoveredCount),
+		"failed_count", atomic.LoadInt64(&failedCount),
+		"duration", time.Since(startedAt))
 
 	return nil
 }
