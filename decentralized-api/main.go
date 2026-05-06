@@ -252,30 +252,38 @@ func main() {
 		if storeErr != nil {
 			logging.Error("devshard storage init failed", types.System, "error", storeErr)
 		} else {
-			if migrated, mErr := devshardstorage.MigrateLegacySQLite(devshardLegacyDB, devshardInner, func(escrowID string) (uint64, error) {
-				info, err := devshardBridge.GetEscrow(escrowID)
-				if err != nil {
-					if errors.Is(err, devshardbridge.ErrEscrowNotFound) {
-						return 0, devshardstorage.ErrSkipLegacySession
-					}
-					return 0, err
-				}
-				return info.EpochID, nil
-			}); mErr != nil {
-				logging.Error("devshard legacy migration failed", types.System, "error", mErr)
-			} else if migrated > 0 {
-				logging.Info("devshard legacy migration complete", types.System, "sessions_migrated", migrated)
-			}
-
 			devshardStore := devshardstorage.NewManagedStorage(devshardInner, 3, 30*time.Second, &chainPhaseEpochProvider{tracker: chainPhaseTracker})
 			defer devshardStore.Close()
 
 			hostManager := internaldevshard.NewHostManager(devshardStore, devshardSigner, devshardEngine, devshardValidator, devshardtypes.LegacySessionVersion, devshardBridge, payloadStore, recorder)
-			if err := hostManager.RecoverSessions(); err != nil {
-				logging.Error("devshard recovery failed", types.System, "error", err)
-			}
-			devshardStore.Start()
+			hostManager.SetInitializing()
 			hostManager.Register(publicServer.DevshardGroup())
+			go func() {
+				migrated, mErr := devshardstorage.MigrateLegacySQLite(devshardLegacyDB, devshardInner, func(escrowID string) (uint64, error) {
+					info, err := devshardBridge.GetEscrow(escrowID)
+					if err != nil {
+						if errors.Is(err, devshardbridge.ErrEscrowNotFound) {
+							return 0, devshardstorage.ErrSkipLegacySession
+						}
+						return 0, err
+					}
+					return info.EpochID, nil
+				})
+				if mErr != nil {
+					logging.Error("devshard legacy migration failed", types.System, "error", mErr)
+					hostManager.SetUnavailable(mErr)
+					return
+				}
+				if migrated > 0 {
+					logging.Info("devshard legacy migration complete", types.System, "sessions_migrated", migrated)
+				}
+
+				devshardStore.Start()
+				hostManager.SetReady()
+				if err := hostManager.RecoverSessions(); err != nil {
+					logging.Error("devshard recovery failed", types.System, "error", err)
+				}
+			}()
 		}
 	}
 	publicServer.Start(addr)

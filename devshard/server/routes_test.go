@@ -23,6 +23,13 @@ func TestSessionHTTPErrorConflicts(t *testing.T) {
 	}
 }
 
+func TestSessionHTTPErrorInitializing(t *testing.T) {
+	httpErr, ok := sessionHTTPError(fmt.Errorf("wrapped: %w", ErrInitializing)).(*echo.HTTPError)
+	require.True(t, ok)
+	require.Equal(t, http.StatusServiceUnavailable, httpErr.Code)
+	require.Contains(t, fmt.Sprint(httpErr.Message), "wrapped")
+}
+
 func TestSessionHTTPErrorDefault(t *testing.T) {
 	httpErr, ok := sessionHTTPError(fmt.Errorf("boom")).(*echo.HTTPError)
 	require.True(t, ok)

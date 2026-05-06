@@ -263,6 +263,80 @@ func TestRecoverSessions_Nonce0(t *testing.T) {
 	require.Equal(t, srv, srv2)
 }
 
+func TestGetOrCreate_RecoversExistingStoredSession(t *testing.T) {
+	store := newManagerTestStore(t)
+	group, user, hostSigner := populateStore(t, store, 3)
+
+	addresses := make([]string, len(group))
+	for i, s := range group {
+		addresses[i] = s.ValidatorAddress
+	}
+
+	br := &mockBridge{
+		escrow: &bridge.EscrowInfo{
+			EscrowID:       "escrow-1",
+			Amount:         100000,
+			CreatorAddress: user.Address(),
+			Slots:          addresses,
+		},
+	}
+
+	mgr := NewHostManager(store, hostSigner, stub.NewInferenceEngine(), stub.NewValidationEngine(), types.LegacySessionVersion, br, nil, nil)
+	srv, err := mgr.getOrCreate("escrow-1")
+	require.NoError(t, err)
+	require.Equal(t, uint64(3), srv.Host().LatestNonce(), "existing storage session should be replayed before serving")
+}
+
+func TestSessionServer_DefaultsToInitializing(t *testing.T) {
+	store := newManagerTestStore(t)
+	group, user, hostSigner := populateStore(t, store, 1)
+
+	addresses := make([]string, len(group))
+	for i, s := range group {
+		addresses[i] = s.ValidatorAddress
+	}
+
+	br := &mockBridge{
+		escrow: &bridge.EscrowInfo{
+			EscrowID:       "escrow-1",
+			Amount:         100000,
+			CreatorAddress: user.Address(),
+			Slots:          addresses,
+		},
+	}
+
+	mgr := NewHostManager(store, hostSigner, stub.NewInferenceEngine(), stub.NewValidationEngine(), types.LegacySessionVersion, br, nil, nil)
+
+	_, err := mgr.SessionServer("escrow-1")
+	require.ErrorIs(t, err, devshardserver.ErrInitializing)
+}
+
+func TestSessionServer_GatedUntilReady(t *testing.T) {
+	store := newManagerTestStore(t)
+	group, user, hostSigner := populateStore(t, store, 1)
+
+	addresses := make([]string, len(group))
+	for i, s := range group {
+		addresses[i] = s.ValidatorAddress
+	}
+
+	br := &mockBridge{
+		escrow: &bridge.EscrowInfo{
+			EscrowID:       "escrow-1",
+			Amount:         100000,
+			CreatorAddress: user.Address(),
+			Slots:          addresses,
+		},
+	}
+
+	mgr := NewHostManager(store, hostSigner, stub.NewInferenceEngine(), stub.NewValidationEngine(), types.LegacySessionVersion, br, nil, nil)
+	mgr.SetReady()
+
+	srv, err := mgr.SessionServer("escrow-1")
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), srv.Host().LatestNonce())
+}
+
 func TestCreateSession_BindsConfiguredVersion(t *testing.T) {
 	store := newManagerTestStore(t)
 	hosts := make([]*signing.Secp256k1Signer, 3)

@@ -41,6 +41,10 @@ type HostManager struct {
 	sessions map[string]*transport.Server
 	sf       singleflight.Group
 
+	readyMu      sync.RWMutex
+	initializing bool
+	initErr      error
+
 	store        storage.Storage
 	signer       *signing.Secp256k1Signer
 	verifier     signing.Verifier
@@ -64,6 +68,7 @@ func NewHostManager(
 ) *HostManager {
 	return &HostManager{
 		sessions:     make(map[string]*transport.Server),
+		initializing: true,
 		store:        store,
 		signer:       signer,
 		verifier:     signing.NewSecp256k1Verifier(),
@@ -81,43 +86,94 @@ func (m *HostManager) Close() error {
 	return m.store.Close()
 }
 
+func (m *HostManager) SetInitializing() {
+	m.readyMu.Lock()
+	defer m.readyMu.Unlock()
+	m.initializing = true
+	m.initErr = nil
+}
+
+func (m *HostManager) SetReady() {
+	m.readyMu.Lock()
+	defer m.readyMu.Unlock()
+	m.initializing = false
+	m.initErr = nil
+}
+
+func (m *HostManager) SetUnavailable(err error) {
+	m.readyMu.Lock()
+	defer m.readyMu.Unlock()
+	m.initializing = true
+	m.initErr = err
+}
+
 // SessionServer resolves or creates the per-escrow transport server.
 func (m *HostManager) SessionServer(escrowID string) (*transport.Server, error) {
+	if err := m.readinessError(); err != nil {
+		return nil, err
+	}
 	return m.getOrCreate(escrowID)
 }
 
+func (m *HostManager) readinessError() error {
+	m.readyMu.RLock()
+	defer m.readyMu.RUnlock()
+	if !m.initializing {
+		return nil
+	}
+	if m.initErr != nil {
+		return fmt.Errorf("%w: %v", devshardserver.ErrInitializing, m.initErr)
+	}
+	return devshardserver.ErrInitializing
+}
+
 func (m *HostManager) getOrCreate(escrowID string) (*transport.Server, error) {
-	m.mu.RLock()
-	srv, ok := m.sessions[escrowID]
-	m.mu.RUnlock()
-	if ok {
+	if srv, ok := m.session(escrowID); ok {
 		return srv, nil
 	}
 
 	v, err, _ := m.sf.Do(escrowID, func() (interface{}, error) {
-		m.mu.RLock()
-		if srv, ok := m.sessions[escrowID]; ok {
-			m.mu.RUnlock()
+		if srv, ok := m.session(escrowID); ok {
 			return srv, nil
 		}
-		m.mu.RUnlock()
 
-		srv, err := m.create(escrowID)
+		srv, err := m.recoverStoredSession(escrowID)
+		if err == nil {
+			return m.storeSessionIfAbsent(escrowID, srv), nil
+		}
+		if !errors.Is(err, storage.ErrSessionNotFound) {
+			return nil, err
+		}
+
+		srv, err = m.create(escrowID)
 		if err != nil {
 			return nil, err
 		}
 
-		m.mu.Lock()
-		m.sessions[escrowID] = srv
-		m.mu.Unlock()
-
-		return srv, nil
+		return m.storeSessionIfAbsent(escrowID, srv), nil
 	})
 
 	if err != nil {
 		return nil, err
 	}
 	return v.(*transport.Server), nil
+}
+
+func (m *HostManager) session(escrowID string) (*transport.Server, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	srv, ok := m.sessions[escrowID]
+	return srv, ok
+}
+
+func (m *HostManager) storeSessionIfAbsent(escrowID string, srv *transport.Server) *transport.Server {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if existing, ok := m.sessions[escrowID]; ok {
+		return existing
+	}
+	m.sessions[escrowID] = srv
+	return srv
 }
 
 func (m *HostManager) create(escrowID string) (*transport.Server, error) {
@@ -184,11 +240,8 @@ func (m *HostManager) RecoverSessions() error {
 		return fmt.Errorf("list active sessions: %w", err)
 	}
 
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	for _, sess := range active {
-		if err := m.recoverSession(sess.EscrowID); err != nil {
+		if _, err := m.recoverAndStoreSession(sess.EscrowID); err != nil {
 			logging.Error("skipping corrupt session", inferenceTypes.System,
 				"escrow_id", sess.EscrowID, "epoch_id", sess.EpochID, "error", err)
 		}
@@ -197,14 +250,37 @@ func (m *HostManager) RecoverSessions() error {
 	return nil
 }
 
-// recoverSession replays a single session from storage. Caller must hold m.mu.
-func (m *HostManager) recoverSession(escrowID string) error {
+func (m *HostManager) recoverAndStoreSession(escrowID string) (*transport.Server, error) {
+	if srv, ok := m.session(escrowID); ok {
+		return srv, nil
+	}
+	v, err, _ := m.sf.Do(escrowID, func() (interface{}, error) {
+		if srv, ok := m.session(escrowID); ok {
+			return srv, nil
+		}
+		srv, err := m.recoverStoredSession(escrowID)
+		if err != nil {
+			return nil, err
+		}
+		return m.storeSessionIfAbsent(escrowID, srv), nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return v.(*transport.Server), nil
+}
+
+// recoverStoredSession replays a single session from storage.
+func (m *HostManager) recoverStoredSession(escrowID string) (*transport.Server, error) {
 	meta, err := m.store.GetSessionMeta(escrowID)
 	if err != nil {
-		return fmt.Errorf("get session meta: %w", err)
+		if errors.Is(err, storage.ErrSessionNotFound) {
+			return nil, fmt.Errorf("get session meta: %w", err)
+		}
+		return nil, fmt.Errorf("get session meta: %w", err)
 	}
 	if meta.Version != "" && meta.Version != m.boundVersion {
-		return fmt.Errorf("session version mismatch: stored %s, host %s", meta.Version, m.boundVersion)
+		return nil, fmt.Errorf("%w: stored %s, host %s", storage.ErrSessionVersionConflict, meta.Version, m.boundVersion)
 	}
 	recoveredVersion := meta.Version
 	if recoveredVersion == "" {
@@ -217,24 +293,24 @@ func (m *HostManager) recoverSession(escrowID string) error {
 		state.WithVersion(recoveredVersion),
 	)
 	if err != nil {
-		return fmt.Errorf("create state machine: %w", err)
+		return nil, fmt.Errorf("create state machine: %w", err)
 	}
 
 	if meta.LatestNonce > 0 {
 		records, err := m.store.GetDiffs(escrowID, 1, meta.LatestNonce)
 		if err != nil {
-			return fmt.Errorf("get diffs: %w", err)
+			return nil, fmt.Errorf("get diffs: %w", err)
 		}
 
 		for _, rec := range records {
 			sm.InjectWarmKeys(rec.WarmKeyDelta)
 			root, applyErr := sm.ApplyLocal(rec.Nonce, rec.Txs)
 			if applyErr != nil {
-				return fmt.Errorf("replay nonce %d: %w", rec.Nonce, applyErr)
+				return nil, fmt.Errorf("replay nonce %d: %w", rec.Nonce, applyErr)
 			}
 			if len(rec.StateHash) > 0 && len(root) > 0 {
 				if !bytes.Equal(root, rec.StateHash) {
-					return fmt.Errorf("state root mismatch at nonce %d", rec.Nonce)
+					return nil, fmt.Errorf("state root mismatch at nonce %d", rec.Nonce)
 				}
 			}
 		}
@@ -246,18 +322,17 @@ func (m *HostManager) recoverSession(escrowID string) error {
 		host.WithEpochID(meta.EpochID),
 	)
 	if err != nil {
-		return fmt.Errorf("create host: %w", err)
+		return nil, fmt.Errorf("create host: %w", err)
 	}
 
 	srv, err := transport.NewServer(h, m.store, m.verifier, meta.CreatorAddr,
 		transport.WithBridge(m.bridge),
 	)
 	if err != nil {
-		return fmt.Errorf("create server: %w", err)
+		return nil, fmt.Errorf("create server: %w", err)
 	}
 
-	m.sessions[escrowID] = srv
-	return nil
+	return srv, nil
 }
 
 // Register mounts devshard session routes on the given echo group.

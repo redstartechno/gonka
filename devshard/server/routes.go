@@ -10,6 +10,9 @@ import (
 	"devshard/transport"
 )
 
+// ErrInitializing means devshard storage is not ready to serve session state yet.
+var ErrInitializing = errors.New("devshard initializing")
+
 // SessionResolver resolves a lazy per-escrow transport server.
 type SessionResolver interface {
 	SessionServer(escrowID string) (*transport.Server, error)
@@ -79,6 +82,9 @@ func withSessionAuth(
 }
 
 func sessionHTTPError(err error) error {
+	if errors.Is(err, ErrInitializing) {
+		return echo.NewHTTPError(http.StatusServiceUnavailable, err.Error())
+	}
 	if errors.Is(err, storage.ErrSessionVersionConflict) || errors.Is(err, storage.ErrSessionEpochConflict) {
 		return echo.NewHTTPError(http.StatusConflict, err.Error())
 	}
