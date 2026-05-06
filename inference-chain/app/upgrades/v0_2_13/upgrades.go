@@ -110,6 +110,7 @@ func backfillConfirmationWeightScales(ctx context.Context, k keeper.Keeper) erro
 	}
 
 	root.ConfirmationWeightScales = confirmationWeightScalesFromModels(confirmableModels, params.PocParams)
+	coefficients := types.ConfirmationWeightCoefficients(root.ConfirmationWeightScales)
 	activeByAddress := make(map[string]*types.ActiveParticipant, len(activeParticipants.Participants))
 	for _, p := range activeParticipants.Participants {
 		if p != nil {
@@ -124,7 +125,7 @@ func backfillConfirmationWeightScales(ctx context.Context, k keeper.Keeper) erro
 		if p == nil {
 			continue
 		}
-		expected := types.ConfirmationWeightOfParticipant(p, root.ConfirmationWeightScales)
+		expected := types.ConfirmationWeightOfParticipantWithCoefficients(p, coefficients)
 		if vw.ConfirmationWeight > expected {
 			vw.ConfirmationWeight = expected
 		}
