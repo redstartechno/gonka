@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"golang.org/x/sync/singleflight"
-	"google.golang.org/protobuf/proto"
 
 	"github.com/labstack/echo/v4"
 
@@ -91,13 +90,11 @@ type statsShardDetailResponse struct {
 	EscrowID        string                    `json:"escrow_id"`
 	EpochID         uint64                    `json:"epoch_id"`
 	Nonce           uint64                    `json:"nonce"`
+	Version         string                    `json:"version"`
 	CachedAt        int64                     `json:"cached_at"`
 	CacheTTLSeconds int64                     `json:"cache_ttl_seconds"`
 	HostStats       map[uint32]statsHostStats `json:"host_stats"`
-	Proof           statsProof                `json:"proof"`
-	Signatures      map[uint32][]byte         `json:"signatures"`
 	Group           []types.SlotAssignment    `json:"group"`
-	WarmKeys        map[uint32]string         `json:"warm_keys"`
 }
 
 type statsHostStats struct {
@@ -106,16 +103,6 @@ type statsHostStats struct {
 	Cost                 uint64 `json:"cost"`
 	RequiredValidations  uint32 `json:"required_validations"`
 	CompletedValidations uint32 `json:"completed_validations"`
-}
-
-type statsProof struct {
-	StateRoot        []byte `json:"state_root"`
-	HostStatsHash    []byte `json:"host_stats_hash"`
-	RestHash         []byte `json:"rest_hash"`
-	Fees             uint64 `json:"fees"`
-	Phase            uint8  `json:"phase"`
-	Version          string `json:"version"`
-	SignatureContent []byte `json:"signature_content"`
 }
 
 func NewHostManager(
@@ -563,57 +550,17 @@ func (m *HostManager) statsShardDetail(escrowID string, now time.Time) (*statsSh
 		return nil, err
 	}
 
-	st, root, localSigs, err := srv.Host().StateAttestation()
-	if err != nil {
-		return nil, fmt.Errorf("state attestation: %w", err)
-	}
-	hostStatsHash, err := state.ComputeHostStatsHash(st.HostStats)
-	if err != nil {
-		return nil, fmt.Errorf("compute host stats hash: %w", err)
-	}
-	restHash, err := state.ComputeRestHash(st.Balance, st.Inferences, st.WarmKeys)
-	if err != nil {
-		return nil, fmt.Errorf("compute rest hash: %w", err)
-	}
-	sigContent := &types.StateSignatureContent{
-		StateRoot: root,
-		EscrowId:  escrowID,
-		Nonce:     st.LatestNonce,
-	}
-	sigData, err := proto.Marshal(sigContent)
-	if err != nil {
-		return nil, fmt.Errorf("marshal signature content: %w", err)
-	}
-
-	sigs := make(map[uint32][]byte)
-	if stored, err := srv.Host().GetSignatures(st.LatestNonce); err == nil {
-		for slotID, sig := range stored {
-			sigs[slotID] = sig
-		}
-	}
-	for slotID, sig := range localSigs {
-		sigs[slotID] = sig
-	}
+	st := srv.Host().SnapshotState()
 
 	resp := &statsShardDetailResponse{
 		EscrowID:        escrowID,
 		EpochID:         sess.EpochID,
 		Nonce:           st.LatestNonce,
+		Version:         st.Version,
 		CachedAt:        now.Unix(),
 		CacheTTLSeconds: int64(statsCacheTTL / time.Second),
 		HostStats:       statsHostStatsFromState(st.HostStats),
-		Proof: statsProof{
-			StateRoot:        root,
-			HostStatsHash:    hostStatsHash,
-			RestHash:         restHash,
-			Fees:             st.Fees,
-			Phase:            uint8(st.Phase),
-			Version:          st.Version,
-			SignatureContent: sigData,
-		},
-		Signatures: sigs,
-		Group:      append([]types.SlotAssignment(nil), st.Group...),
-		WarmKeys:   copyWarmKeys(st.WarmKeys),
+		Group:           append([]types.SlotAssignment(nil), st.Group...),
 	}
 
 	m.statsMu.Lock()
@@ -676,17 +623,6 @@ func statsHostStatsFromState(src map[uint32]*types.HostStats) map[uint32]statsHo
 			RequiredValidations:  stats.RequiredValidations,
 			CompletedValidations: stats.CompletedValidations,
 		}
-	}
-	return dst
-}
-
-func copyWarmKeys(src map[uint32]string) map[uint32]string {
-	if src == nil {
-		return nil
-	}
-	dst := make(map[uint32]string, len(src))
-	for slotID, addr := range src {
-		dst[slotID] = addr
 	}
 	return dst
 }

@@ -227,27 +227,6 @@ func (h *Host) StateRoot() ([]byte, error) {
 	return h.sm.ComputeStateRoot()
 }
 
-func (h *Host) StateAttestation() (types.EscrowState, []byte, map[uint32][]byte, error) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-
-	st := h.sm.SnapshotState()
-	root, err := h.sm.ComputeStateRoot()
-	if err != nil {
-		return types.EscrowState{}, nil, nil, err
-	}
-	sig, err := h.signState(st.LatestNonce, root)
-	if err != nil {
-		return types.EscrowState{}, nil, nil, err
-	}
-
-	sigs := make(map[uint32][]byte, len(h.slotIDs))
-	for slotID := range h.slotIDs {
-		sigs[slotID] = sig
-	}
-	return st, root, sigs, nil
-}
-
 func (h *Host) MempoolTxs() []*types.DevshardTx {
 	h.mu.Lock()
 	defer h.mu.Unlock()

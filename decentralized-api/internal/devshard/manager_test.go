@@ -353,7 +353,7 @@ func TestStatsShardsListsCurrentEpochWithoutDetails(t *testing.T) {
 	require.Equal(t, http.StatusOK, rootMounted.Code, "body: %s", rootMounted.Body.String())
 }
 
-func TestStatsShardDetailIncludesProofAndNoInferences(t *testing.T) {
+func TestStatsShardDetailReturnsStatsOnly(t *testing.T) {
 	base := newManagerTestStore(t)
 	group, _, hostSigner := createStoredSession(t, base, "escrow-detail", 7, 1)
 	store := currentEpochStore{Storage: base, epoch: 7}
@@ -363,11 +363,15 @@ func TestStatsShardDetailIncludesProofAndNoInferences(t *testing.T) {
 	rec := requestStats(t, mgr, "/v1/devshard", "/stats/shards/escrow-detail")
 	require.Equal(t, http.StatusOK, rec.Code, "body: %s", rec.Body.String())
 	require.NotContains(t, rec.Body.String(), "inferences")
+	require.NotContains(t, rec.Body.String(), "proof")
+	require.NotContains(t, rec.Body.String(), "signatures")
+	require.NotContains(t, rec.Body.String(), "warm_keys")
 
 	var resp struct {
 		EscrowID  string `json:"escrow_id"`
 		EpochID   uint64 `json:"epoch_id"`
 		Nonce     uint64 `json:"nonce"`
+		Version   string `json:"version"`
 		HostStats map[string]struct {
 			Missed               uint32 `json:"missed"`
 			Invalid              uint32 `json:"invalid"`
@@ -375,39 +379,15 @@ func TestStatsShardDetailIncludesProofAndNoInferences(t *testing.T) {
 			RequiredValidations  uint32 `json:"required_validations"`
 			CompletedValidations uint32 `json:"completed_validations"`
 		} `json:"host_stats"`
-		Proof struct {
-			StateRoot        []byte `json:"state_root"`
-			HostStatsHash    []byte `json:"host_stats_hash"`
-			RestHash         []byte `json:"rest_hash"`
-			SignatureContent []byte `json:"signature_content"`
-		} `json:"proof"`
-		Signatures map[string][]byte      `json:"signatures"`
-		Group      []types.SlotAssignment `json:"group"`
+		Group []types.SlotAssignment `json:"group"`
 	}
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
 	require.Equal(t, "escrow-detail", resp.EscrowID)
 	require.Equal(t, uint64(7), resp.EpochID)
 	require.Equal(t, uint64(1), resp.Nonce)
+	require.Equal(t, types.LegacySessionVersion, resp.Version)
 	require.Len(t, resp.HostStats, len(group))
-	require.NotEmpty(t, resp.Proof.StateRoot)
-	require.NotEmpty(t, resp.Proof.HostStatsHash)
-	require.NotEmpty(t, resp.Proof.RestHash)
-	require.NotEmpty(t, resp.Proof.SignatureContent)
-	require.Contains(t, resp.Signatures, "0")
 	require.Equal(t, group, resp.Group)
-
-	expectedContent := &types.StateSignatureContent{
-		StateRoot: resp.Proof.StateRoot,
-		EscrowId:  "escrow-detail",
-		Nonce:     resp.Nonce,
-	}
-	expectedBytes, err := proto.Marshal(expectedContent)
-	require.NoError(t, err)
-	require.Equal(t, expectedBytes, resp.Proof.SignatureContent)
-
-	addr, err := signing.NewSecp256k1Verifier().RecoverAddress(resp.Proof.SignatureContent, resp.Signatures["0"])
-	require.NoError(t, err)
-	require.Equal(t, hostSigner.Address(), addr)
 
 	cached := requestStats(t, mgr, "/v1/devshard", "/stats/shards/escrow-detail")
 	require.Equal(t, http.StatusOK, cached.Code, "body: %s", cached.Body.String())
