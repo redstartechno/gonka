@@ -128,6 +128,34 @@ func TestHost_SignsState(t *testing.T) {
 	require.Equal(t, hosts[0].Address(), addr)
 }
 
+func TestHost_StateAttestationSignsCurrentRoot(t *testing.T) {
+	hosts := []*signing.Secp256k1Signer{testutil.MustGenerateKey(t), testutil.MustGenerateKey(t), testutil.MustGenerateKey(t)}
+	user := testutil.MustGenerateKey(t)
+	h := newTestHost(t, 0, hosts, user, 10000, 10)
+
+	diff := testutil.SignDiff(t, user, "escrow-1", 1, []*types.DevshardTx{testutil.StartTx(1)})
+	_, err := h.HandleRequest(context.Background(), HostRequest{Diffs: []types.Diff{diff}})
+	require.NoError(t, err)
+
+	st, root, sigs, err := h.StateAttestation()
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), st.LatestNonce)
+	require.NotEmpty(t, root)
+	require.Contains(t, sigs, uint32(0))
+
+	sigContent := &types.StateSignatureContent{
+		StateRoot: root,
+		EscrowId:  "escrow-1",
+		Nonce:     st.LatestNonce,
+	}
+	sigData, err := proto.Marshal(sigContent)
+	require.NoError(t, err)
+
+	addr, err := signing.NewSecp256k1Verifier().RecoverAddress(sigData, sigs[0])
+	require.NoError(t, err)
+	require.Equal(t, hosts[0].Address(), addr)
+}
+
 func TestHost_ExecutorReceipt(t *testing.T) {
 	// 3 hosts. Inference 1: executor = group[1%3] = slot 1.
 	hosts := []*signing.Secp256k1Signer{testutil.MustGenerateKey(t), testutil.MustGenerateKey(t), testutil.MustGenerateKey(t)}

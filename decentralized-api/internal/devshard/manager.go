@@ -6,12 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"golang.org/x/sync/singleflight"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/labstack/echo/v4"
 
@@ -55,9 +57,66 @@ type HostManager struct {
 	bridge       bridge.MainnetBridge
 	payloadStore payloadstorage.PayloadStorage
 	recorder     PayloadAuthClient
+
+	statsMu           sync.Mutex
+	statsShardsCache  *statsShardsResponse
+	statsShardsCached time.Time
+	statsDetailsCache map[string]statsShardDetailCache
 }
 
-const recoverSessionsConcurrency = 8
+const (
+	recoverSessionsConcurrency = 8
+	statsCacheTTL              = 60 * time.Second
+)
+
+type statsShardDetailCache struct {
+	response *statsShardDetailResponse
+	cached   time.Time
+}
+
+type statsShardsResponse struct {
+	CurrentEpochID  uint64              `json:"current_epoch_id"`
+	CachedAt        int64               `json:"cached_at"`
+	CacheTTLSeconds int64               `json:"cache_ttl_seconds"`
+	ActiveEscrows   []string            `json:"active_escrows"`
+	Shards          []statsShardSummary `json:"shards"`
+}
+
+type statsShardSummary struct {
+	EscrowID string `json:"escrow_id"`
+	EpochID  uint64 `json:"epoch_id"`
+}
+
+type statsShardDetailResponse struct {
+	EscrowID        string                    `json:"escrow_id"`
+	EpochID         uint64                    `json:"epoch_id"`
+	Nonce           uint64                    `json:"nonce"`
+	CachedAt        int64                     `json:"cached_at"`
+	CacheTTLSeconds int64                     `json:"cache_ttl_seconds"`
+	HostStats       map[uint32]statsHostStats `json:"host_stats"`
+	Proof           statsProof                `json:"proof"`
+	Signatures      map[uint32][]byte         `json:"signatures"`
+	Group           []types.SlotAssignment    `json:"group"`
+	WarmKeys        map[uint32]string         `json:"warm_keys"`
+}
+
+type statsHostStats struct {
+	Missed               uint32 `json:"missed"`
+	Invalid              uint32 `json:"invalid"`
+	Cost                 uint64 `json:"cost"`
+	RequiredValidations  uint32 `json:"required_validations"`
+	CompletedValidations uint32 `json:"completed_validations"`
+}
+
+type statsProof struct {
+	StateRoot        []byte `json:"state_root"`
+	HostStatsHash    []byte `json:"host_stats_hash"`
+	RestHash         []byte `json:"rest_hash"`
+	Fees             uint64 `json:"fees"`
+	Phase            uint8  `json:"phase"`
+	Version          string `json:"version"`
+	SignatureContent []byte `json:"signature_content"`
+}
 
 func NewHostManager(
 	store storage.Storage,
@@ -70,17 +129,18 @@ func NewHostManager(
 	recorder PayloadAuthClient,
 ) *HostManager {
 	return &HostManager{
-		sessions:     make(map[string]*transport.Server),
-		initializing: true,
-		store:        store,
-		signer:       signer,
-		verifier:     signing.NewSecp256k1Verifier(),
-		engine:       engine,
-		validator:    validator,
-		boundVersion: types.NormalizeSessionVersion(boundVersion),
-		bridge:       br,
-		payloadStore: payloadStore,
-		recorder:     recorder,
+		sessions:          make(map[string]*transport.Server),
+		initializing:      true,
+		store:             store,
+		signer:            signer,
+		verifier:          signing.NewSecp256k1Verifier(),
+		engine:            engine,
+		validator:         validator,
+		boundVersion:      types.NormalizeSessionVersion(boundVersion),
+		bridge:            br,
+		payloadStore:      payloadStore,
+		recorder:          recorder,
+		statsDetailsCache: make(map[string]statsShardDetailCache),
 	}
 }
 
@@ -416,7 +476,232 @@ func saveHostSnapshot(store storage.Storage, sm *state.StateMachine, escrowID st
 
 // Register mounts devshard session routes on the given echo group.
 func (m *HostManager) Register(g *echo.Group) {
+	g.GET("/stats/shards", m.handleStatsShards)
+	g.GET("/stats/shards/:escrow_id", m.handleStatsShard)
 	devshardserver.RegisterLazySessionRoutes(g, m, m)
+}
+
+func (m *HostManager) handleStatsShards(c echo.Context) error {
+	resp, err := m.statsShards(time.Now())
+	if err != nil {
+		return statsHTTPError(err)
+	}
+	return c.JSON(http.StatusOK, resp)
+}
+
+func (m *HostManager) handleStatsShard(c echo.Context) error {
+	escrowID := c.Param("escrow_id")
+	if escrowID == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "escrow_id required")
+	}
+	resp, err := m.statsShardDetail(escrowID, time.Now())
+	if err != nil {
+		return statsHTTPError(err)
+	}
+	return c.JSON(http.StatusOK, resp)
+}
+
+func (m *HostManager) statsShards(now time.Time) (*statsShardsResponse, error) {
+	if err := m.readinessError(); err != nil {
+		return nil, err
+	}
+
+	m.statsMu.Lock()
+	if m.statsShardsCache != nil && now.Sub(m.statsShardsCached) < statsCacheTTL {
+		resp := m.statsShardsCache
+		m.statsMu.Unlock()
+		return resp, nil
+	}
+	m.statsMu.Unlock()
+
+	currentEpochID, active, err := m.currentEpochActiveSessions()
+	if err != nil {
+		return nil, err
+	}
+
+	resp := &statsShardsResponse{
+		CurrentEpochID:  currentEpochID,
+		CachedAt:        now.Unix(),
+		CacheTTLSeconds: int64(statsCacheTTL / time.Second),
+		ActiveEscrows:   make([]string, 0, len(active)),
+		Shards:          make([]statsShardSummary, 0, len(active)),
+	}
+	for _, sess := range active {
+		resp.ActiveEscrows = append(resp.ActiveEscrows, sess.EscrowID)
+		resp.Shards = append(resp.Shards, statsShardSummary{
+			EscrowID: sess.EscrowID,
+			EpochID:  sess.EpochID,
+		})
+	}
+
+	m.statsMu.Lock()
+	m.statsShardsCache = resp
+	m.statsShardsCached = now
+	m.statsMu.Unlock()
+	return resp, nil
+}
+
+func (m *HostManager) statsShardDetail(escrowID string, now time.Time) (*statsShardDetailResponse, error) {
+	if err := m.readinessError(); err != nil {
+		return nil, err
+	}
+
+	m.statsMu.Lock()
+	if cached, ok := m.statsDetailsCache[escrowID]; ok && now.Sub(cached.cached) < statsCacheTTL {
+		resp := cached.response
+		m.statsMu.Unlock()
+		return resp, nil
+	}
+	m.statsMu.Unlock()
+
+	sess, err := m.currentEpochActiveSession(escrowID)
+	if err != nil {
+		return nil, err
+	}
+	srv, err := m.SessionServer(escrowID)
+	if err != nil {
+		return nil, err
+	}
+
+	st, root, localSigs, err := srv.Host().StateAttestation()
+	if err != nil {
+		return nil, fmt.Errorf("state attestation: %w", err)
+	}
+	hostStatsHash, err := state.ComputeHostStatsHash(st.HostStats)
+	if err != nil {
+		return nil, fmt.Errorf("compute host stats hash: %w", err)
+	}
+	restHash, err := state.ComputeRestHash(st.Balance, st.Inferences, st.WarmKeys)
+	if err != nil {
+		return nil, fmt.Errorf("compute rest hash: %w", err)
+	}
+	sigContent := &types.StateSignatureContent{
+		StateRoot: root,
+		EscrowId:  escrowID,
+		Nonce:     st.LatestNonce,
+	}
+	sigData, err := proto.Marshal(sigContent)
+	if err != nil {
+		return nil, fmt.Errorf("marshal signature content: %w", err)
+	}
+
+	sigs := make(map[uint32][]byte)
+	if stored, err := srv.Host().GetSignatures(st.LatestNonce); err == nil {
+		for slotID, sig := range stored {
+			sigs[slotID] = sig
+		}
+	}
+	for slotID, sig := range localSigs {
+		sigs[slotID] = sig
+	}
+
+	resp := &statsShardDetailResponse{
+		EscrowID:        escrowID,
+		EpochID:         sess.EpochID,
+		Nonce:           st.LatestNonce,
+		CachedAt:        now.Unix(),
+		CacheTTLSeconds: int64(statsCacheTTL / time.Second),
+		HostStats:       statsHostStatsFromState(st.HostStats),
+		Proof: statsProof{
+			StateRoot:        root,
+			HostStatsHash:    hostStatsHash,
+			RestHash:         restHash,
+			Fees:             st.Fees,
+			Phase:            uint8(st.Phase),
+			Version:          st.Version,
+			SignatureContent: sigData,
+		},
+		Signatures: sigs,
+		Group:      append([]types.SlotAssignment(nil), st.Group...),
+		WarmKeys:   copyWarmKeys(st.WarmKeys),
+	}
+
+	m.statsMu.Lock()
+	m.statsDetailsCache[escrowID] = statsShardDetailCache{response: resp, cached: now}
+	m.statsMu.Unlock()
+	return resp, nil
+}
+
+func (m *HostManager) currentEpochActiveSession(escrowID string) (storage.ActiveSession, error) {
+	_, active, err := m.currentEpochActiveSessions()
+	if err != nil {
+		return storage.ActiveSession{}, err
+	}
+	for _, sess := range active {
+		if sess.EscrowID == escrowID {
+			return sess, nil
+		}
+	}
+	return storage.ActiveSession{}, storage.ErrSessionNotFound
+}
+
+func (m *HostManager) currentEpochActiveSessions() (uint64, []storage.ActiveSession, error) {
+	active, err := m.store.ListActiveSessions()
+	if err != nil {
+		return 0, nil, fmt.Errorf("list active sessions: %w", err)
+	}
+
+	currentEpochID := currentEpochIDFromStore(m.store)
+	if currentEpochID == 0 {
+		for _, sess := range active {
+			if sess.EpochID > currentEpochID {
+				currentEpochID = sess.EpochID
+			}
+		}
+	}
+
+	filtered := make([]storage.ActiveSession, 0, len(active))
+	for _, sess := range active {
+		if sess.EpochID == currentEpochID {
+			filtered = append(filtered, sess)
+		}
+	}
+	sort.Slice(filtered, func(i, j int) bool {
+		return filtered[i].EscrowID < filtered[j].EscrowID
+	})
+	return currentEpochID, filtered, nil
+}
+
+func statsHostStatsFromState(src map[uint32]*types.HostStats) map[uint32]statsHostStats {
+	dst := make(map[uint32]statsHostStats, len(src))
+	for slotID, stats := range src {
+		if stats == nil {
+			dst[slotID] = statsHostStats{}
+			continue
+		}
+		dst[slotID] = statsHostStats{
+			Missed:               stats.Missed,
+			Invalid:              stats.Invalid,
+			Cost:                 stats.Cost,
+			RequiredValidations:  stats.RequiredValidations,
+			CompletedValidations: stats.CompletedValidations,
+		}
+	}
+	return dst
+}
+
+func copyWarmKeys(src map[uint32]string) map[uint32]string {
+	if src == nil {
+		return nil
+	}
+	dst := make(map[uint32]string, len(src))
+	for slotID, addr := range src {
+		dst[slotID] = addr
+	}
+	return dst
+}
+
+func statsHTTPError(err error) error {
+	if errors.Is(err, devshardserver.ErrInitializing) {
+		return echo.NewHTTPError(http.StatusServiceUnavailable, err.Error())
+	}
+	if errors.Is(err, storage.ErrSessionNotFound) {
+		return echo.NewHTTPError(http.StatusNotFound, "shard not found")
+	}
+	if errors.Is(err, storage.ErrSessionVersionConflict) || errors.Is(err, storage.ErrSessionEpochConflict) {
+		return echo.NewHTTPError(http.StatusConflict, err.Error())
+	}
+	return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 }
 
 // HandlePayloads serves payloads to validators for devshard validation.

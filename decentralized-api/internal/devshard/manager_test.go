@@ -7,11 +7,14 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 
@@ -90,6 +93,16 @@ type currentEpochStore struct {
 }
 
 func (s currentEpochStore) CurrentEpochID() uint64 { return s.epoch }
+
+type countingListStore struct {
+	storage.Storage
+	listCalls int
+}
+
+func (s *countingListStore) ListActiveSessions() ([]storage.ActiveSession, error) {
+	s.listCalls++
+	return s.Storage.ListActiveSessions()
+}
 
 func captureInfoLogs(t *testing.T) *bytes.Buffer {
 	t.Helper()
@@ -253,6 +266,152 @@ func populateStore(t *testing.T, store storage.Storage, numDiffs int) ([]types.S
 	}
 
 	return group, user, hosts[0]
+}
+
+func createStoredSession(t *testing.T, store storage.Storage, escrowID string, epochID uint64, numDiffs int) ([]types.SlotAssignment, *signing.Secp256k1Signer, *signing.Secp256k1Signer) {
+	t.Helper()
+	hosts := make([]*signing.Secp256k1Signer, 3)
+	for i := range hosts {
+		hosts[i] = mustGenerateKey(t)
+	}
+	user := mustGenerateKey(t)
+	group := makeGroup(hosts)
+	config := defaultConfig(3)
+	verifier := signing.NewSecp256k1Verifier()
+
+	require.NoError(t, store.CreateSession(storage.CreateSessionParams{
+		EscrowID:       escrowID,
+		EpochID:        epochID,
+		CreatorAddr:    user.Address(),
+		Config:         config,
+		Group:          group,
+		InitialBalance: 100000000,
+		Version:        types.LegacySessionVersion,
+	}))
+
+	sm, err := state.NewStateMachine(escrowID, config, group, 100000000, user.Address(), verifier)
+	require.NoError(t, err)
+	for i := uint64(1); i <= uint64(numDiffs); i++ {
+		txs := []*types.DevshardTx{startTx(i)}
+		root, err := sm.ApplyLocal(i, txs)
+		require.NoError(t, err)
+		require.NoError(t, store.AppendDiff(escrowID, types.DiffRecord{
+			Diff:      signDiffWithRoot(t, user, escrowID, i, txs, root),
+			StateHash: root,
+		}))
+	}
+	return group, user, hosts[0]
+}
+
+func requestStats(t *testing.T, mgr *HostManager, prefix string, path string) *httptest.ResponseRecorder {
+	t.Helper()
+	e := echo.New()
+	mgr.Register(e.Group(prefix))
+	req := httptest.NewRequest(http.MethodGet, prefix+path, nil)
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+	return rec
+}
+
+func TestStatsShardsListsCurrentEpochWithoutDetails(t *testing.T) {
+	base := newManagerTestStore(t)
+	_, _, hostSigner := createStoredSession(t, base, "escrow-current", 7, 0)
+	createStoredSession(t, base, "escrow-old", 6, 0)
+
+	counting := &countingListStore{Storage: currentEpochStore{Storage: base, epoch: 7}}
+	mgr := NewHostManager(counting, hostSigner, stub.NewInferenceEngine(), stub.NewValidationEngine(), types.LegacySessionVersion, &mockBridge{}, nil, nil)
+	mgr.SetReady()
+
+	rec := requestStats(t, mgr, "/v1/devshard", "/stats/shards")
+	require.Equal(t, http.StatusOK, rec.Code, "body: %s", rec.Body.String())
+	require.NotContains(t, rec.Body.String(), "host_stats")
+	require.NotContains(t, rec.Body.String(), "proof")
+	require.NotContains(t, rec.Body.String(), "signatures")
+	require.NotContains(t, rec.Body.String(), "inferences")
+
+	var resp struct {
+		CurrentEpochID uint64   `json:"current_epoch_id"`
+		ActiveEscrows  []string `json:"active_escrows"`
+		Shards         []struct {
+			EscrowID string `json:"escrow_id"`
+			EpochID  uint64 `json:"epoch_id"`
+		} `json:"shards"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	require.Equal(t, uint64(7), resp.CurrentEpochID)
+	require.Equal(t, []string{"escrow-current"}, resp.ActiveEscrows)
+	require.Len(t, resp.Shards, 1)
+	require.Equal(t, "escrow-current", resp.Shards[0].EscrowID)
+	require.Equal(t, uint64(7), resp.Shards[0].EpochID)
+
+	cached := requestStats(t, mgr, "/v1/devshard", "/stats/shards")
+	require.Equal(t, http.StatusOK, cached.Code, "body: %s", cached.Body.String())
+	require.Equal(t, rec.Body.String(), cached.Body.String())
+	require.Equal(t, 1, counting.listCalls)
+
+	rootMounted := requestStats(t, mgr, "", "/stats/shards")
+	require.Equal(t, http.StatusOK, rootMounted.Code, "body: %s", rootMounted.Body.String())
+}
+
+func TestStatsShardDetailIncludesProofAndNoInferences(t *testing.T) {
+	base := newManagerTestStore(t)
+	group, _, hostSigner := createStoredSession(t, base, "escrow-detail", 7, 1)
+	store := currentEpochStore{Storage: base, epoch: 7}
+	mgr := NewHostManager(store, hostSigner, stub.NewInferenceEngine(), stub.NewValidationEngine(), types.LegacySessionVersion, &mockBridge{}, nil, nil)
+	mgr.SetReady()
+
+	rec := requestStats(t, mgr, "/v1/devshard", "/stats/shards/escrow-detail")
+	require.Equal(t, http.StatusOK, rec.Code, "body: %s", rec.Body.String())
+	require.NotContains(t, rec.Body.String(), "inferences")
+
+	var resp struct {
+		EscrowID  string `json:"escrow_id"`
+		EpochID   uint64 `json:"epoch_id"`
+		Nonce     uint64 `json:"nonce"`
+		HostStats map[string]struct {
+			Missed               uint32 `json:"missed"`
+			Invalid              uint32 `json:"invalid"`
+			Cost                 uint64 `json:"cost"`
+			RequiredValidations  uint32 `json:"required_validations"`
+			CompletedValidations uint32 `json:"completed_validations"`
+		} `json:"host_stats"`
+		Proof struct {
+			StateRoot        []byte `json:"state_root"`
+			HostStatsHash    []byte `json:"host_stats_hash"`
+			RestHash         []byte `json:"rest_hash"`
+			SignatureContent []byte `json:"signature_content"`
+		} `json:"proof"`
+		Signatures map[string][]byte      `json:"signatures"`
+		Group      []types.SlotAssignment `json:"group"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	require.Equal(t, "escrow-detail", resp.EscrowID)
+	require.Equal(t, uint64(7), resp.EpochID)
+	require.Equal(t, uint64(1), resp.Nonce)
+	require.Len(t, resp.HostStats, len(group))
+	require.NotEmpty(t, resp.Proof.StateRoot)
+	require.NotEmpty(t, resp.Proof.HostStatsHash)
+	require.NotEmpty(t, resp.Proof.RestHash)
+	require.NotEmpty(t, resp.Proof.SignatureContent)
+	require.Contains(t, resp.Signatures, "0")
+	require.Equal(t, group, resp.Group)
+
+	expectedContent := &types.StateSignatureContent{
+		StateRoot: resp.Proof.StateRoot,
+		EscrowId:  "escrow-detail",
+		Nonce:     resp.Nonce,
+	}
+	expectedBytes, err := proto.Marshal(expectedContent)
+	require.NoError(t, err)
+	require.Equal(t, expectedBytes, resp.Proof.SignatureContent)
+
+	addr, err := signing.NewSecp256k1Verifier().RecoverAddress(resp.Proof.SignatureContent, resp.Signatures["0"])
+	require.NoError(t, err)
+	require.Equal(t, hostSigner.Address(), addr)
+
+	cached := requestStats(t, mgr, "/v1/devshard", "/stats/shards/escrow-detail")
+	require.Equal(t, http.StatusOK, cached.Code, "body: %s", cached.Body.String())
+	require.Equal(t, rec.Body.String(), cached.Body.String())
 }
 
 func TestRecoverSessions_HappyPath(t *testing.T) {
