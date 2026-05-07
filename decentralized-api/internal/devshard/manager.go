@@ -194,18 +194,6 @@ func (m *HostManager) create(escrowID string) (*transport.Server, error) {
 
 	config := types.SessionConfigWithPrice(len(group), escrow.TokenPrice)
 
-	if err := m.store.CreateSession(storage.CreateSessionParams{
-		EscrowID:       escrowID,
-		EpochID:        escrow.EpochID,
-		Version:        m.boundVersion,
-		CreatorAddr:    creatorAddr,
-		Config:         config,
-		Group:          group,
-		InitialBalance: escrow.Amount,
-	}); err != nil {
-		return nil, fmt.Errorf("init storage session: %w", err)
-	}
-
 	sm, err := state.NewStateMachine(escrowID, config, group, escrow.Amount, creatorAddr, m.verifier,
 		state.WithWarmKeyResolver(m.bridge.VerifyWarmKey),
 		state.WithVersion(m.boundVersion),
@@ -221,6 +209,18 @@ func (m *HostManager) create(escrowID string) (*transport.Server, error) {
 	)
 	if err != nil {
 		return nil, fmt.Errorf("create host: %w", err)
+	}
+
+	if err := m.store.CreateSession(storage.CreateSessionParams{
+		EscrowID:       escrowID,
+		EpochID:        escrow.EpochID,
+		Version:        m.boundVersion,
+		CreatorAddr:    creatorAddr,
+		Config:         config,
+		Group:          group,
+		InitialBalance: escrow.Amount,
+	}); err != nil {
+		return nil, fmt.Errorf("init storage session: %w", err)
 	}
 
 	srv, err := transport.NewServer(h, m.store, m.verifier, creatorAddr,

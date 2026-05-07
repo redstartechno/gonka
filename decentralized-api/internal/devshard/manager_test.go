@@ -626,6 +626,38 @@ func TestCreateSession_RejectsExistingDifferentVersion(t *testing.T) {
 	require.ErrorIs(t, err, storage.ErrSessionVersionConflict)
 }
 
+func TestCreateSession_DoesNotPersistWhenSignerNotInGroup(t *testing.T) {
+	store := newManagerTestStore(t)
+	hosts := make([]*signing.Secp256k1Signer, 3)
+	for i := range hosts {
+		hosts[i] = mustGenerateKey(t)
+	}
+	outsider := mustGenerateKey(t)
+	user := mustGenerateKey(t)
+	group := makeGroup(hosts)
+	addresses := make([]string, len(group))
+	for i, s := range group {
+		addresses[i] = s.ValidatorAddress
+	}
+	br := &mockBridge{
+		escrow: &bridge.EscrowInfo{
+			EscrowID:       "escrow-1",
+			Amount:         100000,
+			CreatorAddress: user.Address(),
+			Slots:          addresses,
+			EpochID:        7,
+			TokenPrice:     1,
+		},
+	}
+
+	mgr := NewHostManager(store, outsider, stub.NewInferenceEngine(), stub.NewValidationEngine(), types.LegacySessionVersion, br, nil, nil)
+	_, err := mgr.getOrCreate("escrow-1")
+	require.ErrorIs(t, err, types.ErrHostNotInGroup)
+
+	_, err = store.GetSessionMeta("escrow-1")
+	require.ErrorIs(t, err, storage.ErrSessionNotFound)
+}
+
 func TestRetrievePayloadsFallsBackToChainEscrowEpoch(t *testing.T) {
 	store := newManagerTestStore(t)
 	payloadStore := &mockPayloadStore{}
