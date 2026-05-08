@@ -58,6 +58,11 @@ type AcceptanceChecker interface {
 	Check(st types.EscrowState, applied []*types.DevshardTx) error
 }
 
+const (
+	defaultValidationWorkers   = 20
+	defaultValidationQueueSize = 20_000
+)
+
 // Host processes user requests: applies diffs, executes inference, signs state.
 type Host struct {
 	mu        sync.Mutex
@@ -83,9 +88,10 @@ type Host struct {
 
 	sortedSlots        []uint32            // deterministic slot order for this host
 	executing          map[uint64]struct{} // inference IDs with in-flight execution
-	validating         map[uint64]struct{} // inference IDs with in-flight validation
-	completedResponses map[uint64][]byte   // inference ID -> cached ML response body
-	ownSeed            int64               // deterministic seed derived from signer + escrowID
+	validating         map[uint64]struct{} // inference IDs with queued or in-flight validation
+	validationQueue    chan validateJob
+	completedResponses map[uint64][]byte // inference ID -> cached ML response body
+	ownSeed            int64             // deterministic seed derived from signer + escrowID
 }
 
 // SnapshotInterval controls how often hosts persist full state snapshots.
@@ -169,6 +175,10 @@ func NewHost(
 	}
 	for _, opt := range opts {
 		opt(h)
+	}
+	if h.validator != nil {
+		h.validationQueue = make(chan validateJob, defaultValidationQueueSize)
+		h.startValidationWorkers(defaultValidationWorkers)
 	}
 	return h, nil
 }
@@ -316,9 +326,9 @@ func (h *Host) HandleRequest(ctx context.Context, req HostRequest) (*HostRespons
 	// Execution is always deferred so the caller can send the receipt
 	// before inference starts (SSE flow).
 
-	// (g) Validate other hosts' inferences outside mutex.
+	// (g) Queue validation work outside mutex.
 	for _, vj := range validationJobs {
-		go h.validateAsync(context.Background(), vj)
+		h.enqueueValidation(vj)
 	}
 
 	return &HostResponse{
@@ -684,24 +694,25 @@ type validateJob struct {
 // collectValidationJobs finds finished inferences that this host should validate.
 // Caller must hold h.mu.
 func (h *Host) collectValidationJobs() []validateJob {
-	if h.validator == nil {
+	if h.validator == nil || h.validationQueue == nil {
 		return nil
 	}
 
 	st := h.sm.SnapshotState()
+	available := cap(h.validationQueue) - len(h.validationQueue)
+	if available <= 0 {
+		return nil
+	}
 	var jobs []validateJob
 
 	for infID, rec := range st.Inferences {
-		if rec.Status != types.StatusFinished {
+		if rec.Status != types.StatusFinished && rec.Status != types.StatusChallenged {
 			continue
 		}
-
-		// Skip if this host is the executor (no self-validation).
 		if h.slotIDs[rec.ExecutorSlot] {
 			continue
 		}
 
-		// Skip if already validated by any of this host's slots.
 		alreadyValidated := false
 		for slot := range h.slotIDs {
 			if rec.ValidatedBy.IsSet(slot) {
@@ -712,26 +723,25 @@ func (h *Host) collectValidationJobs() []validateJob {
 		if alreadyValidated {
 			continue
 		}
-
-		// Skip if already validating or has a validation in mempool.
 		if _, ok := h.validating[infID]; ok {
 			continue
 		}
-		if h.hasMempoolValidation(infID) {
+		if h.hasMempoolValidationOrVote(infID) {
 			continue
 		}
 
-		// Probabilistic check: should this host validate this inference?
-		mySlotCount := uint32(len(h.slotIDs))
 		executorAddr := h.slotToAddr[rec.ExecutorSlot]
-		executorSlotCount := h.sm.AddressSlotCount(executorAddr)
-		totalSlots := h.sm.TotalSlots()
 
-		if !state.ShouldValidate(h.ownSeed, infID, mySlotCount, executorSlotCount, totalSlots, st.Config.ValidationRate) {
-			continue
+		// Phase 1 samples by ValidationRate; Phase 2 is mandatory so VoteThreshold is reachable.
+		if rec.Status == types.StatusFinished {
+			mySlotCount := uint32(len(h.slotIDs))
+			executorSlotCount := h.sm.AddressSlotCount(executorAddr)
+			totalSlots := h.sm.TotalSlots()
+			if !state.ShouldValidate(h.ownSeed, infID, mySlotCount, executorSlotCount, totalSlots, st.Config.ValidationRate) {
+				continue
+			}
 		}
 
-		// Pick first owned slot as the validator slot (deterministic).
 		validatorSlot := h.sortedSlots[0]
 
 		h.validating[infID] = struct{}{}
@@ -747,17 +757,55 @@ func (h *Host) collectValidationJobs() []validateJob {
 			executorAddress: executorAddr,
 			epochID:         h.epochID,
 		})
+		available--
+		if available == 0 {
+			break
+		}
 	}
 
 	return jobs
 }
 
-// hasMempoolValidation returns true if a MsgValidation for infID from this host
-// is already in the mempool. Caller must hold h.mu.
-func (h *Host) hasMempoolValidation(infID uint64) bool {
+func (h *Host) startValidationWorkers(count int) {
+	for i := 0; i < count; i++ {
+		go func() {
+			for job := range h.validationQueue {
+				h.validateAsync(context.Background(), job)
+			}
+		}()
+	}
+}
+
+func (h *Host) enqueueValidation(job validateJob) {
+	if h.validationQueue == nil {
+		h.mu.Lock()
+		delete(h.validating, job.inferenceID)
+		h.mu.Unlock()
+		return
+	}
+
+	select {
+	case h.validationQueue <- job:
+	default:
+		h.mu.Lock()
+		delete(h.validating, job.inferenceID)
+		h.mu.Unlock()
+		logging.Debug("validation queue full; retry later", "subsystem", "host", "inference_id", job.inferenceID)
+	}
+}
+
+// hasMempoolValidationOrVote returns true if a MsgValidation or
+// MsgValidationVote for infID from this host is already in the mempool.
+// Caller must hold h.mu.
+func (h *Host) hasMempoolValidationOrVote(infID uint64) bool {
 	for _, tx := range h.mempool.Txs() {
 		if v := tx.GetValidation(); v != nil && v.InferenceId == infID {
 			if h.slotIDs[v.ValidatorSlot] {
+				return true
+			}
+		}
+		if v := tx.GetValidationVote(); v != nil && v.InferenceId == infID {
+			if h.slotIDs[v.VoterSlot] {
 				return true
 			}
 		}
@@ -765,8 +813,10 @@ func (h *Host) hasMempoolValidation(infID uint64) bool {
 	return false
 }
 
-// validateAsync runs validator.Validate, builds MsgValidation, signs it, and
-// adds it to the mempool. Called outside the mutex.
+// validateAsync emits MsgValidation when status is Finished, MsgValidationVote
+// when Challenged. Re-reads status after Validate returns to catch races where
+// another host challenged the inference while this validator was running.
+// Called outside the mutex.
 func (h *Host) validateAsync(ctx context.Context, job validateJob) {
 	defer func() {
 		h.mu.Lock()
@@ -790,24 +840,52 @@ func (h *Host) validateAsync(ctx context.Context, job validateJob) {
 		return
 	}
 
-	msg := &types.MsgValidation{
-		InferenceId:   job.inferenceID,
-		ValidatorSlot: job.validatorSlot,
-		Valid:         result.Valid,
-		EscrowId:      h.escrowID,
-	}
-	proposerSig, err := h.signProposer(msg)
-	if err != nil {
-		logging.Error("sign validation msg failed", "subsystem", "host", "inference_id", job.inferenceID, "error", err)
+	rec, ok := h.sm.GetInference(job.inferenceID)
+	if !ok {
+		logging.Error("validate: inference disappeared", "subsystem", "host", "inference_id", job.inferenceID)
 		return
 	}
-	msg.ProposerSig = proposerSig
+
+	var tx *types.DevshardTx
+	switch rec.Status {
+	case types.StatusFinished:
+		// TODO: if this MsgValidation lands after another host has already
+		// challenged the inference, the state machine records participation
+		// without vote weight. Counting that requires a coordinated upgrade.
+		msg := &types.MsgValidation{
+			InferenceId:   job.inferenceID,
+			ValidatorSlot: job.validatorSlot,
+			Valid:         result.Valid,
+			EscrowId:      h.escrowID,
+		}
+		proposerSig, err := h.signProposer(msg)
+		if err != nil {
+			logging.Error("sign validation msg failed", "subsystem", "host", "inference_id", job.inferenceID, "error", err)
+			return
+		}
+		msg.ProposerSig = proposerSig
+		tx = &types.DevshardTx{Tx: &types.DevshardTx_Validation{Validation: msg}}
+	case types.StatusChallenged:
+		msg := &types.MsgValidationVote{
+			InferenceId: job.inferenceID,
+			VoterSlot:   job.validatorSlot,
+			VoteValid:   result.Valid,
+			EscrowId:    h.escrowID,
+		}
+		proposerSig, err := h.signProposer(msg)
+		if err != nil {
+			logging.Error("sign validation vote failed", "subsystem", "host", "inference_id", job.inferenceID, "error", err)
+			return
+		}
+		msg.ProposerSig = proposerSig
+		tx = &types.DevshardTx{Tx: &types.DevshardTx_ValidationVote{ValidationVote: msg}}
+	default:
+		return
+	}
 
 	h.mu.Lock()
 	h.mempool.Add(MempoolEntry{
-		Tx: &types.DevshardTx{Tx: &types.DevshardTx_Validation{
-			Validation: msg,
-		}},
+		Tx:         tx,
 		ProposedAt: h.sm.LatestNonce(),
 	})
 	h.mu.Unlock()
