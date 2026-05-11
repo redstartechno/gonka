@@ -43,6 +43,7 @@ func (t testFeeTx) FeeGranter() []byte                     { return nil }
 func TestNetworkDutyBypass_AllExemptMessages(t *testing.T) {
 	exemptMsgs := map[string]sdk.Msg{
 		"MsgSubmitPocBatch":                    &inferencetypes.MsgSubmitPocBatch{},
+		"MsgSubmitSeed":                        &inferencetypes.MsgSubmitSeed{},
 		"MsgValidation":                        &inferencetypes.MsgValidation{},
 		"MsgStartInference":                    &inferencetypes.MsgStartInference{},
 		"MsgFinishInference":                   &inferencetypes.MsgFinishInference{},
@@ -52,10 +53,12 @@ func TestNetworkDutyBypass_AllExemptMessages(t *testing.T) {
 		"MsgSubmitPocValidationsV2":            &inferencetypes.MsgSubmitPocValidationsV2{},
 		"MsgSubmitHardwareDiff":                &inferencetypes.MsgSubmitHardwareDiff{},
 		"MsgClaimRewards":                      &inferencetypes.MsgClaimRewards{},
+		"MsgSettleDevshardEscrow":              &inferencetypes.MsgSettleDevshardEscrow{},
 		"MsgSubmitDealerPart":                  &blstypes.MsgSubmitDealerPart{},
 		"MsgSubmitVerificationVector":          &blstypes.MsgSubmitVerificationVector{},
 		"MsgSubmitGroupKeyValidationSignature": &blstypes.MsgSubmitGroupKeyValidationSignature{},
 		"MsgSubmitPartialSignature":            &blstypes.MsgSubmitPartialSignature{},
+		"MsgRespondDealerComplaints":           &blstypes.MsgRespondDealerComplaints{},
 	}
 
 	for name, msg := range exemptMsgs {
@@ -167,6 +170,7 @@ func TestNetworkDutyBypass_GasCapEnforced(t *testing.T) {
 func TestIsExemptMessageType(t *testing.T) {
 	// Exempt
 	require.True(t, isExemptMessageType(&inferencetypes.MsgSubmitPocBatch{}))
+	require.True(t, isExemptMessageType(&inferencetypes.MsgSubmitSeed{}))
 	require.True(t, isExemptMessageType(&inferencetypes.MsgSubmitPocValidationsV2{}))
 	require.True(t, isExemptMessageType(&inferencetypes.MsgValidation{}))
 	require.True(t, isExemptMessageType(&inferencetypes.MsgStartInference{}))
@@ -178,12 +182,15 @@ func TestIsExemptMessageType(t *testing.T) {
 	require.True(t, isExemptMessageType(&blstypes.MsgSubmitVerificationVector{}))
 	require.True(t, isExemptMessageType(&blstypes.MsgSubmitGroupKeyValidationSignature{}))
 	require.True(t, isExemptMessageType(&blstypes.MsgSubmitPartialSignature{}))
+	require.True(t, isExemptMessageType(&blstypes.MsgRespondDealerComplaints{}))
 	require.True(t, isExemptMessageType(&inferencetypes.MsgSubmitHardwareDiff{}))
 	require.True(t, isExemptMessageType(&inferencetypes.MsgClaimRewards{}))
+	require.True(t, isExemptMessageType(&inferencetypes.MsgSettleDevshardEscrow{}))
 
 	// Not exempt
 	require.False(t, isExemptMessageType(&blstypes.MsgRequestThresholdSignature{})) // open to anyone, no rate limit
-	require.False(t, isExemptMessageType(&inferencetypes.MsgPoCV2StoreCommit{}))    // intentional sybil-defense fee
+	require.False(t, isExemptMessageType(&inferencetypes.MsgPoCV2StoreCommit{}))    // intentional sybil-defense fee via chargePoCV2StoreCommitGas
+	require.False(t, isExemptMessageType(&inferencetypes.MsgCreateDevshardEscrow{})) // user-driven, paid
 	require.False(t, isExemptMessageType(&inferencetypes.MsgSubmitNewParticipant{}))
 	require.False(t, isExemptMessageType(&banktypes.MsgSend{}))
 	require.False(t, isExemptMessageType(&stakingtypes.MsgDelegate{}))
