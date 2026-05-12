@@ -1,6 +1,14 @@
 vue/node_modules
 vue/dist
 release/
+.env
+.env.*
+!.env.example
+proposals/ethereum-bridge-contact/artifacts/
+proposals/ethereum-bridge-contact/cache/
+proposals/ethereum-bridge-contact/types/
+proposals/ethereum-bridge-contact/bridge_address.txt
+proposals/ethereum-bridge-contact/bridge_address.pending.txt
 .idea/
 .vscode/
 /.claude

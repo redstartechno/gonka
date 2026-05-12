@@ -29,10 +29,14 @@ const (
 	// EthereumChainName is the chain identifier used in bridge registration state.
 	EthereumChainName = "ethereum"
 
-	// Well-known Ethereum mainnet token contract addresses (EIP-55 checksummed).
-	// These are standard constants and do not need to be passed via Plan.Info.
-	USDCContractAddress = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
-	USDTContractAddress = "0xdAC17F958D2ee523a2206206994597C13D831ec7"
+	// Sepolia testnet token contract addresses for the gonka-testnet-4 rehearsal.
+	// USDC is Circle's official Sepolia issuance.
+	// USDT is a project-deployed MockERC20 (6 decimals, Ownable mint).
+	// Restore the mainnet addresses below before tagging a mainnet release:
+	//   USDCContractAddress = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
+	//   USDTContractAddress = "0xdAC17F958D2ee523a2206206994597C13D831ec7"
+	USDCContractAddress = "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238"
+	USDTContractAddress = "0x8C56f627e5FA1B56687DBF80E0E01d5b600d1950"
 )
 
 // BridgeSetupData is parsed from the upgrade proposal's Plan.Info JSON field.
