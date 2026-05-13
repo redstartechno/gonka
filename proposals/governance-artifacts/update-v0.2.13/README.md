@@ -42,6 +42,18 @@ Migrations:
 - Disables confirmation PoC triggers for the rest of the upgrade epoch via a
   grace-epoch `UpgradeProtectionWindow` of 3000 blocks. The new snapshot logic
   starts from the next epoch.
+- Adds MiniMax-M2.7 (`MiniMaxAI/MiniMax-M2.7`) as a governance model and PoC
+  model config with `PenaltyStartEpoch = 271` (bootstrap activation epoch).
+- Updates `PocParams.Models[*].WeightScaleFactor` to recalibrate against the
+  Qwen-on-B200 reference after the vLLM 0.20.1 release. Kimi was too high on
+  B* GPUs. Kimi = Qwen-on-B200 + 10% (top-tier premium), MiniMax = Qwen-on-B200:
+  - Kimi (`moonshotai/Kimi-K2.6`): `0.78`
+  - MiniMax (`MiniMaxAI/MiniMax-M2.7`): `0.3024`
+- Updates `Model.ValidationThreshold` from cross-version vLLM results:
+  - Qwen (`Qwen/Qwen3-235B-A22B-Instruct-2507-FP8`): `0.940`
+  - Kimi (`moonshotai/Kimi-K2.6`): `0.900`
+  - MiniMax (`MiniMaxAI/MiniMax-M2.7`): `0.922`
+- Adds `--enable-auto-tool-choice` to Kimi `ModelArgs` if missing.
 
 ## Changes
 
