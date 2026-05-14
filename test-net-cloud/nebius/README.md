@@ -60,8 +60,8 @@ Add multiple nodes (e.g., GPU nodes) using the generator:
 
 1. Edit `join-additional/params.csv` with node configs:
    ```csv
-   domain,ssh_port,p2p_port,api_port,hf_home,deploy_dir
-   example.com,22,26656,8000,/data/hf-cache,/srv/deploy/
+   domain,ssh_port,p2p_port,api_port,hf_home,deploy_dir,private_ip,chain_id
+   example.com,22,26656,8000,/data/hf-cache,/srv/deploy,your_private_ip,gonka-testnet2
    ```
 
 2. Generate scripts:

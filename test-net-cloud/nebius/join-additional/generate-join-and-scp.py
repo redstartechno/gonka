@@ -16,7 +16,8 @@ class Node:
         key_name: str = None,
         hf_home: str = None,
         custom_base_dir: str = None,
-        private_ip: str = None
+        private_ip: str = None,
+        chain_id: str = None
     ):
         self.domain = domain
         self.ssh_port = ssh_port
@@ -28,6 +29,7 @@ class Node:
         self.deploy_dir = deploy_dir
         self.custom_base_dir = custom_base_dir
         self.private_ip = private_ip
+        self.chain_id = chain_id
         self.key_name = key_name or f"join-{self.ssh_port}"
 
     # based on example from join-1.sh
@@ -47,11 +49,13 @@ class Node:
             script_lines.append(f'export DAPI_API__POC_CALLBACK_URL="http://api:9100"')
         
         script_lines.append(f'export HF_HOME="{self.hf_home}"')
-        
+
+        script_lines.append(f'export CHAIN_ID="{self.chain_id}"')
+
         if self.custom_base_dir:
             script_lines.append(f'export TESTNET_BASE_DIR="{self.custom_base_dir}"')
         
-        script_lines.append(f'python3 launch.py --mode join --branch {branch}')
+        script_lines.append(f'python3 launch.py --mode join --branch {branch} --chainid "{self.chain_id}"')
         
         return '\n'.join(script_lines) + '\n'
 
@@ -122,7 +126,8 @@ if __name__ == "__main__":
                 key_name=f"join-{row['ssh_port']}",
                 hf_home=row['hf_home'].strip(),
                 custom_base_dir=row['deploy_dir'].strip(),
-                private_ip=row['private_ip'].strip() if 'private_ip' in row and row['private_ip'].strip() else None
+                private_ip=row['private_ip'].strip() if 'private_ip' in row and row['private_ip'].strip() else None,
+                chain_id=row['chain_id'].strip() if 'chain_id' in row and row['chain_id'].strip() else "gonka-testnet"
             )
             nodes.append(node)
             print(f"Created node: {node.domain}:{node.ssh_port} (deploy_dir={node.custom_base_dir}, hf_home={node.hf_home}, private_ip={node.private_ip})")
