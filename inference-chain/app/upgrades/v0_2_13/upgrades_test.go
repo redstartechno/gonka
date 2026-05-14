@@ -14,6 +14,72 @@ func TestUpgradeName(t *testing.T) {
 	require.Equal(t, "v0.2.13", UpgradeName)
 }
 
+func TestSetDevshardApprovedVersionsReplacesV1(t *testing.T) {
+	k, ctx, _ := keepertest.InferenceKeeperReturningMocks(t)
+
+	params, err := k.GetParams(ctx)
+	require.NoError(t, err)
+	params.DevshardEscrowParams = inferencetypes.DefaultDevshardEscrowParams()
+	params.DevshardEscrowParams.ApprovedVersions = []*inferencetypes.DevshardApprovedVersion{
+		{
+			Name:   DevshardV1Name,
+			Binary: "https://github.com/gonka-ai/gonka/releases/download/release%2Fv0.2.12/devshardd.zip",
+			Sha256: "15f722444e6545bc787f1ef6d1011557d25a8b05cb9f6aaf1a514349d36d4715",
+		},
+		{
+			Name:   "v2",
+			Binary: "https://example.com/devshardd-v2.zip",
+			Sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		},
+	}
+	require.NoError(t, k.SetParams(ctx, params))
+
+	require.NoError(t, setDevshardApprovedVersions(ctx, k))
+
+	got, err := k.GetParams(ctx)
+	require.NoError(t, err)
+	require.Len(t, got.DevshardEscrowParams.ApprovedVersions, 2)
+	require.Equal(t, &inferencetypes.DevshardApprovedVersion{
+		Name:   DevshardV1Name,
+		Binary: DevshardV1Binary,
+		Sha256: DevshardV1Sha256,
+	}, got.DevshardEscrowParams.ApprovedVersions[0])
+	require.Equal(t, "v2", got.DevshardEscrowParams.ApprovedVersions[1].Name)
+
+	require.NoError(t, setDevshardApprovedVersions(ctx, k))
+	got, err = k.GetParams(ctx)
+	require.NoError(t, err)
+	require.Len(t, got.DevshardEscrowParams.ApprovedVersions, 2)
+}
+
+func TestSetDevshardApprovedVersionsAppendsV1WhenMissing(t *testing.T) {
+	k, ctx, _ := keepertest.InferenceKeeperReturningMocks(t)
+
+	params, err := k.GetParams(ctx)
+	require.NoError(t, err)
+	params.DevshardEscrowParams = inferencetypes.DefaultDevshardEscrowParams()
+	params.DevshardEscrowParams.ApprovedVersions = []*inferencetypes.DevshardApprovedVersion{
+		{
+			Name:   "v2",
+			Binary: "https://example.com/devshardd-v2.zip",
+			Sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		},
+	}
+	require.NoError(t, k.SetParams(ctx, params))
+
+	require.NoError(t, setDevshardApprovedVersions(ctx, k))
+
+	got, err := k.GetParams(ctx)
+	require.NoError(t, err)
+	require.Len(t, got.DevshardEscrowParams.ApprovedVersions, 2)
+	require.Equal(t, "v2", got.DevshardEscrowParams.ApprovedVersions[0].Name)
+	require.Equal(t, &inferencetypes.DevshardApprovedVersion{
+		Name:   DevshardV1Name,
+		Binary: DevshardV1Binary,
+		Sha256: DevshardV1Sha256,
+	}, got.DevshardEscrowParams.ApprovedVersions[1])
+}
+
 func TestBackfillConfirmationWeightScales(t *testing.T) {
 	k, ctx, _ := keepertest.InferenceKeeperReturningMocks(t)
 

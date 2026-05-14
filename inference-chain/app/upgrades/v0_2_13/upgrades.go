@@ -25,6 +25,15 @@ import (
 const BountyCommunitySaleContractAddress = "gonka18pkq9mwxxlmyq7kr5txhm060wemg2s4u94wvsfd9w2kdc0u99d6spk8pz2"
 const BountyIbcUsdtDenom = "ibc/115F68FBA220A028C6F6ED08EA0C1A9C8C52798B14FB66E6C89D5D8C06A524D4"
 
+// Replacement approved devshard binary registered by the v0.2.13 upgrade.
+// The name stays v1 because the replacement binary is fully compatible with
+// the existing devshard v1 interface.
+const (
+	DevshardV1Name   = "v1"
+	DevshardV1Binary = "https://github.com/gonka-ai/gonka/releases/download/release%2Fv0.2.13-devshard-v1/devshardd.zip"
+	DevshardV1Sha256 = "097fa0b0aeff9ee594707edd62c9be71a237c0bae5e2017b3b099b17affd5a67"
+)
+
 func USDT(amount int64) int64 {
 	return amount * 1_000_000
 }
@@ -103,6 +112,9 @@ func CreateUpgradeHandler(
 		}
 
 		if err := setDevshardEscrowParams(ctx, k); err != nil {
+			return nil, err
+		}
+		if err := setDevshardApprovedVersions(ctx, k); err != nil {
 			return nil, err
 		}
 		if err := backfillConfirmationWeightScales(ctx, k); err != nil {
@@ -206,6 +218,45 @@ func setDevshardEscrowParams(ctx context.Context, k keeper.Keeper) error {
 	k.LogInfo("set devshard escrow params", types.Upgrades,
 		"max_escrows_per_epoch", MaxEscrowsPerEpoch,
 		"max_nonce", MaxNonce)
+	return nil
+}
+
+func setDevshardApprovedVersions(ctx context.Context, k keeper.Keeper) error {
+	params, err := k.GetParams(ctx)
+	if err != nil {
+		return err
+	}
+	if params.DevshardEscrowParams == nil {
+		params.DevshardEscrowParams = types.DefaultDevshardEscrowParams()
+	}
+
+	version := &types.DevshardApprovedVersion{
+		Name:   DevshardV1Name,
+		Binary: DevshardV1Binary,
+		Sha256: DevshardV1Sha256,
+	}
+
+	replaced := false
+	for i, existing := range params.DevshardEscrowParams.ApprovedVersions {
+		if existing != nil && existing.Name == DevshardV1Name {
+			params.DevshardEscrowParams.ApprovedVersions[i] = version
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		params.DevshardEscrowParams.ApprovedVersions = append(params.DevshardEscrowParams.ApprovedVersions, version)
+	}
+
+	if err := k.SetParams(ctx, params); err != nil {
+		k.LogError("failed to set devshard approved versions during upgrade", types.Upgrades, "error", err)
+		return err
+	}
+	k.LogInfo("set devshard approved version", types.Upgrades,
+		"name", DevshardV1Name,
+		"binary", DevshardV1Binary,
+		"sha256", DevshardV1Sha256,
+		"replaced", replaced)
 	return nil
 }
 
