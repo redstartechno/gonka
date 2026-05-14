@@ -236,6 +236,7 @@ func TestUpdateModelParamsSetsKimiAndAddsMiniMax(t *testing.T) {
 	require.Equal(t, &inferencetypes.Decimal{Value: 922, Exponent: -3}, model.ValidationThreshold)
 	require.Equal(t, []string{
 		"--enable-auto-tool-choice",
+		"--max-model-len", "150000",
 		"--kv-cache-dtype", "fp8",
 		"--tool-call-parser", "minimax_m2",
 		"--reasoning-parser", "minimax_m2_append_think",

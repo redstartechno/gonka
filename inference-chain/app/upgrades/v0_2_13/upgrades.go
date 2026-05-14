@@ -385,6 +385,7 @@ func minimaxGovernanceModel(authority string) *types.Model {
 		HfCommit:               minimaxModelCommit,
 		ModelArgs: []string{
 			"--enable-auto-tool-choice",
+			"--max-model-len", "150000",
 			"--kv-cache-dtype", "fp8",
 			"--tool-call-parser", "minimax_m2",
 			"--reasoning-parser", "minimax_m2_append_think",
