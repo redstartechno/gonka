@@ -3,6 +3,7 @@ package v0_2_13
 import (
 	"testing"
 
+	govv1 "github.com/cosmos/cosmos-sdk/x/gov/types/v1"
 	keepertest "github.com/productscience/inference/testutil/keeper"
 	"github.com/productscience/inference/testutil/sample"
 	inferencetypes "github.com/productscience/inference/x/inference/types"
@@ -186,6 +187,31 @@ func TestUpdateModelParamsSetsKimiAndAddsMiniMax(t *testing.T) {
 		"--tool-call-parser", "kimi_k2",
 		"--reasoning-parser", "kimi_k2",
 	}, kimiModel.ModelArgs)
+}
+
+func TestSetGenesisGuardianMultiplier(t *testing.T) {
+	k, ctx, _ := keepertest.InferenceKeeperReturningMocks(t)
+
+	genesisParams, found := k.GetGenesisOnlyParams(ctx)
+	require.True(t, found)
+	require.Equal(t, inferencetypes.DecimalFromFloat(0.52), genesisParams.GenesisGuardianMultiplier)
+
+	require.NoError(t, setGenesisGuardianMultiplier(ctx, k))
+
+	genesisParams, found = k.GetGenesisOnlyParams(ctx)
+	require.True(t, found)
+	require.Equal(t, genesisGuardianMultiplier(), genesisParams.GenesisGuardianMultiplier)
+}
+
+func TestApplyGovernanceTallyParams(t *testing.T) {
+	params := govv1.DefaultParams()
+
+	got := applyGovernanceTallyParams(params)
+
+	require.Equal(t, governanceQuorum, got.Quorum)
+	require.Equal(t, governanceExpeditedThreshold, got.ExpeditedThreshold)
+	require.Equal(t, governanceVetoThreshold, got.VetoThreshold)
+	require.Equal(t, params.Threshold, got.Threshold)
 }
 
 func requirePoCModelConfig(

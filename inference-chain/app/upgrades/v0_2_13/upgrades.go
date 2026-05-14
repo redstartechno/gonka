@@ -13,6 +13,8 @@ import (
 	"github.com/cosmos/cosmos-sdk/types/module"
 	"github.com/cosmos/cosmos-sdk/x/authz"
 	authzkeeper "github.com/cosmos/cosmos-sdk/x/authz/keeper"
+	govkeeper "github.com/cosmos/cosmos-sdk/x/gov/keeper"
+	govv1 "github.com/cosmos/cosmos-sdk/x/gov/types/v1"
 	blstypes "github.com/productscience/inference/x/bls/types"
 	"github.com/productscience/inference/x/inference/keeper"
 	"github.com/productscience/inference/x/inference/types"
@@ -38,6 +40,10 @@ const (
 	minimaxModelID     = "MiniMaxAI/MiniMax-M2.7"
 	minimaxModelCommit = "d494266a4affc0d2995ba1fa35c8481cbd84294b"
 	minimaxStartEpoch  = uint64(271)
+
+	governanceQuorum             = "0.25"
+	governanceExpeditedThreshold = "0.50"
+	governanceVetoThreshold      = "0.25"
 )
 
 // BridgeSetupData is parsed from the upgrade proposal's Plan.Info JSON field.
@@ -61,6 +67,7 @@ func CreateUpgradeHandler(
 	configurator module.Configurator,
 	k keeper.Keeper,
 	authzKeeper authzkeeper.Keeper,
+	govKeeper *govkeeper.Keeper,
 ) upgradetypes.UpgradeHandler {
 	return func(ctx context.Context, plan upgradetypes.Plan, fromVM module.VersionMap) (module.VersionMap, error) {
 		k.LogInfo("starting upgrade", types.Upgrades, "version", UpgradeName)
@@ -76,6 +83,17 @@ func CreateUpgradeHandler(
 			return nil, err
 		}
 		if err := updateModelParams(ctx, k); err != nil {
+			return nil, err
+		}
+		// Lower genesis guardian adjusted voting power to 25% and set the
+		// chain-wide governance quorum to 0.25. When guardians do not vote, the
+		// remaining 75% is the only voting power available, so a 0.25 chain-wide
+		// quorum equals 1/3 of the voting power without guardians
+		// (0.25 / 0.75 = 0.334).
+		if err := setGenesisGuardianMultiplier(ctx, k); err != nil {
+			return nil, err
+		}
+		if err := setGovernanceTallyParams(ctx, govKeeper, k); err != nil {
 			return nil, err
 		}
 		if err := grantRespondDealerComplaintsAuthz(ctx, authzKeeper, k); err != nil {
@@ -98,6 +116,50 @@ func CreateUpgradeHandler(
 		k.LogInfo("successfully upgraded", types.Upgrades, "version", UpgradeName)
 		return toVM, nil
 	}
+}
+
+func setGenesisGuardianMultiplier(ctx context.Context, k keeper.Keeper) error {
+	genesisParams, found := k.GetGenesisOnlyParams(ctx)
+	if !found {
+		return fmt.Errorf("genesis only params not found")
+	}
+	genesisParams.GenesisGuardianMultiplier = genesisGuardianMultiplier()
+	if err := k.SetGenesisOnlyParams(ctx, &genesisParams); err != nil {
+		return err
+	}
+	k.LogInfo("set genesis guardian multiplier", types.Upgrades,
+		"genesis_guardian_multiplier", genesisParams.GenesisGuardianMultiplier.ToDecimal().String())
+	return nil
+}
+
+func setGovernanceTallyParams(ctx context.Context, govKeeper *govkeeper.Keeper, k keeper.Keeper) error {
+	params, err := govKeeper.Params.Get(ctx)
+	if err != nil {
+		return err
+	}
+	params = applyGovernanceTallyParams(params)
+	if err := params.ValidateBasic(); err != nil {
+		return err
+	}
+	if err := govKeeper.Params.Set(ctx, params); err != nil {
+		return err
+	}
+	k.LogInfo("set governance tally params", types.Upgrades,
+		"quorum", params.Quorum,
+		"expedited_threshold", params.ExpeditedThreshold,
+		"veto_threshold", params.VetoThreshold)
+	return nil
+}
+
+func applyGovernanceTallyParams(params govv1.Params) govv1.Params {
+	params.Quorum = governanceQuorum
+	params.ExpeditedThreshold = governanceExpeditedThreshold
+	params.VetoThreshold = governanceVetoThreshold
+	return params
+}
+
+func genesisGuardianMultiplier() *types.Decimal {
+	return &types.Decimal{Value: 33334, Exponent: -5}
 }
 
 func setDevshardEscrowParams(ctx context.Context, k keeper.Keeper) error {
