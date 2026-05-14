@@ -207,12 +207,12 @@
         },
         "delegation_params": {
           "deploy_window": "5",
-          "initial_model_id": "Qwen/Qwen3-4B-Instruct-2507",
+          "initial_model_id": "Qwen/Qwen2.5-7B-Instruct",
           "v_min": "3",
           "refusal_penalty": { "value": "1", "exponent": -1 },
           "no_participation_penalty": { "value": "15", "exponent": -2 },
           "delegation_share": { "value": "5", "exponent": -2 },
-          "w_threshold": { "value": "3", "exponent": -1 },
+          "w_threshold": { "value": "1", "exponent": -1 },
           "cap_factor": { "value": "75", "exponent": -2 },
           "max_model_voting_power_percentage": { "value": "3", "exponent": -1 }
         },

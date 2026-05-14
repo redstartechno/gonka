@@ -44,19 +44,19 @@ def load_config_from_env(hf_home: str = None):
         "KEY_NAME": "genesis",
         "KEYRING_PASSWORD": "12345678",
         "API_PORT": "8000",
-        "PUBLIC_URL": "http://xj7-5.s.filfox.io:19246",
-        "P2P_EXTERNAL_ADDRESS": "tcp://xj7-5.s.filfox.io:19245",
+        "PUBLIC_URL": "http://89.169.111.79:8000",
+        "P2P_EXTERNAL_ADDRESS": "tcp://89.169.111.79:5000",
         "ACCOUNT_PUBKEY": "", # will be populated later
         "NODE_CONFIG": "./node-config.json",
         "HF_HOME": Path(hf_home) if hf_home else (Path(os.environ["HOME"]).absolute() / "hf-cache").__str__(),
-        "SEED_API_URL": "http://xj7-5.s.filfox.io:19246",
-        "SEED_NODE_RPC_URL": "http://xj7-5.s.filfox.io:19246/chain-rpc/",
+        "SEED_API_URL": "http://89.169.111.79:8000",
+        "SEED_NODE_RPC_URL": "http://89.169.111.79:26657",
         "DAPI_API__POC_CALLBACK_URL": "http://api:9100",
         "DAPI_CHAIN_NODE__URL": "http://node:26657",
         "DAPI_CHAIN_NODE__P2P_URL": "http://node:26656",
-        "SEED_NODE_P2P_URL": "tcp://xj7-5.s.filfox.io:19245",
-        "RPC_SERVER_URL_1": "http://xj7-5.s.filfox.io:19246/chain-rpc/",
-        "RPC_SERVER_URL_2": "http://xj7-5.s.filfox.io:19246/chain-rpc/",
+        "SEED_NODE_P2P_URL": "tcp://89.169.111.79:5000",
+        "RPC_SERVER_URL_1": "http://89.169.111.79:26657",
+        "RPC_SERVER_URL_2": "http://89.169.111.79:26657",
         "PORT": "8080",
         "INFERENCE_PORT": "5050",
         "KEYRING_BACKEND": "file",
@@ -391,7 +391,12 @@ def create_env_override():
     
     is_test_net = CONFIG_ENV.get("IS_TEST_NET", "true")
     chain_id = CONFIG_ENV.get("CHAIN_ID", "gonka-testnet")
-    
+    # Pin mlnode to the version this testnet was started with. The image in
+    # docker-compose.mlnode.yml has been bumped to 3.0.13, but the on-chain
+    # mlnode_version for this testnet is still 3.0.12-post4 and joining nodes
+    # must match.
+    mlnode_image = CONFIG_ENV.get("MLNODE_IMAGE", "ghcr.io/gonka-ai/mlnode:3.0.12-post4")
+
     override_content = f"""# Auto-generated environment override - do not commit
 services:
   tmkms:
@@ -420,6 +425,8 @@ services:
   explorer:
     environment:
       - IS_TEST_NET={is_test_net}
+  mlnode-308:
+    image: {mlnode_image}
 """
     
     with open(override_file, 'w') as f:
@@ -453,39 +460,34 @@ def pull_images():
     if not config_file.exists():
         raise FileNotFoundError(f"Config file not found: {config_file}")
     
-    print(f"Pulling Docker images from {working_dir}")
-    
-    # Create the command to source config.env and run docker compose
-    # We use bash -c to run both commands in sequence
+    print(f"Pulling Docker images from {working_dir}", flush=True)
+
     compose_files = get_compose_files_arg(include_mlnode=True)
     cmd = f"bash -c 'source {config_file} && docker compose {compose_files} pull'"
-    
-    # Retry logic for network instability
+    print(f"Running: {cmd}", flush=True)
+
     max_retries = 3
     retry_delay = 10  # seconds
-    
+
     for attempt in range(max_retries):
-        # Run the command in the specified working directory
+        print(f"Pull attempt {attempt + 1}/{max_retries}...", flush=True)
+        # Stream output live so progress is visible during long pulls.
         result = subprocess.run(
             cmd,
             shell=True,
             cwd=working_dir,
-            capture_output=True,
-            text=True
         )
-        
+
         if result.returncode == 0:
-            print("Docker images pulled successfully!")
-            if result.stdout:
-                print(result.stdout)
+            print("Docker images pulled successfully!", flush=True)
             return
-        
+
         if attempt < max_retries - 1:
-            print(f"Error pulling images (attempt {attempt + 1}/{max_retries}): {result.stderr}")
-            print(f"Retrying in {retry_delay} seconds...")
+            print(f"Error pulling images (attempt {attempt + 1}/{max_retries}), exit code {result.returncode}", flush=True)
+            print(f"Retrying in {retry_delay} seconds...", flush=True)
             time.sleep(retry_delay)
         else:
-            print(f"Error pulling images after {max_retries} attempts: {result.stderr}")
+            print(f"Error pulling images after {max_retries} attempts, exit code {result.returncode}", flush=True)
             raise subprocess.CalledProcessError(result.returncode, cmd)
 
 
@@ -1384,7 +1386,11 @@ def grant_key_permissions(warm_key_address: str):
     # Get required configuration values
     seed_api_url = CONFIG_ENV.get("SEED_API_URL")
     keyring_password = CONFIG_ENV.get("KEYRING_PASSWORD")
-    node_rpc_url = CONFIG_ENV.get("NODE_RPC_URL", "http://127.0.0.1:26657")
+    # In join mode the node container does not publish 26657 to the host; the
+    # proxy on API_PORT forwards /chain-rpc/ to node:26657. Trailing slash is
+    # required - without it the proxy returns an HTML 404 instead of routing.
+    api_port = CONFIG_ENV.get("API_PORT", "8000")
+    node_rpc_url = CONFIG_ENV.get("NODE_RPC_URL", f"http://127.0.0.1:{api_port}/chain-rpc/")
     
     if not keyring_password:
         raise ValueError("KEYRING_PASSWORD not found in CONFIG_ENV")
@@ -1775,7 +1781,11 @@ def main():
 
     # Ensure feegrant/authz are in place for warm key tx submission in both modes.
     # On fresh genesis this is required because upgrade-time feegrant migration does not run.
-    rpc_url_for_grant = CONFIG_ENV.get("NODE_RPC_URL", "http://127.0.0.1:26657")
+    # In join mode the node service does not publish 26657 to the host; only the
+    # proxy (API_PORT) is reachable, and it forwards /chain-rpc/ to node:26657.
+    api_port = CONFIG_ENV.get("API_PORT", "8000")
+    default_rpc_url = f"http://127.0.0.1:{api_port}/chain-rpc"
+    rpc_url_for_grant = CONFIG_ENV.get("NODE_RPC_URL", default_rpc_url)
     wait_for_rpc_ready(rpc_url_for_grant)
     grant_key_permissions(warm_key.address)
 
