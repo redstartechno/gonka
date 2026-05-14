@@ -111,6 +111,10 @@ func TestUpdateModelParamsSetsKimiAndAddsMiniMax(t *testing.T) {
 			ModelId:           kimiModelID,
 			WeightScaleFactor: inferencetypes.DecimalFromFloat(1),
 		},
+		{
+			ModelId:           qwen7BModelID,
+			WeightScaleFactor: &inferencetypes.Decimal{Value: 4475, Exponent: -3},
+		},
 	}
 	require.NoError(t, k.SetParams(ctx, params))
 	require.NoError(t, k.SetEffectiveEpochIndex(ctx, 11))
@@ -138,10 +142,13 @@ func TestUpdateModelParamsSetsKimiAndAddsMiniMax(t *testing.T) {
 
 	got, err := k.GetParams(ctx)
 	require.NoError(t, err)
-	require.Len(t, got.PocParams.Models, 2)
+	require.Len(t, got.PocParams.Models, 3)
 
 	kimi := requirePoCModelConfig(t, got.PocParams.Models, kimiModelID)
 	require.Equal(t, &inferencetypes.Decimal{Value: 78, Exponent: -2}, kimi.WeightScaleFactor)
+
+	qwen7B := requirePoCModelConfig(t, got.PocParams.Models, qwen7BModelID)
+	require.Equal(t, &inferencetypes.Decimal{Value: 24861, Exponent: -4}, qwen7B.WeightScaleFactor)
 	kimiModel, found := k.GetGovernanceModel(ctx, kimiModelID)
 	require.True(t, found)
 	require.Equal(t, []string{
@@ -178,7 +185,7 @@ func TestUpdateModelParamsSetsKimiAndAddsMiniMax(t *testing.T) {
 	require.NoError(t, updateModelParams(ctx, k))
 	got, err = k.GetParams(ctx)
 	require.NoError(t, err)
-	require.Len(t, got.PocParams.Models, 2)
+	require.Len(t, got.PocParams.Models, 3)
 	kimiModel, found = k.GetGovernanceModel(ctx, kimiModelID)
 	require.True(t, found)
 	require.Equal(t, []string{

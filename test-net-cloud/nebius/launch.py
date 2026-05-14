@@ -2,6 +2,7 @@ import os
 import shutil
 import hashlib
 import urllib.request
+import urllib.error
 import zipfile
 import subprocess
 import json
@@ -30,8 +31,8 @@ COLD_KEY_NAME = "gonka-account-key"
 
 INFERENCED_BINARY = SimpleNamespace(
     zip_file=BASE_DIR / "inferenced-linux-amd64.zip",
-    url="https://github.com/product-science/race-releases/releases/download/release%2Fv0.2.8-poc3/inferenced-linux-amd64.zip",
-    checksum="5ab63bfb05ae2ccc85627beb0ff3ced6b0bddf97ba864eae359bdcb0fa730e3e",
+    url="https://github.com/gonka-ai/gonka/releases/download/release%2Fv0.2.12/inferenced-linux-amd64.zip",
+    checksum="e3722223e8ce4a5a60533012144016a55a0815f5efc5e9f943a09858e89b15e3",
     path=BASE_DIR / "inferenced",
 )
 
@@ -43,25 +44,27 @@ def load_config_from_env(hf_home: str = None):
         "KEY_NAME": "genesis",
         "KEYRING_PASSWORD": "12345678",
         "API_PORT": "8000",
-        "PUBLIC_URL": "http://89.169.111.79:8000",
-        "P2P_EXTERNAL_ADDRESS": "tcp://89.169.111.79:5000",
+        "PUBLIC_URL": "http://xj7-5.s.filfox.io:19246",
+        "P2P_EXTERNAL_ADDRESS": "tcp://xj7-5.s.filfox.io:19245",
         "ACCOUNT_PUBKEY": "", # will be populated later
         "NODE_CONFIG": "./node-config.json",
         "HF_HOME": Path(hf_home) if hf_home else (Path(os.environ["HOME"]).absolute() / "hf-cache").__str__(),
-        "SEED_API_URL": "http://89.169.111.79:8000",
-        "SEED_NODE_RPC_URL": "http://89.169.111.79:26657",
+        "SEED_API_URL": "http://xj7-5.s.filfox.io:19246",
+        "SEED_NODE_RPC_URL": "http://xj7-5.s.filfox.io:19246/chain-rpc/",
         "DAPI_API__POC_CALLBACK_URL": "http://api:9100",
         "DAPI_CHAIN_NODE__URL": "http://node:26657",
         "DAPI_CHAIN_NODE__P2P_URL": "http://node:26656",
-        "SEED_NODE_P2P_URL": "tcp://89.169.111.79:5000",
-        "RPC_SERVER_URL_1": "http://89.169.111.79:26657",
-        "RPC_SERVER_URL_2": "http://89.169.111.79:26657",
+        "SEED_NODE_P2P_URL": "tcp://xj7-5.s.filfox.io:19245",
+        "RPC_SERVER_URL_1": "http://xj7-5.s.filfox.io:19246/chain-rpc/",
+        "RPC_SERVER_URL_2": "http://xj7-5.s.filfox.io:19246/chain-rpc/",
         "PORT": "8080",
         "INFERENCE_PORT": "5050",
         "KEYRING_BACKEND": "file",
         "SYNC_WITH_SNAPSHOTS": "true",
         "SNAPSHOT_INTERVAL": "200",
         "IS_TEST_NET": "true",
+        "ETHEREUM_NETWORK": "sepolia",
+        "BEACON_STATE_URL": "https://sepolia.checkpoint-sync.ethpandaops.io",
     }
     
     config = default_config.copy()
@@ -382,23 +385,28 @@ def create_config_env_file():
 
 
 def create_env_override():
-    """Create docker-compose override file to inject IS_TEST_NET into all containers"""
+    """Create docker-compose override file to inject IS_TEST_NET and CHAIN_ID into all containers"""
     working_dir = GONKA_REPO_DIR / "deploy/join"
     override_file = working_dir / "docker-compose.env-override.yml"
     
     is_test_net = CONFIG_ENV.get("IS_TEST_NET", "true")
+    chain_id = CONFIG_ENV.get("CHAIN_ID", "gonka-testnet")
     
     override_content = f"""# Auto-generated environment override - do not commit
 services:
   tmkms:
     environment:
       - IS_TEST_NET={is_test_net}
+      - CHAIN_ID={chain_id}
   node:
     environment:
       - IS_TEST_NET={is_test_net}
+      - CHAIN_ID={chain_id}
   api:
     environment:
       - IS_TEST_NET={is_test_net}
+      - ENFORCED_MODEL_ID=Qwen/Qwen3-4B-Instruct-2507
+      - ENFORCED_MODEL_ARGS=--enable-auto-tool-choice --tool-call-parser hermes --max-model-len 25000
   proxy:
     environment:
       - IS_TEST_NET={is_test_net}
@@ -484,10 +492,11 @@ def pull_images():
 def create_docker_compose_override(init_only=True, node_id=None):
     """Create a docker-compose override file for genesis initialization or runtime"""
     working_dir = GONKA_REPO_DIR / "deploy/join"
+    chain_id = CONFIG_ENV.get("CHAIN_ID", "gonka-testnet")
     
     if init_only:
         override_file = working_dir / "docker-compose.genesis-override.yml"
-        override_content = """services:
+        override_content = f"""services:
   node:
     ports:
       - "26657:26657"
@@ -495,6 +504,7 @@ def create_docker_compose_override(init_only=True, node_id=None):
       - INIT_ONLY=true
       - IS_GENESIS=true
       - COIN_DENOM=ngonka
+      - CHAIN_ID={chain_id}
   proxy:
     environment:
       - DISABLE_GONKA_API=false
@@ -530,6 +540,7 @@ def create_docker_compose_override(init_only=True, node_id=None):
       - IS_GENESIS=true
       - GENESIS_SEEDS={genesis_seeds}
       - COIN_DENOM=ngonka
+      - CHAIN_ID={chain_id}
   proxy:
     environment:
       - DISABLE_GONKA_API=false
@@ -557,6 +568,21 @@ def run_genesis_initialization():
     if not config_file.exists():
         raise FileNotFoundError(f"Config file not found: {config_file}")
     
+    # Heal broken partial-initialization state:
+    # Some aborted runs leave config.toml without complete node state
+    # (e.g. missing genesis.json or node_key.json), which makes init script
+    # skip initialization and fail later. Force a clean re-init in that case.
+    deploy_state_dir = DEPLOY_DIR / ".inference"
+    init_flag = deploy_state_dir / ".node_initialized"
+    config_toml = deploy_state_dir / "config/config.toml"
+    genesis_file = deploy_state_dir / "config/genesis.json"
+    node_key_file = deploy_state_dir / "config/node_key.json"
+    stale_flag_state = init_flag.exists() and (not genesis_file.exists() or not node_key_file.exists())
+    stale_config_state = config_toml.exists() and (not genesis_file.exists() or not node_key_file.exists())
+    if stale_flag_state or stale_config_state:
+        print("Detected stale init flag with missing node state; resetting deploy/join/.inference")
+        os.system(f"sudo rm -rf {deploy_state_dir}")
+
     print("Running genesis initialization...")
     print("This will initialize the node with INIT_ONLY=true and IS_GENESIS=true")
     
@@ -691,66 +717,91 @@ def get_or_create_warm_key(service="api"):
     if not config_file.exists():
         raise FileNotFoundError(f"Config file not found: {config_file}")
     
-    print(f"Creating warm key for service: {service}")
-    
-    # Create the key
     compose_files = get_compose_files_arg(include_mlnode=True)
-    add_cmd = f"bash -c 'source {config_file} && docker compose {compose_files} run --rm --no-deps -T {service} sh -lc \"printf \\\"%s\\\\n%s\\\\n\\\" \\$KEYRING_PASSWORD \\$KEYRING_PASSWORD | inferenced keys add \\$KEY_NAME --keyring-backend file\"'"
-    
-    result = subprocess.run(
-        add_cmd,
-        shell=True,
-        cwd=working_dir,
-        capture_output=True,
-        text=True
+    keyring_password = CONFIG_ENV.get("KEYRING_PASSWORD")
+    if not keyring_password:
+        raise ValueError("KEYRING_PASSWORD not found in CONFIG_ENV")
+
+    list_cmd = (
+        f"bash -c 'source {config_file} && docker compose {compose_files} run --rm --no-deps -T {service} "
+        "sh -lc \"inferenced keys list --keyring-backend file --output json\"'"
     )
-    
-    if result.returncode != 0:
-        print(f"Error creating key: {result.stderr}")
-        raise subprocess.CalledProcessError(result.returncode, add_cmd)
-    
-    print("Warm key creation completed!")
-    print("Output:")
-    print("=" * 50)
-    if result.stdout:
-        print(result.stdout)
-    if result.stderr:
-        print("Errors/Warnings:")
-        print(result.stderr)
-    print("=" * 50)
-    
-    # Extract both address and pubkey from output (same format as cold key)
-    full_output = result.stdout + result.stderr if result.stderr else result.stdout
-    
-    # Extract address
-    address_match = re.search(r"address:\s*([a-z0-9]+)", full_output)
-    if not address_match:
-        raise ValueError("Could not find address in warm key output")
-    address = address_match.group(1)
-    
-    # Extract pubkey
-    pubkey_match = re.search(r"pubkey: '(.+?)'", full_output)
-    if not pubkey_match:
-        raise ValueError("Could not find pubkey in warm key output")
-    
-    pubkey_json = pubkey_match.group(1)
-    try:
-        pubkey_data = json.loads(pubkey_json)
-        pubkey = pubkey_data.get("key", "")
-        if not pubkey:
-            raise ValueError("Could not extract key from pubkey JSON")
-    except json.JSONDecodeError:
-        raise ValueError("Could not parse pubkey JSON")
-    
-    # Extract name
-    name_match = re.search(r"name:\s*\"?([^\"]+)\"?", full_output)
-    name = name_match.group(1) if name_match else CONFIG_ENV["KEY_NAME"]
-    
-    print(f"Extracted warm key address: {address}")
-    print(f"Extracted warm key pubkey: {pubkey}")
-    print(f"Extracted warm key name: {name}")
-    
-    return AccountKey(address=address, pubkey=pubkey, name=name)
+    show_cmd = (
+        f"bash -c 'source {config_file} && docker compose {compose_files} run --rm --no-deps -T {service} "
+        "sh -lc \"printf \\\"%s\\\\n\\\" \\$KEYRING_PASSWORD | "
+        "inferenced keys show \\$KEY_NAME --keyring-backend file --output json\"'"
+    )
+    add_cmd = (
+        f"bash -c 'source {config_file} && docker compose {compose_files} run --rm --no-deps -T {service} "
+        "sh -lc \"printf \\\"%s\\\\n%s\\\\n\\\" \\$KEYRING_PASSWORD \\$KEYRING_PASSWORD | "
+        "inferenced keys add \\$KEY_NAME --keyring-backend file\"'"
+    )
+
+    def parse_key_json(output: str) -> AccountKey:
+        payload = json.loads(output)
+        pubkey_field = payload.get("pubkey")
+        if isinstance(pubkey_field, dict):
+            pubkey = pubkey_field.get("key", "")
+        else:
+            pubkey = pubkey_field or ""
+        address = payload.get("address", "")
+        name = payload.get("name", CONFIG_ENV["KEY_NAME"])
+        if not address or not pubkey:
+            raise ValueError(f"Incomplete warm key data in output: {payload}")
+        return AccountKey(address=address, pubkey=pubkey, name=name)
+
+    def run_cmd(command: str, label: str, timeout_seconds: int = 120) -> subprocess.CompletedProcess:
+        try:
+            return subprocess.run(
+                command,
+                shell=True,
+                cwd=working_dir,
+                capture_output=True,
+                text=True,
+                timeout=timeout_seconds
+            )
+        except subprocess.TimeoutExpired as e:
+            raise TimeoutError(
+                f"{label} timed out after {timeout_seconds}s. "
+                "This command must be non-interactive; check KEYRING_PASSWORD and container health."
+            ) from e
+
+    # First check key names to avoid interactive overwrite prompts.
+    list_result = run_cmd(list_cmd, "warm key list")
+    if list_result.returncode == 0:
+        try:
+            keys = json.loads(list_result.stdout or "[]")
+            names = {
+                entry.get("name", "")
+                for entry in keys
+                if isinstance(entry, dict)
+            }
+        except json.JSONDecodeError:
+            names = set()
+        if CONFIG_ENV.get("KEY_NAME") in names:
+            show_result = run_cmd(show_cmd, "warm key show")
+            if show_result.returncode != 0:
+                print(f"Error reading existing warm key: {show_result.stderr}")
+                raise subprocess.CalledProcessError(show_result.returncode, show_cmd)
+            warm_key = parse_key_json(show_result.stdout.strip())
+            print(f"Warm key already exists for service {service}, reusing: {warm_key.address}")
+            return warm_key
+
+    print(f"Creating warm key for service: {service}")
+    add_result = run_cmd(add_cmd, "warm key add")
+    if add_result.returncode != 0:
+        print(f"Error creating key: {add_result.stderr}")
+        raise subprocess.CalledProcessError(add_result.returncode, add_cmd)
+
+    # Query the key after creation so parsing is stable across output formats.
+    show_result = run_cmd(show_cmd, "warm key show")
+    if show_result.returncode != 0:
+        print(f"Error reading warm key after creation: {show_result.stderr}")
+        raise subprocess.CalledProcessError(show_result.returncode, show_cmd)
+
+    warm_key = parse_key_json(show_result.stdout.strip())
+    print(f"Warm key ready for service {service}: {warm_key.address}")
+    return warm_key
 
 
 def setup_genesis_file():
@@ -918,7 +969,7 @@ def fund_distribution_module_account(community_pool_amount="120000000000000000")
     print(f"Community pool: {community_pool_amount}.000000000000000000ngonka")
 
 
-def generate_gentx(account_key: AccountKey, consensus_key: str, node_id: str, warm_key_address: str):
+def generate_gentx(account_key: AccountKey, consensus_key: str, node_id: str, warm_key_address: str, chain_id: str):
     """Generate genesis transaction using local inferenced binary"""
     print("Generating genesis transaction (gentx)...")
     
@@ -939,7 +990,7 @@ def generate_gentx(account_key: AccountKey, consensus_key: str, node_id: str, wa
         "--pubkey", consensus_key,
         "--ml-operational-address", warm_key_address,
         "--url", CONFIG_ENV["PUBLIC_URL"],
-        "--chain-id", "gonka-mainnet",
+        "--chain-id", chain_id,
         "--node-id", node_id
     ]
     
@@ -1143,6 +1194,81 @@ def apply_genesis_overrides(overrides_file_path):
     print(f"Genesis overrides applied successfully from {overrides_file_path}!")
 
 
+def fetch_genesis_from_seed():
+    """Fetch genesis.json from seed node RPC and save to repo genesis/ directory"""
+    seed_node_rpc_url = CONFIG_ENV.get("SEED_NODE_RPC_URL")
+    if not seed_node_rpc_url:
+        raise ValueError("SEED_NODE_RPC_URL not found in CONFIG_ENV")
+    
+    # RPC endpoint for genesis
+    genesis_url = f"{seed_node_rpc_url}/genesis"
+    
+    print(f"Fetching genesis from {genesis_url}...")
+    
+    try:
+        # Fetch genesis content
+        with urllib.request.urlopen(genesis_url) as response:
+            data = json.loads(response.read().decode())
+        
+        # Extract genesis from result
+        if 'result' in data and 'genesis' in data['result']:
+            genesis_content = data['result']['genesis']
+        elif 'genesis' in data:
+            genesis_content = data['genesis']
+        else:
+            raise ValueError(f"Could not find genesis content in response from {genesis_url}")
+        
+        # Destination path (repo genesis directory for Docker mount)
+        dest_genesis = GONKA_REPO_DIR / "genesis/genesis.json"
+        
+        # Ensure directory exists
+        dest_genesis.parent.mkdir(parents=True, exist_ok=True)
+        
+        # Save to file
+        with open(dest_genesis, 'w') as f:
+            json.dump(genesis_content, f, indent=2)
+        
+        print(f"Genesis fetched and saved successfully to {dest_genesis}")
+        
+        return genesis_content
+        
+    except Exception as e:
+        print(f"Error fetching genesis from {genesis_url}: {e}")
+        # Try fallback to status endpoint if genesis is too large
+        status_url = f"{seed_node_rpc_url}/status"
+        print(f"Checking node status at {status_url} to confirm chain ID...")
+        try:
+             with urllib.request.urlopen(status_url) as response:
+                data = json.loads(response.read().decode())
+                print("Node status check successful. Warning: Genesis file could not be downloaded via RPC (likely too large).")
+                print("Please ensure you have manually copied the correct genesis.json if it differs from the repo default.")
+        except Exception as status_e:
+             print(f"Error checking node status: {status_e}")
+             
+        raise RuntimeError(f"Failed to fetch genesis: {e}")
+
+
+
+def set_chain_id_in_genesis(chain_id):
+    """Update valid chain_id in genesis.json"""
+    print(f"Setting chain_id to {chain_id} in genesis.json...")
+    
+    genesis_file = INFERENCED_STATE_DIR / "config/genesis.json"
+    
+    if not genesis_file.exists():
+        raise FileNotFoundError(f"Genesis file not found at {genesis_file}")
+    
+    with open(genesis_file, 'r') as f:
+        genesis_data = json.load(f)
+    
+    genesis_data['chain_id'] = chain_id
+    
+    with open(genesis_file, 'w') as f:
+        json.dump(genesis_data, f, indent=2, separators=(',', ': '))
+    
+    print(f"Set chain_id to {chain_id} successfully!")
+
+
 def copy_final_genesis_to_repo():
     """Copy the finalized genesis.json to the genesis/ directory in the repo"""
     print("Copying finalized genesis.json to repository genesis/ directory...")
@@ -1172,9 +1298,10 @@ def copy_final_genesis_to_repo():
     print("Finalized genesis.json copied to repository successfully!")
 
 
-def register_joining_participant(service="api"):
+def register_joining_participant(service="api", max_retries=5, retry_delay=30):
     """
-    Register this node as a new participant in the existing network using Docker compose
+    Register this node as a new participant in the existing network using Docker compose.
+    Retries if the node is not ready yet.
     """
     working_dir = GONKA_REPO_DIR / "deploy/join"
     config_file = working_dir / "config.env"
@@ -1206,29 +1333,43 @@ def register_joining_participant(service="api"):
     
     print(f"Running command: {register_cmd}")
     
-    result = subprocess.run(
-        register_cmd,
-        shell=True,
-        cwd=working_dir,
-        capture_output=True,
-        text=True
-    )
-    
-    print("Participant registration completed!")
-    print("Output:")
-    print("=" * 50)
-    if result.stdout:
-        print(result.stdout)
-    if result.stderr:
-        print("Errors/Warnings:")
-        print(result.stderr)
-    print("=" * 50)
-    
-    if result.returncode != 0:
+    for attempt in range(max_retries):
+        result = subprocess.run(
+            register_cmd,
+            shell=True,
+            cwd=working_dir,
+            capture_output=True,
+            text=True
+        )
+        
+        print(f"Participant registration attempt {attempt + 1}/{max_retries}")
+        print("Output:")
+        print("=" * 50)
+        if result.stdout:
+            print(result.stdout)
+        if result.stderr:
+            print("Errors/Warnings:")
+            print(result.stderr)
+        print("=" * 50)
+        
+        if result.returncode == 0:
+            print("Participant registration completed successfully!")
+            return
+        
+        # Check if it's a connection error (node not ready yet)
+        if "connection refused" in result.stderr.lower() or "not responding" in result.stderr.lower():
+            if attempt < max_retries - 1:
+                print(f"Node not ready yet. Retrying in {retry_delay} seconds...")
+                time.sleep(retry_delay)
+                continue
+        
+        # For other errors, fail immediately
         print(f"Participant registration failed with return code: {result.returncode}")
         raise subprocess.CalledProcessError(result.returncode, register_cmd)
     
-    print("Participant registration completed successfully!")
+    # All retries exhausted
+    print(f"Participant registration failed after {max_retries} attempts")
+    raise subprocess.CalledProcessError(result.returncode, register_cmd)
 
 
 def grant_key_permissions(warm_key_address: str):
@@ -1243,9 +1384,8 @@ def grant_key_permissions(warm_key_address: str):
     # Get required configuration values
     seed_api_url = CONFIG_ENV.get("SEED_API_URL")
     keyring_password = CONFIG_ENV.get("KEYRING_PASSWORD")
+    node_rpc_url = CONFIG_ENV.get("NODE_RPC_URL", "http://127.0.0.1:26657")
     
-    if not seed_api_url:
-        raise ValueError("SEED_API_URL not found in CONFIG_ENV")
     if not keyring_password:
         raise ValueError("KEYRING_PASSWORD not found in CONFIG_ENV")
     
@@ -1259,31 +1399,39 @@ def grant_key_permissions(warm_key_address: str):
         "--keyring-backend", "file",
         "--home", str(INFERENCED_STATE_DIR),
         "--gas", "2000000",
-        "--node", f"{seed_api_url}/chain-rpc/"
+        "--node", node_rpc_url
     ]
     
     print(f"Running command: {' '.join(cmd)}")
     
-    try:
-        # Run the command with password input
-        process = subprocess.Popen(
-            cmd,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True
-        )
-        
-        # Send the password twice (for signing and confirmation)
-        password_input = f"{keyring_password}\n{keyring_password}\n"
-        stdout, stderr = process.communicate(input=password_input)
-        
-        if process.returncode == 0:
-            print("ML operations permissions granted successfully!")
-            if stdout:
-                print("Output:")
-                print(stdout)
-        else:
+    max_retries = 3
+    retry_delay = 10
+    for attempt in range(max_retries):
+        try:
+            process = subprocess.Popen(
+                cmd,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+
+            # Send the password twice (for signing and confirmation)
+            password_input = f"{keyring_password}\n{keyring_password}\n"
+            stdout, stderr = process.communicate(input=password_input)
+            combined = (stdout or "") + "\n" + (stderr or "")
+
+            if process.returncode == 0:
+                print("ML operations permissions granted successfully!")
+                if stdout:
+                    print("Output:")
+                    print(stdout)
+                return
+
+            if "fee allowance already exists" in combined.lower():
+                print("Feegrant already exists; proceeding.")
+                return
+
             print(f"Grant permissions failed with return code: {process.returncode}")
             if stdout:
                 print("Output:")
@@ -1291,11 +1439,62 @@ def grant_key_permissions(warm_key_address: str):
             if stderr:
                 print("Error:")
                 print(stderr)
+
+            retryable = (
+                "timed out waiting for transaction" in combined.lower()
+                or "connection refused" in combined.lower()
+                or "context deadline exceeded" in combined.lower()
+            )
+            if retryable and attempt < max_retries - 1:
+                print(f"Retrying grant in {retry_delay}s ({attempt + 1}/{max_retries})...")
+                time.sleep(retry_delay)
+                continue
+
             raise subprocess.CalledProcessError(process.returncode, cmd)
-            
-    except Exception as e:
-        print(f"Error granting ML operations permissions: {e}")
-        raise
+
+        except Exception as e:
+            if attempt < max_retries - 1:
+                print(f"Error granting ML operations permissions: {e}. Retrying in {retry_delay}s...")
+                time.sleep(retry_delay)
+                continue
+            print(f"Error granting ML operations permissions: {e}")
+            raise
+
+
+def wait_for_rpc_ready(node_rpc_url: str, timeout_seconds: int = 180, poll_interval: int = 2):
+    """Wait until Comet RPC is reachable and returns a valid status payload."""
+    status_url = node_rpc_url.rstrip("/") + "/status"
+    deadline = time.time() + timeout_seconds
+    last_error = None
+
+    print(f"Waiting for RPC readiness at {status_url} (timeout: {timeout_seconds}s)...")
+    while time.time() < deadline:
+        try:
+            with urllib.request.urlopen(status_url, timeout=5) as resp:
+                raw = resp.read().decode("utf-8", errors="replace")
+            payload = json.loads(raw)
+            sync_info = payload.get("result", {}).get("sync_info", {})
+            height_raw = sync_info.get("latest_block_height", "0")
+            try:
+                height = int(height_raw)
+            except (TypeError, ValueError):
+                height = 0
+            if height >= 1:
+                print(f"RPC is ready at height {height}")
+                return
+            last_error = f"latest_block_height not ready yet: {height_raw}"
+        except (
+            urllib.error.URLError,
+            urllib.error.HTTPError,
+            TimeoutError,
+            json.JSONDecodeError,
+            ValueError,
+            OSError,  # includes ConnectionResetError and other transient socket errors
+        ) as e:
+            last_error = str(e)
+        time.sleep(poll_interval)
+
+    raise TimeoutError(f"RPC not ready after {timeout_seconds}s: {last_error}")
 
 
 def start_docker_services(
@@ -1384,38 +1583,68 @@ def start_docker_services(
     print("Docker services started successfully!")
 
 
-def genesis_route(account_key: AccountKey):
+def genesis_route(account_key: AccountKey, chain_id: str) -> AccountKey:
     print("\n=== GENESIS MODE: Initializing genesis node ===")
     run_genesis_initialization()
     add_genesis_account(account_key)
 
     consensus_key = extract_consensus_key()
+    # Create/reuse warm key AFTER genesis init, because init may reset .inference.
     warm_key = get_or_create_warm_key()
 
     # Phase 3. GENTX and GENPARTICIPANT generation
     # Setup genesis.json file for local gentx generation
     setup_genesis_file()
+    set_chain_id_in_genesis(chain_id)
     fund_distribution_module_account()
     # Generate gentx transaction
     node_id = CONFIG_ENV.get("NODE_ID", "")
     if not node_id:
         raise ValueError("NODE_ID not found in CONFIG_ENV")
-    generate_gentx(account_key, consensus_key, node_id, warm_key.address)
+    generate_gentx(account_key, consensus_key, node_id, warm_key.address, chain_id)
 
     # Phase 4. Genesis finalization
     collect_genesis_transactions()
     patch_genesis_participants()
 
     # Apply genesis overrides (includes denom_metadata and other configurations)
-    genesis_overrides_path = GONKA_REPO_DIR / "test-net-cloud/nebius/genesis-overrides.json"
+    # Check for local override file first (uploaded by prepare.sh), then fallback to repo
+    local_overrides = BASE_DIR / "genesis-overrides.json"
+    repo_overrides = GONKA_REPO_DIR / "test-net-cloud/nebius/genesis-overrides.json"
+    
+    if local_overrides.exists():
+        print(f"Using local genesis overrides from {local_overrides}")
+        genesis_overrides_path = local_overrides
+    else:
+        print(f"Using repo genesis overrides from {repo_overrides}")
+        genesis_overrides_path = repo_overrides
+        
     apply_genesis_overrides(genesis_overrides_path)
+    
+    set_chain_id_in_genesis(chain_id)
 
     copy_genesis_back_to_docker()
     copy_final_genesis_to_repo()
+    return warm_key
 
 
-def join_route(account_key: AccountKey):
+def join_route(account_key: AccountKey, chain_id: str) -> AccountKey:
     print("\n=== JOIN MODE: Joining existing network ===")
+    
+    # Try to fetch global genesis file from the seed node
+    # This is critical if the chain ID has changed from default
+    try:
+        genesis_content = fetch_genesis_from_seed()
+        
+        # Verify Chain ID
+        fetched_chain_id = genesis_content.get("chain_id", "unknown")
+        if fetched_chain_id != chain_id:
+            print(f"WARNING: Fetched genesis chain_id '{fetched_chain_id}' does not match desired '{chain_id}'")
+            print(f"Using fetched chain_id '{fetched_chain_id}' as the source of truth.")
+    except Exception as e:
+        print(f"Warning: Could not fetch genesis from seed: {e}")
+        print("Falling back to local repo genesis.json. Ensure it matches the network!")
+
     start_docker_services(
         compose_files=["docker-compose.yml"],
         services=["tmkms", "node"],
@@ -1423,12 +1652,10 @@ def join_route(account_key: AccountKey):
     )
     print("Waiting 15 seconds for node to start...")
     time.sleep(15)
-    
-    # Get warm key for ML operations
+
     warm_key = get_or_create_warm_key()
-    
     register_joining_participant()
-    grant_key_permissions(warm_key.address)
+    return warm_key
 
 
 def parse_arguments():
@@ -1474,6 +1701,12 @@ Examples:
         default="main",
         help="Git branch to checkout after cloning (default: main)"
     )
+
+    parser.add_argument(
+        "--chainid",
+        default="gonka-testnet",
+        help="Chain ID to use for the network (default: gonka-testnet)"
+    )
     
     return parser.parse_args()
 
@@ -1481,6 +1714,10 @@ Examples:
 def main():
     # Parse command-line arguments
     args = parse_arguments()
+    
+    # Store Chain ID in CONFIG_ENV so it permeates to config.env and Docker containers
+    CONFIG_ENV["CHAIN_ID"] = args.chainid
+    print(f"Using Chain ID: {args.chainid}")
     
     # Determine operation mode
     is_genesis = (args.mode == "genesis")
@@ -1515,9 +1752,9 @@ def main():
     pull_images()
 
     if is_genesis:
-        genesis_route(account_key)
+        warm_key = genesis_route(account_key, args.chainid)
     else:
-        join_route(account_key)
+        warm_key = join_route(account_key, args.chainid)
 
     # Phase 5. Start services
     if is_genesis:
@@ -1535,6 +1772,12 @@ def main():
             compose_files=["docker-compose.yml", "docker-compose.mlnode.yml"],
             additional_args=["-d"]
         )
+
+    # Ensure feegrant/authz are in place for warm key tx submission in both modes.
+    # On fresh genesis this is required because upgrade-time feegrant migration does not run.
+    rpc_url_for_grant = CONFIG_ENV.get("NODE_RPC_URL", "http://127.0.0.1:26657")
+    wait_for_rpc_ready(rpc_url_for_grant)
+    grant_key_permissions(warm_key.address)
 
 if __name__ == "__main__":
     main()

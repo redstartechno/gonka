@@ -36,6 +36,7 @@ const (
 	USDTContractAddress = "0xdAC17F958D2ee523a2206206994597C13D831ec7"
 
 	qwenModelID        = "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8"
+	qwen7BModelID      = "Qwen/Qwen2.5-7B-Instruct"
 	kimiModelID        = "moonshotai/Kimi-K2.6"
 	minimaxModelID     = "MiniMaxAI/MiniMax-M2.7"
 	minimaxModelCommit = "d494266a4affc0d2995ba1fa35c8481cbd84294b"
@@ -191,6 +192,7 @@ func updateModelParams(ctx context.Context, k keeper.Keeper) error {
 	}
 
 	updatedKimi := setPoCModelWeightScale(params.PocParams, kimiModelID, kimiWeightScaleFactor())
+	updatedQwen7B := setPoCModelWeightScale(params.PocParams, qwen7BModelID, qwen7BWeightScaleFactor())
 	upsertPoCModelConfig(params.PocParams, minimaxPoCModelConfig())
 
 	if err := k.SetParams(ctx, params); err != nil {
@@ -202,6 +204,8 @@ func updateModelParams(ctx context.Context, k keeper.Keeper) error {
 	k.LogInfo("updated model params", types.Upgrades,
 		"kimi_model_id", kimiModelID,
 		"kimi_updated", updatedKimi,
+		"qwen7b_model_id", qwen7BModelID,
+		"qwen7b_updated", updatedQwen7B,
 		"minimax_model_id", minimaxModelID)
 	return nil
 }
@@ -265,6 +269,13 @@ func upsertPoCModelConfig(poc *types.PocParams, config *types.PoCModelConfig) {
 
 func kimiWeightScaleFactor() *types.Decimal {
 	return &types.Decimal{Value: 78, Exponent: -2}
+}
+
+// qwen7BWeightScaleFactor reduces the testnet genesis value of 4.475 by a
+// factor of 1.8 (4.475 / 1.8 = 2.4861...). Used as a test rehearsal for the
+// kimi scale factor change before applying to mainnet.
+func qwen7BWeightScaleFactor() *types.Decimal {
+	return &types.Decimal{Value: 24861, Exponent: -4}
 }
 
 func qwenValidationThreshold() *types.Decimal {
