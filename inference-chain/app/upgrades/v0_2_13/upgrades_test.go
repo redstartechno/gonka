@@ -209,9 +209,9 @@ func TestApplyGovernanceTallyParams(t *testing.T) {
 	got := applyGovernanceTallyParams(params)
 
 	require.Equal(t, governanceQuorum, got.Quorum)
-	require.Equal(t, governanceExpeditedThreshold, got.ExpeditedThreshold)
-	require.Equal(t, governanceVetoThreshold, got.VetoThreshold)
 	require.Equal(t, params.Threshold, got.Threshold)
+	require.Equal(t, params.ExpeditedThreshold, got.ExpeditedThreshold)
+	require.Equal(t, params.VetoThreshold, got.VetoThreshold)
 }
 
 func requirePoCModelConfig(

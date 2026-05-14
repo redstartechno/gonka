@@ -41,9 +41,7 @@ const (
 	minimaxModelCommit = "d494266a4affc0d2995ba1fa35c8481cbd84294b"
 	minimaxStartEpoch  = uint64(271)
 
-	governanceQuorum             = "0.25"
-	governanceExpeditedThreshold = "0.50"
-	governanceVetoThreshold      = "0.25"
+	governanceQuorum = "0.25"
 )
 
 // BridgeSetupData is parsed from the upgrade proposal's Plan.Info JSON field.
@@ -85,11 +83,10 @@ func CreateUpgradeHandler(
 		if err := updateModelParams(ctx, k); err != nil {
 			return nil, err
 		}
-		// Lower genesis guardian adjusted voting power to 25% and set the
-		// chain-wide governance quorum to 0.25. When guardians do not vote, the
-		// remaining 75% is the only voting power available, so a 0.25 chain-wide
-		// quorum equals 1/3 of the voting power without guardians
-		// (0.25 / 0.75 = 0.334).
+		// Reduce genesis guardian adjusted voting power to 25% and set the
+		// chain-wide governance quorum to 0.25. Quorum is computed against total
+		// bonded power; with guardians (25%) not voting, this gives an effective
+		// 1/3 quorum among the remaining 75% of voting power (0.25 / 0.75 = 0.334).
 		if err := setGenesisGuardianMultiplier(ctx, k); err != nil {
 			return nil, err
 		}
@@ -144,17 +141,16 @@ func setGovernanceTallyParams(ctx context.Context, govKeeper *govkeeper.Keeper, 
 	if err := govKeeper.Params.Set(ctx, params); err != nil {
 		return err
 	}
-	k.LogInfo("set governance tally params", types.Upgrades,
-		"quorum", params.Quorum,
-		"expedited_threshold", params.ExpeditedThreshold,
-		"veto_threshold", params.VetoThreshold)
+	k.LogInfo("set governance tally params", types.Upgrades, "quorum", params.Quorum)
 	return nil
 }
 
+// applyGovernanceTallyParams sets the chain-wide governance quorum to 0.25.
+// With genesis guardians at 25% adjusted voting power and not voting, this
+// gives an effective 1/3 quorum among the remaining 75% of voting power
+// (0.25 / 0.75 = 0.334).
 func applyGovernanceTallyParams(params govv1.Params) govv1.Params {
 	params.Quorum = governanceQuorum
-	params.ExpeditedThreshold = governanceExpeditedThreshold
-	params.VetoThreshold = governanceVetoThreshold
 	return params
 }
 

@@ -36,11 +36,10 @@ Migrations:
 - Sets `GenesisOnlyParams.GenesisGuardianMultiplier` to `0.33334`, reducing
   genesis guardian power from about 34% to about 25% of adjusted voting power
   while early-network protection applies.
-- Sets governance tally params: quorum `0.25`, expedited threshold `0.50`, and
-  veto threshold `0.25`. Quorum is measured against total chain voting power.
-  With guardians at 25% and not voting, the remaining 75% is the only voting
-  power available, so a `0.25` chain-wide quorum equals 1/3 of the voting power
-  without guardians (`0.25 / 0.75 = 0.334`).
+- Sets the chain-wide governance quorum to `0.25`. Quorum is computed against
+  total chain voting power; with genesis guardians (25%) not voting, this gives
+  an effective 1/3 quorum among the remaining 75% of voting power
+  (`0.25 / 0.75 = 0.334`).
 - Backfills `EpochGroupData.ConfirmationWeightScales` for the current epoch and
   clamps existing confirmation weights down to the new expected value.
 - Backfills `MsgRespondDealerComplaints` authz grants on existing cold-to-warm
@@ -80,11 +79,11 @@ Migrations:
 - Devshard settlement now reads the nonce limit from
   `DevshardEscrowParams.MaxNonce` instead of a hardcoded constant.
 - Genesis guardians held about 34% of adjusted voting power, which made quorum
-  hard to reach when they did not vote. The upgrade lowers guardian power to
-  25% and sets governance quorum to `0.25` (chain-wide). When guardians do not
-  vote, the remaining 75% is the only voting power available, so a `0.25`
-  chain-wide quorum equals 1/3 of the voting power without guardians
-  (`0.25 / 0.75 = 0.334`).
+  hard to reach when they did not vote. The upgrade reduces guardian power to
+  about 25% via `GenesisOnlyParams.GenesisGuardianMultiplier = 0.33334` and
+  sets the chain-wide governance quorum to `0.25`. Quorum is computed against
+  total bonded power; with guardians not voting, this gives an effective 1/3
+  quorum among the remaining 75% of voting power (`0.25 / 0.75 = 0.334`).
 
 ### decentralized-api
 
