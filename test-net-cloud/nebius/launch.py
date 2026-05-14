@@ -1613,18 +1613,28 @@ def genesis_route(account_key: AccountKey, chain_id: str) -> AccountKey:
     collect_genesis_transactions()
     patch_genesis_participants()
 
-    # Apply genesis overrides (includes denom_metadata and other configurations)
-    # Check for local override file first (uploaded by prepare.sh), then fallback to repo
-    local_overrides = BASE_DIR / "genesis-overrides.json"
+    # Apply genesis overrides (includes denom_metadata and other configurations).
+    # Prefer the operator-uploaded file over the repo copy. Search:
+    #   1. BASE_DIR/genesis-overrides.json (where prepare.sh scp's it when
+    #      TESTNET_BASE_DIR is set)
+    #   2. Same dir as launch.py (covers running `python3 launch.py` from the
+    #      directory where prepare.sh dropped both files, even without
+    #      TESTNET_BASE_DIR)
+    #   3. cloned repo as final fallback
+    base_dir_overrides = BASE_DIR / "genesis-overrides.json"
+    script_dir_overrides = Path(__file__).resolve().parent / "genesis-overrides.json"
     repo_overrides = GONKA_REPO_DIR / "test-net-cloud/nebius/genesis-overrides.json"
-    
-    if local_overrides.exists():
-        print(f"Using local genesis overrides from {local_overrides}")
-        genesis_overrides_path = local_overrides
+
+    if base_dir_overrides.exists():
+        print(f"Using local genesis overrides from BASE_DIR: {base_dir_overrides}")
+        genesis_overrides_path = base_dir_overrides
+    elif script_dir_overrides.exists() and script_dir_overrides != repo_overrides:
+        print(f"Using local genesis overrides alongside launch.py: {script_dir_overrides}")
+        genesis_overrides_path = script_dir_overrides
     else:
         print(f"Using repo genesis overrides from {repo_overrides}")
         genesis_overrides_path = repo_overrides
-        
+
     apply_genesis_overrides(genesis_overrides_path)
     
     set_chain_id_in_genesis(chain_id)
