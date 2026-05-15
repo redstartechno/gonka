@@ -55,6 +55,16 @@ var bountyRewards = []BountyReward{
 	// https://github.com/kaitakuai/experiments/blob/main/reports/2026-04-kimi-qwen-experiments.md
 	// Public name: kaitaku.ai
 	{Address: "gonka1x45hruazmcqxslj3g8a08988hr5fr3wx33drhp", Amount: USDT(10000)},
+
+	// PR #826:
+	// Partial Payment on Claim Failure Causes Permanent Reward Loss.
+	// Public name: @ouicate
+	{Address: "gonka1f0elpwnx7ezytdlck35003nz6qk8kzvurvnj4a", Amount: USDT(500)},
+
+	// PR #826:
+	// Underfunded Work Payout Still Removes Settle Amount.
+	// Public name: @ouicate
+	{Address: "gonka1f0elpwnx7ezytdlck35003nz6qk8kzvurvnj4a", Amount: USDT(375)},
 }
 
 const (
