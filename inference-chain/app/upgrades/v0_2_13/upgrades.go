@@ -31,7 +31,7 @@ const BountyIbcUsdtDenom = "ibc/115F68FBA220A028C6F6ED08EA0C1A9C8C52798B14FB66E6
 const (
 	DevshardV1Name   = "v1"
 	DevshardV1Binary = "https://github.com/gonka-ai/gonka/releases/download/release%2Fv0.2.13-devshard-v1/devshardd.zip"
-	DevshardV1Sha256 = "097fa0b0aeff9ee594707edd62c9be71a237c0bae5e2017b3b099b17affd5a67"
+	DevshardV1Sha256 = "dad6f1b97843816c0a33874b89ac403e48b54fe3aa1a0fdccb228d89d2a5594c"
 )
 
 func USDT(amount int64) int64 {
