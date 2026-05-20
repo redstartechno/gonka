@@ -67,12 +67,26 @@ var bountyRewards = []BountyReward{
 	{Address: "gonka1f0elpwnx7ezytdlck35003nz6qk8kzvurvnj4a", Amount: USDT(375)},
 }
 
+var devshardAllowedCreatorAddressesToAdd = []string{
+	// Gonka Labs
+	"gonka1r2s0rwgskp6y4ed7qr7d25qdwjwlvpp6demv90",
+
+	// Hyperfusion
+	"gonka1ls8wqecwj369du8s2t9a223xu9sgvmzlw2ye9c",
+
+	// 6Blocks
+	"gonka10wmset95nhgfjt4wklsyjqpx55m40zy3gha2pn",
+
+	//  https://gonkabroker.com/,
+	"gonka17ld2g62230w0erzexefzw03sw0adtuchr425rp",
+}
+
 const (
 	MaxEscrowsPerEpoch uint32 = 500_000
 	MaxNonce           uint32 = 1_000_000
 	// Block window after the upgrade in which confirmation PoC is skipped.
 	// Same value as v0.2.10; covers the rest of the upgrade epoch on mainnet.
-	GraceUpgradeProtectionWindow int64 = 3000
+	GraceUpgradeProtectionWindow int64 = 10000
 
 	// EthereumChainName is the chain identifier used in bridge registration state.
 	EthereumChainName = "ethereum"
@@ -86,7 +100,7 @@ const (
 	kimiModelID        = "moonshotai/Kimi-K2.6"
 	minimaxModelID     = "MiniMaxAI/MiniMax-M2.7"
 	minimaxModelCommit = "d494266a4affc0d2995ba1fa35c8481cbd84294b"
-	minimaxStartEpoch  = uint64(271)
+	minimaxStartEpoch  = uint64(277)
 
 	governanceQuorum = "0.25"
 )
@@ -122,6 +136,9 @@ func CreateUpgradeHandler(
 		}
 
 		if err := setDevshardEscrowParams(ctx, k); err != nil {
+			return nil, err
+		}
+		if err := setDevshardAllowedCreatorAddresses(ctx, k); err != nil {
 			return nil, err
 		}
 		if err := setDevshardApprovedVersions(ctx, k); err != nil {
@@ -230,6 +247,43 @@ func setDevshardEscrowParams(ctx context.Context, k keeper.Keeper) error {
 		"max_escrows_per_epoch", MaxEscrowsPerEpoch,
 		"max_nonce", MaxNonce,
 		"devshard_requests_enabled", types.DefaultDevshardRequestsEnabled)
+	return nil
+}
+
+func setDevshardAllowedCreatorAddresses(ctx context.Context, k keeper.Keeper) error {
+	return addDevshardAllowedCreatorAddresses(ctx, k, devshardAllowedCreatorAddressesToAdd)
+}
+
+func addDevshardAllowedCreatorAddresses(ctx context.Context, k keeper.Keeper, addresses []string) error {
+	params, err := k.GetParams(ctx)
+	if err != nil {
+		return err
+	}
+	if params.DevshardEscrowParams == nil {
+		params.DevshardEscrowParams = types.DefaultDevshardEscrowParams()
+	}
+
+	seen := make(map[string]struct{}, len(params.DevshardEscrowParams.AllowedCreatorAddresses)+len(addresses))
+	for _, address := range params.DevshardEscrowParams.AllowedCreatorAddresses {
+		seen[address] = struct{}{}
+	}
+
+	added := 0
+	for _, address := range addresses {
+		if _, ok := seen[address]; ok {
+			continue
+		}
+		params.DevshardEscrowParams.AllowedCreatorAddresses = append(params.DevshardEscrowParams.AllowedCreatorAddresses, address)
+		seen[address] = struct{}{}
+		added++
+	}
+
+	if err := k.SetParams(ctx, params); err != nil {
+		return err
+	}
+	k.LogInfo("set devshard allowed creator addresses", types.Upgrades,
+		"total", len(params.DevshardEscrowParams.AllowedCreatorAddresses),
+		"added", added)
 	return nil
 }
 

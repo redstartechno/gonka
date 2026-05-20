@@ -98,6 +98,35 @@ func TestSetDevshardEscrowParamsEnablesRequests(t *testing.T) {
 	require.True(t, got.DevshardEscrowParams.DevshardRequestsEnabled)
 }
 
+func TestAddDevshardAllowedCreatorAddressesAppendsOnlyNewAddresses(t *testing.T) {
+	k, ctx, _ := keepertest.InferenceKeeperReturningMocks(t)
+
+	existingAddress := sample.AccAddress()
+	newAddresses := []string{
+		sample.AccAddress(),
+		sample.AccAddress(),
+	}
+	params, err := k.GetParams(ctx)
+	require.NoError(t, err)
+	params.DevshardEscrowParams = inferencetypes.DefaultDevshardEscrowParams()
+	params.DevshardEscrowParams.AllowedCreatorAddresses = []string{
+		existingAddress,
+		newAddresses[0],
+	}
+	require.NoError(t, k.SetParams(ctx, params))
+
+	require.NoError(t, addDevshardAllowedCreatorAddresses(ctx, k, newAddresses))
+
+	got, err := k.GetParams(ctx)
+	require.NoError(t, err)
+	require.Equal(t, append([]string{existingAddress}, newAddresses...), got.DevshardEscrowParams.AllowedCreatorAddresses)
+
+	require.NoError(t, addDevshardAllowedCreatorAddresses(ctx, k, newAddresses))
+	got, err = k.GetParams(ctx)
+	require.NoError(t, err)
+	require.Equal(t, append([]string{existingAddress}, newAddresses...), got.DevshardEscrowParams.AllowedCreatorAddresses)
+}
+
 func TestBackfillConfirmationWeightScales(t *testing.T) {
 	k, ctx, _ := keepertest.InferenceKeeperReturningMocks(t)
 
@@ -243,7 +272,7 @@ func TestUpdateModelParamsSetsKimiAndAddsMiniMax(t *testing.T) {
 	require.Equal(t, &inferencetypes.Decimal{Value: 1, Exponent: -1}, minimax.StatTest.PMismatch)
 	require.Equal(t, &inferencetypes.Decimal{Value: 5, Exponent: -2}, minimax.StatTest.PValueThreshold)
 	require.Equal(t, &inferencetypes.Decimal{Value: 3024, Exponent: -4}, minimax.WeightScaleFactor)
-	require.Equal(t, uint64(271), minimax.PenaltyStartEpoch)
+	require.Equal(t, uint64(277), minimax.PenaltyStartEpoch)
 
 	model, found := k.GetGovernanceModel(ctx, minimaxModelID)
 	require.True(t, found)
