@@ -100,7 +100,7 @@ const (
 	kimiModelID        = "moonshotai/Kimi-K2.6"
 	minimaxModelID     = "MiniMaxAI/MiniMax-M2.7"
 	minimaxModelCommit = "d494266a4affc0d2995ba1fa35c8481cbd84294b"
-	minimaxStartEpoch  = uint64(277)
+	minimaxStartEpoch  = uint64(278)
 
 	governanceQuorum = "0.25"
 )
