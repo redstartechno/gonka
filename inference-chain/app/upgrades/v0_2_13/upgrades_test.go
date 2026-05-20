@@ -272,7 +272,7 @@ func TestUpdateModelParamsSetsKimiAndAddsMiniMax(t *testing.T) {
 	require.Equal(t, &inferencetypes.Decimal{Value: 1, Exponent: -1}, minimax.StatTest.PMismatch)
 	require.Equal(t, &inferencetypes.Decimal{Value: 5, Exponent: -2}, minimax.StatTest.PValueThreshold)
 	require.Equal(t, &inferencetypes.Decimal{Value: 3024, Exponent: -4}, minimax.WeightScaleFactor)
-	require.Equal(t, uint64(277), minimax.PenaltyStartEpoch)
+	require.Equal(t, uint64(278), minimax.PenaltyStartEpoch)
 
 	model, found := k.GetGovernanceModel(ctx, minimaxModelID)
 	require.True(t, found)
