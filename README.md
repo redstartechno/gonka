@@ -21,7 +21,7 @@ We introduce a novel consensus mechanism, **Proof of Work 2.0**, that ensures ne
 
 ![The Task flow](https://github.com/user-attachments/assets/1ba81a47-f4ef-4eb1-9fcd-b6d371a20f5f)
 
-*[Work in progress] Diagram 1. The Task flow [Source](docs/papers/InferenceFlow.png)**
+*[Work in progress] Diagram 1. The Task flow [Source](docs/papers/InferenceFlow.png)*
 
 For a deeper technical and conceptual explanation, check out [the White Paper](https://gonka.ai/whitepaper.pdf).
 ## Getting started
@@ -39,7 +39,7 @@ This section walks you through setting up a local development environment to bui
 #### 1. Environment setup
 Make sure you have the following installed:
 1. Git CLI
-2. Go 1.22.8
+2. Go 1.24.2
 3. Docker Desktop (4.37+)
 4. Make
 5. Java 19+
@@ -49,7 +49,7 @@ Make sure you have the following installed:
 Clone the repository:
 ```
 git clone https://github.com/gonka-ai/gonka.git
-cd gonka (or repo name)**
+cd gonka
 ```
 
 Build chain and API nodes, and run unit tests:
@@ -63,7 +63,7 @@ This command will build locally, deploy a small network of Docker containers, an
 ```
 make run-tests
 ```
-There’s also an option to just run a Docker local chain, without running the tests, use `launch-local-test-chain-w-reset.sh` script for that. The script will spin up a miniature local chain consisting of 3 participants.
+There’s also an option to just run a Docker local chain, without running the tests, use the `local-test-net/launch.sh` script for that. The script will spin up a miniature local chain consisting of 3 participants.
 
 To run Go unit tests for `chain` node (`inference-chain`)  and `api` node (`decentralized-api`) use `node-test` and `api-test` make targets.
 ## Architectural overview
@@ -97,7 +97,7 @@ The repository is organized as follows:
 /dev_notes          # Chain developer knowledge base
 /docs               # Documentation on specific aspects of the chain
 /inference-chain    # Chain node
-/prepare-local      # Scripts and configs for running local chain
+/local-test-net     # Scripts and configs for running local chain
 /testermint         # Integration tests suite
 ```
 ## Testing
