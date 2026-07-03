@@ -112,6 +112,7 @@ func NewServer(
 	g.POST("verify-block", s.postVerifyBlock)
 
 	g.GET("pricing", s.getPricing)
+	g.GET("supply/total", s.getTotalSupply)
 	g.GET("models", s.getModels)
 	g.GET("governance/pricing", s.getGovernancePricing)
 	g.GET("governance/models", s.getGovernanceModels)
