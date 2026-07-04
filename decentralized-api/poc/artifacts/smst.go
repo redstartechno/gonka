@@ -8,8 +8,11 @@ import (
 const (
 	smstLeafPrefix     = 0x00
 	smstInternalPrefix = 0x01
-	smstDefaultDepth   = 24
-	smstMaxDepth       = 32
+	// smstDefaultDepth is the starting depth for both live trees and snapshot
+	// rebuilds, so it participates in root reproducibility: changing it changes
+	// committed roots and must only happen at a coordinated protocol upgrade.
+	smstDefaultDepth = 24
+	smstMaxDepth     = 32
 )
 
 type smstNode struct {

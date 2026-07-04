@@ -584,7 +584,12 @@ func encodeProofForTransport(proof []smstProofElement) [][]byte {
 }
 
 func (s *SMSTArtifactStore) rebuildTreeAt(count uint32) *SMST {
-	tree := NewSMST(s.smst.depth)
+	// Seed with the default depth, not the live tree's depth: replaying the
+	// first `count` artifacts triggers exactly the depth expansions the tree
+	// had when the root for `count` was committed. Using the live depth would
+	// bake in expansions caused by artifacts inserted after that commit,
+	// producing a root that no longer matches the committed one.
+	tree := NewSMST(smstDefaultDepth)
 
 	// Read flushed artifacts from disk
 	flushedToRead := count
