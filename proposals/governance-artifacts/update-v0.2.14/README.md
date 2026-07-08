@@ -56,10 +56,12 @@ After devshard v3 validation, the mainnet-style upgrade from `v0.2.13` to `v0.2.
 - @a-kuprin
 - @akup
 - @alancapex
+- @d-bogdan-engenious (testing)
 - @DimaOrekhovPS
 - @GLiberman
 - @gmorgachev
 - @libermans
+- @maria-mitina (testing)
 - @ouicate
 - @patimen
 - @qdanik

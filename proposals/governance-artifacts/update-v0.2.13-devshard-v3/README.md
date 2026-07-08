@@ -49,6 +49,8 @@ The devshard v3 runtime was deployed and verified first. During testing, `node` 
 
 - @a-kuprin
 - @akup
+- @d-bogdan-engenious (testing)
 - @gmorgachev
 - @libermans
+- @maria-mitina (testing)
 - @qdanik
