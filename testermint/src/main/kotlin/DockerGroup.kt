@@ -67,10 +67,11 @@ fun retryGetCli(config: ApplicationConfig, pairName: String, maxAttempts: Int = 
     error("Could not find node container for keyName=$pairName after $maxAttempts attempts")
 }
 const val LOCAL_TEST_NET_DIR = "local-test-net"
-val DNS_COMPOSE_FILES = listOf(
-    "$LOCAL_TEST_NET_DIR/docker-compose.dns.yml",
-    "$LOCAL_TEST_NET_DIR/docker-compose.dns-overrides.yml",
-)
+/** CoreDNS service with fixed IP 172.25.0.10 — owned only by the genesis compose project. */
+private const val DNS_SERVER_COMPOSE_FILE = "$LOCAL_TEST_NET_DIR/docker-compose.dns.yml"
+/** Points pair services at 172.25.0.10 without declaring the test-dns container. */
+private const val DNS_OVERRIDES_COMPOSE_FILE = "$LOCAL_TEST_NET_DIR/docker-compose.dns-overrides.yml"
+val DNS_COMPOSE_FILES = listOf(DNS_SERVER_COMPOSE_FILE, DNS_OVERRIDES_COMPOSE_FILE)
 val BASE_COMPOSE_FILES = listOf(
     "${LOCAL_TEST_NET_DIR}/docker-compose-base.yml",
 )
@@ -83,7 +84,11 @@ val GENESIS_COMPOSE_FILES = BASE_COMPOSE_FILES +
     "${LOCAL_TEST_NET_DIR}/docker-compose.genesis.yml" +
     DNS_COMPOSE_FILES +
     POSTGRES_HOST_OVERLAY
-val NODE_COMPOSE_FILES = BASE_COMPOSE_FILES + "${LOCAL_TEST_NET_DIR}/docker-compose.join.yml" + DNS_COMPOSE_FILES
+// Joins use dns-overrides only. Declaring test-dns in every pair's compose set made
+// three projects fight over container_name=test-dns / 172.25.0.10 on reboot.
+val NODE_COMPOSE_FILES = BASE_COMPOSE_FILES +
+    "${LOCAL_TEST_NET_DIR}/docker-compose.join.yml" +
+    DNS_OVERRIDES_COMPOSE_FILE
 
 data class GenesisUrls(val keyName: String) {
     val apiUrl = "http://$keyName-api:9000"
@@ -217,11 +222,19 @@ data class DockerGroup(
             // often exits before genesis creates the cold key. Boot chain-node first, then
             // the rest. Default genesis tests (no versiond overlay) keep the original path.
             Logger.info("Genesis + versiond overlay: starting chain-node before full stack", "")
-            dockerProcess(*(baseArgs + listOf("up", "-d", "chain-node")).toTypedArray()).start().waitFor()
+            val nodeExit = runComposeLogged(
+                "genesis-chain-node-up",
+                *(baseArgs + listOf("up", "-d", "chain-node")).toTypedArray(),
+            )
+            if (nodeExit != 0) {
+                logComposeProjectState("after-failed-genesis-chain-node-up")
+                logInferenceStackContainers(pairName, "after-failed-genesis-chain-node-up")
+                error("[$pairName] genesis chain-node compose up exited $nodeExit")
+            }
             waitForColdKeyInNodeContainer()
             coldAccountPubkey = extractColdPubkeyFromNodeContainer()
             Logger.info("Genesis cold ACCOUNT_PUBKEY extracted for api startup", "")
-            dockerProcess(*(baseArgs + listOf("up", "-d")).toTypedArray()).start().waitFor()
+            bringUpGenesisFullStack(baseArgs)
         } else {
             composeArgs.addAll(listOf("up", "-d"))
             if (!isGenesis) {
@@ -235,11 +248,7 @@ data class DockerGroup(
                     logInferenceStackContainers(pairName, "after-failed-chain-node-up")
                 }
             } else {
-                val dockerProcess = dockerProcess(*composeArgs.toTypedArray())
-                val process = dockerProcess.start()
-                process.inputStream.bufferedReader().use { it.lines().forEach { line -> Logger.info(line, "") } }
-                process.errorStream.bufferedReader().use { it.lines().forEach { line -> Logger.info(line, "") } }
-                process.waitFor()
+                bringUpGenesisFullStack(baseArgs)
             }
         }
         if (!isGenesis) {
@@ -267,10 +276,12 @@ data class DockerGroup(
             )
             node.waitForNextBlock(2)
             node.grantMlOpsPermissionsToWarmAccount()
-            // Services to start after registration. Proxy is in base compose
-            // and started by "up -d" without explicit naming. Versiond is
-            // added when this pair's additional compose files include it.
-            val joinServices = mutableListOf("api", "mock-server", "proxy")
+            // Services to start after registration. edge-api is listed explicitly:
+            // proxy depends_on it, but Compose sometimes skips that dependency when
+            // starting a subset of services after chain-node is already up (reboot),
+            // which leaves join proxies 502ing on Tier A /v1/epochs/* readiness checks.
+            // Versiond is added when this pair's additional compose files include it.
+            val joinServices = mutableListOf("api", "mock-server", "edge-api", "proxy")
             val additionalForPair = config.additionalDockerFilesByKeyName[pairName] ?: emptyList()
             if (additionalForPair.any { it.contains("versiond") }) {
                 joinServices.add("versiond")
@@ -298,20 +309,25 @@ data class DockerGroup(
                 )
                 tailDockerLogs(apiContainer, lines = 150, context = "join-api-not-running")
                 tailDockerLogs("$pairName-postgres", lines = 80, context = "join-postgres")
-                tailDockerLogs("$pairName-proxy", lines = 40, context = "join-proxy")
+                tailDockerLogs("$pairName-edge-api", lines = 80, context = "join-edge-api")
+                tailDockerLogs("$pairName-proxy", lines = 80, context = "join-proxy")
+                logProxyStackDiagnostics(pairName, "join-api-not-running")
             }
             Thread.sleep(Duration.ofSeconds(10))
             if (!dockerContainerRunning(apiContainer)) {
                 logComposeProjectState("after-wait-api-still-down")
                 logInferenceStackContainers(pairName, "after-wait-api-still-down")
+                logProxyStackDiagnostics(pairName, "after-wait-api-still-down")
                 error(
                     "$apiContainer not running after join stack up (compose exit=$stackExit). " +
                         "See testermint/logs for compose + docker log output.",
                 )
             }
+            waitForProxyStackReady()
         }
         if (isGenesis && usesVersiondOverlay()) {
             ensureGenesisApiRunning()
+            waitForProxyStackReady()
         }
         // Just register the log events. Skip while versiond genesis is still settling —
         // initializeCluster will discover pairs after RPC readiness.
@@ -385,7 +401,12 @@ data class DockerGroup(
             composeArgs.addAll(listOf("-f", file))
         }
         composeArgs.addAll(listOf("--project-directory", workingDirectory, "up", "-d", "--force-recreate", "api"))
-        dockerProcess(*composeArgs.toTypedArray()).start().waitFor()
+        val exit = runComposeLogged("genesis-api-recreate", *composeArgs.toTypedArray())
+        if (exit != 0) {
+            logComposeProjectState("after-failed-genesis-api-recreate")
+            logInferenceStackContainers(pairName, "after-failed-genesis-api-recreate")
+            logProxyStackDiagnostics(pairName, "after-failed-genesis-api-recreate")
+        }
         val deadline = System.nanoTime() + Duration.ofMinutes(2).toNanos()
         while (System.nanoTime() < deadline) {
             if (dockerContainerRunning(apiContainer)) {
@@ -393,7 +414,105 @@ data class DockerGroup(
             }
             Thread.sleep(Duration.ofSeconds(2))
         }
+        logProxyStackDiagnostics(pairName, "genesis-api-did-not-stay-running")
         error("$apiContainer did not stay running (check: docker logs $apiContainer)")
+    }
+
+    /**
+     * Full genesis `compose up -d` with exit-code check and proxy-stack readiness.
+     * Proxy depends_on edge-api; ignoring compose exit previously left discovery without genesis-proxy.
+     *
+     * Retries once after forcing shared test-dns removal: reboot can leave 172.25.0.10
+     * allocated on chain-public so CoreDNS fails with "Address already in use".
+     */
+    private fun bringUpGenesisFullStack(baseArgs: List<String>) {
+        Logger.info("[{}] Starting genesis full stack (up -d)", pairName)
+        var exit = runComposeLogged(
+            "genesis-full-stack-up",
+            *(baseArgs + listOf("up", "-d")).toTypedArray(),
+        )
+        if (exit != 0) {
+            Logger.warn(
+                "[{}] genesis full stack up exited {}; clearing DNS IPAM and retrying once",
+                pairName,
+                exit,
+            )
+            removeSharedTestDns()
+            recreateChainPublicNetworkIfPossible()
+            Thread.sleep(Duration.ofSeconds(1))
+            exit = runComposeLogged(
+                "genesis-full-stack-up-retry",
+                *(baseArgs + listOf("up", "-d")).toTypedArray(),
+            )
+        }
+        logComposeProjectState("after-genesis-full-stack-up")
+        logInferenceStackContainers(pairName, "after-genesis-full-stack-up")
+        if (exit != 0) {
+            logProxyStackDiagnostics(pairName, "genesis-full-stack-up-failed")
+            error(
+                "[$pairName] genesis compose up -d exited $exit. " +
+                    "Proxy/edge-api may be missing; see compose + proxy stack diagnostics in logs.",
+            )
+        }
+        waitForProxyStackReady()
+    }
+
+    /**
+     * Pair discovery requires a running `*-proxy`. On this branch proxy also needs `*-edge-api`.
+     * Retry until both are running; dump inspect/logs/nginx -t on timeout for CI.
+     */
+    internal fun waitForProxyStackReady(timeout: Duration = Duration.ofSeconds(90)) {
+        val edge = "$pairName-edge-api"
+        val proxy = "$pairName-proxy"
+        Logger.info("[{}] Waiting for proxy stack: {} and {}", pairName, edge, proxy)
+        val deadline = System.nanoTime() + timeout.toNanos()
+        val recoverAt = System.nanoTime() + Duration.ofSeconds(20).toNanos()
+        var attemptedRecover = false
+        var lastLogAt = 0L
+        while (System.nanoTime() < deadline) {
+            val edgeOk = dockerContainerRunning(edge)
+            val proxyOk = dockerContainerRunning(proxy)
+            if (edgeOk && proxyOk) {
+                Logger.info("[{}] Proxy stack ready (edge-api + proxy running)", pairName)
+                return
+            }
+            val now = System.nanoTime()
+            if (!attemptedRecover && now >= recoverAt) {
+                attemptedRecover = true
+                Logger.warn(
+                    "[{}] proxy stack still down; explicitly starting edge-api + proxy",
+                    pairName,
+                )
+                val composeArgs = mutableListOf("compose", "-p", pairName)
+                composeFiles.forEach { file ->
+                    composeArgs.addAll(listOf("-f", file))
+                }
+                composeArgs.addAll(
+                    listOf("--project-directory", workingDirectory, "up", "-d", "edge-api", "proxy"),
+                )
+                val recoverExit = runComposeLogged("proxy-stack-recover-up", *composeArgs.toTypedArray())
+                if (recoverExit != 0) {
+                    logProxyStackDiagnostics(pairName, "proxy-stack-recover-failed")
+                }
+            }
+            if (now - lastLogAt > Duration.ofSeconds(15).toNanos()) {
+                Logger.warn(
+                    "[{}] proxy stack not ready yet: edge-api.running={} proxy.running={}",
+                    pairName,
+                    edgeOk,
+                    proxyOk,
+                )
+                logInferenceStackContainers(pairName, "proxy-stack-wait")
+                lastLogAt = now
+            }
+            Thread.sleep(Duration.ofSeconds(2))
+        }
+        logComposeProjectState("proxy-stack-timeout")
+        logProxyStackDiagnostics(pairName, "proxy-stack-timeout")
+        error(
+            "[$pairName] proxy stack not ready within ${timeout.seconds}s " +
+                "(need running $edge and $proxy). See proxy stack diagnostics in logs.",
+        )
     }
 
     private fun dockerContainerRunning(containerName: String): Boolean = isDockerContainerRunning(containerName)
@@ -467,6 +586,7 @@ data class DockerGroup(
             put("SNAPSHOT_KEEP_RECENT", "5")
             put("REST_API_ACTIVE", "true")
             put("P2P_EXTERNAL_ADDRESS", p2pExternalAddress)
+            put("EDGE_API_BUILD_CONTEXT", ".")
 
             genesisGroup?.let {
                 if (useSnapshots) {
@@ -487,7 +607,7 @@ data class DockerGroup(
             put("PGPASSWORD", "test")
 
             // Test-supplied extras applied last so they override defaults.
-            // DevshardStandaloneTests uses this to set VERSIOND_BINARY_NAME,
+            // DevshardVersiond*Tests use this to set VERSIOND_BINARY_NAME,
             // VERSIOND_FORCE, VERSIOND_OVERRIDE_<version>, VERSIOND_SERVICE_NAME (override tests).
             putAll(config.additionalEnvVars)
         }
@@ -687,6 +807,76 @@ fun getRepoRoot(): String {
         ?: throw IllegalStateException("Repository root not found from $currentDir (set GONKA_REPO_ROOT to override)")
 }
 
+/**
+ * Force-remove shared CoreDNS and free its fixed IP on chain-public.
+ *
+ * `docker rm -f test-dns` alone is not enough: Docker can leave 172.25.0.10
+ * allocated on the bridge after multi-project reboot tearDowns, so the next
+ * `test-dns` start fails with "Address already in use".
+ */
+fun removeSharedTestDns() {
+    Logger.info("Removing shared test-dns container if present", "")
+    runDockerLogged("test-dns-rm", "rm", "-f", "test-dns")
+    // Clear a stale network endpoint even when the container is already gone.
+    runDockerLogged(
+        "test-dns-disconnect",
+        "network", "disconnect", "-f", "chain-public", "test-dns",
+    )
+    releaseAddressOnChainPublic("172.25.0.10")
+}
+
+/** Force-disconnect any chain-public endpoint still holding [ipv4]. */
+private fun releaseAddressOnChainPublic(ipv4: String) {
+    val process = ProcessBuilder(
+        "docker", "network", "inspect", "chain-public",
+        "--format", "{{range .Containers}}{{.Name}} {{.IPv4Address}}\n{{end}}",
+    ).redirectErrorStream(true).start()
+    val lines = process.inputStream.bufferedReader().readLines()
+    process.waitFor()
+    lines.forEach { line ->
+        Logger.info("chain-public-endpoint> {}", line)
+        val parts = line.trim().split(Regex("\\s+"))
+        if (parts.size >= 2 && (parts[1].startsWith("$ipv4/") || parts[1] == ipv4)) {
+            val name = parts[0]
+            Logger.warn("Force-disconnecting {} from chain-public (holds {})", name, ipv4)
+            runDockerLogged(
+                "ip-release-disconnect",
+                "network", "disconnect", "-f", "chain-public", name,
+            )
+        }
+    }
+}
+
+/**
+ * After all pair `compose down`s, drop chain-public so IPAM is reset.
+ * Compose recreates it on the next genesis `up`. No-op if still in use.
+ */
+fun recreateChainPublicNetworkIfPossible() {
+    Logger.info("Attempting to remove chain-public network to reset DNS IPAM", "")
+    val exit = runDockerLogged("chain-public-rm", "network", "rm", "chain-public")
+    if (exit != 0) {
+        Logger.warn(
+            "Could not remove chain-public (still in use?). Listing endpoints:",
+            "",
+        )
+        runDockerLogged(
+            "chain-public-inspect",
+            "network", "inspect", "chain-public",
+            "--format", "{{range .Containers}}{{.Name}} {{.IPv4Address}}\n{{end}}",
+        )
+    }
+}
+
+private fun runDockerLogged(context: String, vararg args: String): Int {
+    val process = ProcessBuilder("docker", *args)
+        .redirectErrorStream(true)
+        .start()
+    process.inputStream.bufferedReader().lines().forEach { line ->
+        Logger.info("{}> {}", context, line)
+    }
+    return process.waitFor()
+}
+
 fun initializeCluster(joinCount: Int = 0, config: ApplicationConfig, currentCluster: LocalCluster?): List<DockerGroup> {
     TestState.rebooting = true
     try {
@@ -711,6 +901,10 @@ fun initializeCluster(joinCount: Int = 0, config: ApplicationConfig, currentClus
         val allGroups = listOf(genesisGroup) + joinGroups
         Logger.info("Initializing cluster with {} nodes", allGroups.size)
         allGroups.forEach { it.tearDownExisting() }
+        // Shared CoreDNS is global (container_name=test-dns, IP 172.25.0.10).
+        // TearDown + rm is not always enough — reset network IPAM before recreate.
+        removeSharedTestDns()
+        recreateChainPublicNetworkIfPossible()
         genesisGroup.init()
         Thread.sleep(Duration.ofSeconds(30L))
         val genesisNode = retryGetCli(config, genesisGroup.pairName)
@@ -732,9 +926,25 @@ fun initializeCluster(joinCount: Int = 0, config: ApplicationConfig, currentClus
         if (genesisGroup.usesVersiondOverlay()) {
             genesisGroup.ensureGenesisApiRunning()
         }
-        val genesisPair = getLocalInferencePairs(config)
+        // Discovery requires a running genesis-proxy (and edge-api on this branch).
+        // Wait + dump diagnostics here so CI logs show why pair discovery would fail.
+        Logger.info("Waiting for genesis proxy stack before pair discovery", "")
+        genesisGroup.waitForProxyStackReady()
+        val genesisPairs = getLocalInferencePairs(config)
+        val genesisPair = genesisPairs
             .firstOrNull { it.name == genesisGroup.pairName || it.name == "/${genesisGroup.pairName}" }
-            ?: error("Could not find local inference pair for keyName=${genesisGroup.pairName}")
+        if (genesisPair == null) {
+            Logger.error(
+                "Genesis pair missing after proxy-stack wait. discovered={}",
+                genesisPairs.map { it.name },
+            )
+            logProxyStackDiagnostics(genesisGroup.pairName, "genesis-pair-not-found")
+            logInferenceStackContainers(genesisGroup.pairName, "genesis-pair-not-found")
+            error(
+                "Could not find local inference pair for keyName=${genesisGroup.pairName}. " +
+                    "Proxy stack diagnostics were logged; check genesis-proxy / genesis-edge-api.",
+            )
+        }
         Logger.info("Waiting for genesis API and ML nodes readiness", "")
         genesisPair.waitForMlNodesToLoad(maxWaitAttempts = 18)
         if (joinGroups.isNotEmpty()) {

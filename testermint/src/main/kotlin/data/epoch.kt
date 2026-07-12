@@ -20,10 +20,9 @@ data class EpochResponse(
     @SerializedName("active_confirmation_poc_event")
     val activeConfirmationPocEvent: ConfirmationPoCEvent? = null
 ) {
-    val safeForInference: Boolean =
-        if (phase == EpochPhase.Inference) {
-            val blocksUntilEnd = nextEpochStages.pocStart - blockHeight
-            blocksUntilEnd > INFERENCE_STAGE_SLACK_BLOCKS
+    val safeForInference: Boolean
+        get() = if (phase == EpochPhase.Inference) {
+            nextEpochStages.pocStart - blockHeight > 3
         } else {
             false
         }

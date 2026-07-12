@@ -8,7 +8,19 @@ import java.nio.file.Path
 import java.nio.file.StandardOpenOption
 
 private val inferenceStackServices =
-    listOf("node", "api", "postgres", "proxy", "mock-server", "versiond", "devshardd-artifact-server")
+    listOf(
+        "node",
+        "api",
+        "postgres",
+        "edge-api",
+        "proxy",
+        "mock-server",
+        "versiond",
+        "devshardd-artifact-server",
+    )
+
+/** Containers that gate pair discovery (getLocalInferencePairs requires a running *-proxy). */
+private val proxyStackServices = listOf("edge-api", "proxy")
 
 /** Written under testermint/logs/ and uploaded as part of the integration-test log artifact. */
 const val INFERENCE_DOCKER_DUMP_DIR = "logs/docker-dump"
@@ -78,6 +90,78 @@ fun logInferenceStackContainers(pairName: String, context: String) {
             if (container.state != "running") {
                 tailDockerLogs(container.names.first().trimStart('/'), lines = 100, context = context)
             }
+        }
+    }
+}
+
+/**
+ * Deep diagnostics for proxy bring-up failures.
+ * Pair discovery requires a running `*-proxy`; on this branch proxy also depends on `*-edge-api`
+ * and nginx Tier A routes to it. Dump inspect + logs + nginx -t so CI artifacts show why.
+ */
+fun logProxyStackDiagnostics(pairName: String, context: String) {
+    Logger.error("[{}] === proxy stack diagnostics ({}) ===", pairName, context)
+    proxyStackServices.forEach { svc ->
+        val container = "$pairName-$svc"
+        val inspect = runCatching {
+            val proc = ProcessBuilder(
+                "docker",
+                "inspect",
+                "-f",
+                "name={{.Name}} status={{.State.Status}} running={{.State.Running}} " +
+                    "exit={{.State.ExitCode}} oom={{.State.OOMKilled}} err={{.State.Error}} " +
+                    "started={{.State.StartedAt}} finished={{.State.FinishedAt}} " +
+                    "health={{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}} " +
+                    "image={{.Config.Image}} platform={{.Platform}}",
+                container,
+            ).redirectErrorStream(true).start()
+            val out = proc.inputStream.bufferedReader().use { it.readText().trim() }
+            proc.waitFor()
+            if (proc.exitValue() != 0) "missing/not-inspectable: $out" else out
+        }.getOrElse { "inspect-failed: ${it.message}" }
+        Logger.error("[{}]   inspect {}: {}", pairName, container, inspect)
+        if (dockerContainerExists(container)) {
+            tailDockerLogs(container, lines = 200, context = "$context-$svc")
+        }
+    }
+    dumpProxyNginxCheck(pairName, context)
+    // Broad scan so CI also sees siblings (api/node) that may have blocked depends_on.
+    logInferenceStackContainers(pairName, "proxy-diag-$context")
+}
+
+/** Best-effort nginx config test inside the proxy container (surfaces invalid generated config). */
+fun dumpProxyNginxCheck(pairName: String, context: String) {
+    val proxy = "$pairName-proxy"
+    if (!dockerContainerExists(proxy)) {
+        Logger.error("[{}] nginx -t skipped: {} does not exist ({})", pairName, proxy, context)
+        return
+    }
+    listOf(
+        listOf("docker", "exec", proxy, "nginx", "-t"),
+        listOf(
+            "docker",
+            "exec",
+            proxy,
+            "sh",
+            "-c",
+            "grep -nE 'participants|edge_api|directive is not allowed|emerg' " +
+                "/etc/nginx/nginx.conf /var/log/nginx/error.log 2>/dev/null | head -80 || true",
+        ),
+    ).forEach { cmd ->
+        runCatching {
+            val proc = ProcessBuilder(cmd).redirectErrorStream(true).start()
+            val out = proc.inputStream.bufferedReader().use { it.readText().trim() }
+            val exit = proc.waitFor()
+            Logger.error(
+                "[{}] nginx-diag ({}) cmd={} exit={}:\n{}",
+                pairName,
+                context,
+                cmd.joinToString(" "),
+                exit,
+                out.ifBlank { "(empty)" },
+            )
+        }.onFailure { e ->
+            Logger.warn("[{}] nginx-diag ({}) failed: {}", pairName, context, e.message)
         }
     }
 }

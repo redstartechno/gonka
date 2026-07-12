@@ -1,0 +1,84 @@
+# Multi-versiond + sticky router overlay for deploy/join.
+#
+# Requires base docker-compose.yml (single versiond). Adds devshard-postgres,
+# a second versiond instance (versiond2), and versiond-router (nginx sticky
+# hash on escrow/session ID) in front of both. Sets proxy
+# VERSIOND_SERVICE_NAME=versiond-router.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.versiond.yml up -d
+#
+# x-versiond anchor holds everything shared between versiond and versiond2;
+# only container_name and per-instance data volumes differ.
+
+x-versiond: &versiond
+  image: ghcr.io/product-science/versiond:0.2.13
+  environment:
+    - VERSIOND_ORACLE_URL=http://api:9100/versions
+    - VERSIOND_BINARY_NAME=devshardd
+    - NODE_MANAGER_ADDR=api:${NODE_MANAGER_GRPC_PORT:-9400}
+    - NODE_HOST=node
+    - KEY_NAME=${KEY_NAME}
+    - ACCOUNT_PUBKEY=${ACCOUNT_PUBKEY}
+    - KEYRING_BACKEND=${KEYRING_BACKEND:-file}
+    - KEYRING_PASSWORD=${KEYRING_PASSWORD}
+    - KEYRING_DIR=/root/.inference
+    - DEVSHARD_OTEL_ENABLED=${DEVSHARD_OTEL_ENABLED:-false}
+    - OTEL_ENDPOINT=${OTEL_ENDPOINT:-}
+    - OTEL_HEADERS=${OTEL_HEADERS:-}
+    - PGHOST=devshard-postgres
+    - PGDATABASE=devshardd
+    - PGUSER=devshardd
+    - PGPASSWORD=devshardd
+  depends_on:
+    api:
+      condition: service_started
+    devshard-postgres:
+      condition: service_healthy
+  restart: always
+
+services:
+  devshard-postgres:
+    container_name: devshard-postgres
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: devshardd
+      POSTGRES_USER: devshardd
+      POSTGRES_PASSWORD: devshardd
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U devshardd -d devshardd"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    restart: always
+
+  versiond:
+    <<: *versiond
+    container_name: versiond
+    volumes:
+      - .inference:/root/.inference:ro
+      - ./devshards/bin:/opt/versiond/bin
+      - ./devshards/data:/opt/versiond/data
+
+  versiond2:
+    <<: *versiond
+    container_name: versiond2
+    volumes:
+      - .inference:/root/.inference:ro
+      - ./devshards/bin:/opt/versiond/bin
+      - ./devshards2/data:/opt/versiond/data
+
+  versiond-router:
+    container_name: versiond-router
+    image: ghcr.io/product-science/versiond-router:0.2.13
+    environment:
+      - VERSIOND_HOSTS=${VERSIOND_HOSTS:-versiond versiond2}
+      - VERSIOND_PORT=8080
+    depends_on:
+      - versiond
+      - versiond2
+    restart: always
+
+  proxy:
+    environment:
+      - VERSIOND_SERVICE_NAME=versiond-router
+      - VERSIOND_PORT=8080

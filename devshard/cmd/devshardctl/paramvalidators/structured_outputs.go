@@ -1,13 +1,10 @@
 package paramvalidators
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
 	"strings"
-
-	"devshard/cmd/devshardctl/filtercore"
 )
 
 var (
@@ -89,8 +86,10 @@ func (v StructuredOutputsValidator) Validate(vctx ValidatorContext) error {
 	if !exists {
 		return nil
 	}
-	if filtercore.MatchesModel(vctx.RoutedModel, v.RejectedModels) {
-		return fmt.Errorf("%w", ErrStructuredOutputsNotSupportedOnRoute)
+	for _, m := range v.RejectedModels {
+		if m == vctx.RoutedModel {
+			return fmt.Errorf("%w", ErrStructuredOutputsNotSupportedOnRoute)
+		}
 	}
 	obj, ok := raw.(map[string]any)
 	if !ok {
@@ -280,21 +279,13 @@ func (v StructuredOutputsValidator) validateGrammar(value any) error {
 	return nil
 }
 
-// validateStructuralTag accepts only the OBJECT form (vLLM's
-// StructuralTagResponseFormat: {type, structures[], triggers[]}). A JSON-encoded
-// STRING form crashes the engine with an HTTP 500 on the request handler, so it
-// is rejected here regardless of route. Size is bounded on the serialized object.
 func (v StructuredOutputsValidator) validateStructuralTag(value any) error {
-	obj, ok := value.(map[string]any)
+	s, ok := value.(string)
 	if !ok {
-		return fmt.Errorf("%w: must be an object (a JSON-encoded string crashes the engine)", ErrStructuredOutputsStructuralTagShape)
+		return fmt.Errorf("%w: must be a string", ErrStructuredOutputsStructuralTagShape)
 	}
-	encoded, err := json.Marshal(obj)
-	if err != nil {
-		return fmt.Errorf("%w: %v", ErrStructuredOutputsStructuralTagShape, err)
-	}
-	if len(encoded) > v.MaxStructuralTagLen {
-		return fmt.Errorf("%w: %d > %d", ErrStructuredOutputsStructuralTagLength, len(encoded), v.MaxStructuralTagLen)
+	if len(s) > v.MaxStructuralTagLen {
+		return fmt.Errorf("%w: %d > %d", ErrStructuredOutputsStructuralTagLength, len(s), v.MaxStructuralTagLen)
 	}
 	return nil
 }

@@ -3,7 +3,6 @@ package paramvalidators
 import (
 	"errors"
 	"fmt"
-	"strings"
 )
 
 // Tool-specific sentinels. Schema-walk rejections (depth/nodes/ref/enum/branch/size) flow
@@ -81,7 +80,7 @@ func (v ToolsValidator) Validate(vctx ValidatorContext) error {
 			return fmt.Errorf("%w: tools[%d].function must be an object", ErrToolFunctionShape, i)
 		}
 		name, ok := fn["name"].(string)
-		if !ok || strings.TrimSpace(name) == "" {
+		if !ok || name == "" {
 			return fmt.Errorf("%w (tools[%d])", ErrToolFunctionName, i)
 		}
 		// OpenAI Structured Outputs flag. vLLM accepts but does not honor it

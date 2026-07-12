@@ -51,6 +51,8 @@ val devshardShortSealGraceSpec = spec<AppState> {
                 this[DevshardEscrowParams::defaultInferenceSealGraceNonces] = devshardAutoSealInferenceSealGraceNonces
                 this[DevshardEscrowParams::defaultInferenceSealGraceSeconds] = devshardAutoSealInferenceSealGraceSeconds
                 this[DevshardEscrowParams::defaultAutoSealEveryNNonces] = devshardAutoSealEveryNNonces
+                // Do not set validationRate=0: chain treats 0 as unset and snapshots
+                // DefaultDevshardValidationRate (5000 = 50%), same as upgrade-0.2.14.
             }
         }
     }
@@ -84,16 +86,12 @@ fun LocalInferencePair.dumpDevshardChallengeTraceLogs(escrowId: Long) {
     val patterns = listOf(
         "execute_ml_",
         "validation_ml_",
-        "validation_rate_bound",
-        "validation_rate_sample",
         "validation_enqueued",
-        "validation_triggered",
         "apply_validation",
         "proxy_inference_",
         "validation started",
         "validation_result",
         "validation_vote",
-        "NewStateMachine",
     )
     val grepExpr = patterns.joinToString("|") { Regex.escape(it) }
     logSection("phase-trace docker logs (escrow=$escrowId, patterns=$grepExpr)")
@@ -415,7 +413,7 @@ fun LocalInferencePair.assertDevshardSettlement(
 
 fun LocalInferencePair.getDevshardShardStatsDetail(
     escrowId: Long,
-    routePrefix: String,
+    routePrefix: String = com.productscience.defaultDevshardRoutePrefix(),
 ): DevshardShardStatsDetail {
     val normalizedPrefix = routePrefix.trimEnd('/')
     val path = "$normalizedPrefix/stats/shards/$escrowId"
@@ -437,7 +435,7 @@ fun LocalInferencePair.waitForDevshardValidationObservability(
     minCompleted: Int = 1,
     timeoutMs: Long = 120_000L,
     pollIntervalMs: Long = 2_000L,
-    routePrefix: String,
+    routePrefix: String = com.productscience.defaultDevshardRoutePrefix(),
 ) {
     val deadline = System.currentTimeMillis() + timeoutMs
     while (System.currentTimeMillis() < deadline) {

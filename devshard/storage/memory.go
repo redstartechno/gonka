@@ -60,8 +60,9 @@ type sessionData struct {
 
 // Memory is an in-memory storage implementation for testing.
 type Memory struct {
-	mu       sync.RWMutex
-	sessions map[string]*sessionData
+	mu               sync.RWMutex
+	sessions         map[string]*sessionData
+	validationLeases map[string]map[uint64]memoryLease
 }
 
 func NewMemory() *Memory {
@@ -314,6 +315,18 @@ func (m *Memory) DeleteSealedInferences(escrowID string) error {
 		return fmt.Errorf("session %s not found", escrowID)
 	}
 	s.inferences = make(map[uint64]InferenceRow)
+	return nil
+}
+
+func (m *Memory) ClearValidationObs(escrowID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	s, ok := m.sessions[escrowID]
+	if !ok {
+		return fmt.Errorf("session %s not found", escrowID)
+	}
+	s.inferenceValidationObs = make(map[uint64]map[uint32]SlotValidationObs)
 	s.sealedValidationObs = make(map[uint64]map[uint32]SlotValidationObs)
 	return nil
 }
@@ -421,6 +434,7 @@ func (m *Memory) PruneEpoch(epochID uint64) error {
 			delete(m.sessions, id)
 		}
 	}
+	m.pruneValidationLeasesBefore(epochID + 1)
 	return nil
 }
 
@@ -433,6 +447,7 @@ func (m *Memory) pruneBefore(cutoff uint64) error {
 			delete(m.sessions, id)
 		}
 	}
+	m.pruneValidationLeasesBefore(cutoff)
 	return nil
 }
 

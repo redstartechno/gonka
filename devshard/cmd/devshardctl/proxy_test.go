@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -128,37 +127,6 @@ func TestCancelFlag_NilSafeAndOneShot(t *testing.T) {
 	}
 }
 
-func TestWatchClientCancel_TriggersOnDisconnect(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil).WithContext(ctx)
-	flag := newCancelFlag()
-	stop := watchClientCancel(r, flag)
-	defer stop()
-
-	cancel()
-
-	select {
-	case <-flag.Done():
-	case <-time.After(time.Second):
-		t.Fatal("flag should trigger when the request context is canceled mid-request")
-	}
-}
-
-func TestWatchClientCancel_StopPreventsTriggerOnNormalCompletion(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil).WithContext(ctx)
-	flag := newCancelFlag()
-	stop := watchClientCancel(r, flag)
-
-	stop()
-	stop() // must be idempotent
-	cancel()
-
-	time.Sleep(50 * time.Millisecond)
-	require.False(t, flag.Gone(), "normal handler return must not be treated as a client disconnect")
-}
-
 func TestDeferredWriter_SwallowsAfterClientGone(t *testing.T) {
 	rec := httptest.NewRecorder()
 	flag := newCancelFlag()
@@ -253,107 +221,6 @@ func TestRaceWriterDetachedWinnerSinksAfterContextCancel(t *testing.T) {
 
 	rw.Flush()
 	require.Zero(t, w.flushes)
-}
-
-func TestRaceWriterDefersSuspiciousWinnerUntilFallback(t *testing.T) {
-	rec := httptest.NewRecorder()
-	ctx := context.Background()
-	rg := newRaceGroup(ctx, ctx, "escrow-proxy", rec)
-	inf := &inflight{
-		hostID:       "host-1",
-		escrowID:     "escrow-proxy",
-		nonce:        1,
-		suspicious:   true,
-		done:         make(chan struct{}),
-		receiptCh:    make(chan struct{}),
-		firstTokenCh: make(chan struct{}),
-	}
-	rw := &raceWriter{group: rg, nonce: 1, inf: inf}
-	payload := []byte(`data: {"choices":[{"delta":{"content":"suspect"}}]}` + "\n\n")
-
-	n, err := rw.Write(payload)
-	require.NoError(t, err)
-	require.Equal(t, len(payload), n)
-	require.Zero(t, rg.winnerNonce())
-	require.Empty(t, rec.Body.String())
-	require.Equal(t, payload, inf.pendingBuf)
-
-	require.NoError(t, rg.promoteFallbackWinner(inf))
-	require.EqualValues(t, 1, rg.winnerNonce())
-	require.Equal(t, string(payload), rec.Body.String())
-	require.Empty(t, inf.pendingBuf)
-}
-
-func TestRaceWriterLogsSuspiciousWinnerDeferredOncePerAttempt(t *testing.T) {
-	var logs bytes.Buffer
-	oldOutput := log.Writer()
-	oldFlags := log.Flags()
-	log.SetOutput(&logs)
-	log.SetFlags(0)
-	t.Cleanup(func() {
-		log.SetOutput(oldOutput)
-		log.SetFlags(oldFlags)
-	})
-
-	rec := httptest.NewRecorder()
-	ctx := context.Background()
-	rg := newRaceGroup(ctx, ctx, "escrow-proxy", rec)
-	inf := &inflight{
-		hostID:       "host-1",
-		escrowID:     "escrow-proxy",
-		nonce:        1,
-		suspicious:   true,
-		done:         make(chan struct{}),
-		receiptCh:    make(chan struct{}),
-		firstTokenCh: make(chan struct{}),
-	}
-	rw := &raceWriter{group: rg, nonce: 1, inf: inf}
-
-	for _, payload := range [][]byte{
-		[]byte(`data: {"choices":[{"delta":{"content":"chunk-1"}}]}` + "\n\n"),
-		[]byte(`data: {"choices":[{"delta":{"content":"chunk-2"}}]}` + "\n\n"),
-		[]byte(`data: {"choices":[{"delta":{"content":"chunk-3"}}]}` + "\n\n"),
-	} {
-		_, err := rw.Write(payload)
-		require.NoError(t, err)
-	}
-
-	require.Equal(t, 1, strings.Count(logs.String(), "stage=suspicious_winner_deferred"))
-	require.Equal(t, int64(3), inf.contentChunks.Load())
-	require.Zero(t, rg.winnerNonce())
-}
-
-func TestRaceWriterNonSuspiciousBeatsSuspiciousAttempt(t *testing.T) {
-	rec := httptest.NewRecorder()
-	ctx := context.Background()
-	rg := newRaceGroup(ctx, ctx, "escrow-proxy", rec)
-	suspicious := &inflight{
-		hostID:       "host-1",
-		escrowID:     "escrow-proxy",
-		nonce:        1,
-		suspicious:   true,
-		done:         make(chan struct{}),
-		receiptCh:    make(chan struct{}),
-		firstTokenCh: make(chan struct{}),
-	}
-	normal := &inflight{
-		hostID:       "host-2",
-		escrowID:     "escrow-proxy",
-		nonce:        2,
-		done:         make(chan struct{}),
-		receiptCh:    make(chan struct{}),
-		firstTokenCh: make(chan struct{}),
-	}
-
-	_, err := (&raceWriter{group: rg, nonce: 1, inf: suspicious}).Write([]byte(`data: {"choices":[{"delta":{"content":"suspect"}}]}` + "\n\n"))
-	require.NoError(t, err)
-	require.Zero(t, rg.winnerNonce())
-
-	normalPayload := []byte(`data: {"choices":[{"delta":{"content":"normal"}}]}` + "\n\n")
-	_, err = (&raceWriter{group: rg, nonce: 2, inf: normal}).Write(normalPayload)
-	require.NoError(t, err)
-	require.EqualValues(t, 2, rg.winnerNonce())
-	require.Equal(t, string(normalPayload), rec.Body.String())
 }
 
 func TestDeferredWriterRewritesCompletionPayloadToStreamingChunks(t *testing.T) {
@@ -802,6 +669,25 @@ func setupTestProxyWithClients(t *testing.T, clients []user.HostClient) *testPro
 	}
 }
 
+// syncedBuffer wraps bytes.Buffer for tests that read partial stream output
+// while RunInference is still writing from a background goroutine.
+type syncedBuffer struct {
+	mu sync.Mutex
+	bytes.Buffer
+}
+
+func (b *syncedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.Buffer.Write(p)
+}
+
+func (b *syncedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.Buffer.String()
+}
+
 func defaultParams() user.InferenceParams {
 	return user.InferenceParams{
 		Model:       "llama",
@@ -1089,7 +975,7 @@ func TestRunInference_StalledWinnerCanCompleteAfterClientTimeout(t *testing.T) {
 	release := make(chan struct{})
 	env := setupTestProxyWithClients(t, []user.HostClient{&streamContentThenReleaseClient{releaseCh: release}})
 
-	var buf bytes.Buffer
+	var buf syncedBuffer
 	errCh := make(chan error, 1)
 	go func() {
 		errCh <- env.proxy.redundancy.RunInference(context.Background(), defaultParams(), &buf, nil)
@@ -1123,7 +1009,7 @@ func TestRunInference_StalledWinnerNaturalErrorAfterClientTimeoutRecordsFailure(
 		err:       errSimulatedWinnerTransport,
 	}})
 
-	var buf bytes.Buffer
+	var buf syncedBuffer
 	errCh := make(chan error, 1)
 	go func() {
 		errCh <- env.proxy.redundancy.RunInference(context.Background(), defaultParams(), &buf, nil)
@@ -1155,23 +1041,23 @@ func TestStalledWinnerQuarantineRequiresParticipantFailureThreshold(t *testing.T
 	}
 
 	first := &inflight{
-		hostIdx:     0,
-		nonce:       1,
-		sendTime:    time.Now().Add(-time.Second),
-		receiptTime: time.Now().Add(-900 * time.Millisecond),
-		firstToken:  time.Now().Add(-800 * time.Millisecond),
+		hostIdx:  0,
+		nonce:    1,
+		sendTime: time.Now().Add(-time.Second),
 	}
+	first.setReceiptAt(time.Now().Add(-900 * time.Millisecond))
+	first.setFirstTokenAt(time.Now().Add(-800 * time.Millisecond))
 	markStalled(first)
 	env.proxy.redundancy.recordStalledWinnerFailureOnce(first, defaultParams())
 	require.False(t, limiter.IsBlocked(participantKey))
 
 	second := &inflight{
-		hostIdx:     0,
-		nonce:       2,
-		sendTime:    time.Now().Add(-time.Second),
-		receiptTime: time.Now().Add(-900 * time.Millisecond),
-		firstToken:  time.Now().Add(-800 * time.Millisecond),
+		hostIdx:  0,
+		nonce:    2,
+		sendTime: time.Now().Add(-time.Second),
 	}
+	second.setReceiptAt(time.Now().Add(-900 * time.Millisecond))
+	second.setFirstTokenAt(time.Now().Add(-800 * time.Millisecond))
 	markStalled(second)
 	env.proxy.redundancy.recordStalledWinnerFailureOnce(second, defaultParams())
 	require.False(t, limiter.IsBlocked(participantKey))
@@ -1186,12 +1072,12 @@ func TestLongResponseAfterContentSkipsParticipantFailureAccounting(t *testing.T)
 
 	for i := 0; i < 2; i++ {
 		inf := &inflight{
-			hostIdx:     0,
-			nonce:       uint64(i + 1),
-			sendTime:    time.Now().Add(-(longResponseFailureExemption + time.Second)),
-			receiptTime: time.Now().Add(-(longResponseFailureExemption + 900*time.Millisecond)),
-			firstToken:  time.Now().Add(-(longResponseFailureExemption + 800*time.Millisecond)),
+			hostIdx:  0,
+			nonce:    uint64(i + 1),
+			sendTime: time.Now().Add(-(longResponseFailureExemption + time.Second)),
 		}
+		inf.setReceiptAt(time.Now().Add(-(longResponseFailureExemption + 900*time.Millisecond)))
+		inf.setFirstTokenAt(time.Now().Add(-(longResponseFailureExemption + 800*time.Millisecond)))
 		inf.contentChunks.Store(1)
 		inf.outputChunks.Store(1)
 		env.proxy.redundancy.recordStalledWinnerFailureOnce(inf, defaultParams())
@@ -1215,11 +1101,11 @@ func TestLongNonStreamEmptyResponseRecordsTimingWithoutQuarantine(t *testing.T) 
 
 	for i := 0; i < 2; i++ {
 		inf := &inflight{
-			hostIdx:     0,
-			nonce:       uint64(i + 1),
-			sendTime:    time.Now().Add(-(longResponseFailureExemption + time.Second)),
-			receiptTime: time.Now().Add(-(longResponseFailureExemption + 900*time.Millisecond)),
+			hostIdx:  0,
+			nonce:    uint64(i + 1),
+			sendTime: time.Now().Add(-(longResponseFailureExemption + time.Second)),
 		}
+		inf.setReceiptAt(time.Now().Add(-(longResponseFailureExemption + 900*time.Millisecond)))
 		env.proxy.redundancy.recordStartedAttemptSamples([]*inflight{inf}, params, true)
 	}
 
@@ -1229,11 +1115,11 @@ func TestLongNonStreamEmptyResponseRecordsTimingWithoutQuarantine(t *testing.T) 
 	require.Equal(t, 1.0, stats.ResponsiveRate)
 
 	inf := &inflight{
-		hostIdx:     0,
-		nonce:       99,
-		sendTime:    time.Now().Add(-(longResponseFailureExemption + time.Second)),
-		receiptTime: time.Now().Add(-(longResponseFailureExemption + 900*time.Millisecond)),
+		hostIdx:  0,
+		nonce:    99,
+		sendTime: time.Now().Add(-(longResponseFailureExemption + time.Second)),
 	}
+	inf.setReceiptAt(time.Now().Add(-(longResponseFailureExemption + 900*time.Millisecond)))
 	involvement := env.proxy.redundancy.buildInvolvement(inf, 0, params)
 	require.True(t, involvement.Responsive)
 	require.True(t, involvement.Finished)
@@ -1248,11 +1134,11 @@ func TestFastNonStreamEmptyResponseRecordsParticipantFailure(t *testing.T) {
 	params.Stream = false
 
 	inf := &inflight{
-		hostIdx:     0,
-		nonce:       1,
-		sendTime:    time.Now().Add(-time.Second),
-		receiptTime: time.Now().Add(-900 * time.Millisecond),
+		hostIdx:  0,
+		nonce:    1,
+		sendTime: time.Now().Add(-time.Second),
 	}
+	inf.setReceiptAt(time.Now().Add(-900 * time.Millisecond))
 	env.proxy.redundancy.recordStartedAttemptSamples([]*inflight{inf}, params, true)
 
 	stats := env.proxy.redundancy.perf.Stats(0)
@@ -1271,10 +1157,10 @@ func TestErrorStreamSkipsParticipantFailureAccounting(t *testing.T) {
 			hostIdx:     0,
 			nonce:       uint64(i + 1),
 			sendTime:    time.Now().Add(-time.Second),
-			receiptTime: time.Now().Add(-900 * time.Millisecond),
-			firstToken:  time.Now().Add(-800 * time.Millisecond),
 			errorSource: "error.BadRequestError",
 		}
+		inf.setReceiptAt(time.Now().Add(-900 * time.Millisecond))
+		inf.setFirstTokenAt(time.Now().Add(-800 * time.Millisecond))
 		inf.outputChunks.Store(1)
 		env.proxy.redundancy.recordStalledWinnerFailureOnce(inf, defaultParams())
 		env.proxy.redundancy.recordStartedAttemptSamples([]*inflight{inf}, defaultParams(), true)
@@ -1369,11 +1255,11 @@ func TestRecoveredEmptyStreamsRecordPerfWithoutQuarantine(t *testing.T) {
 
 	for i := 0; i < emptyStreamQuarantineThreshold; i++ {
 		inf := &inflight{
-			hostIdx:     0,
-			nonce:       uint64(i + 1),
-			sendTime:    time.Now().Add(-time.Second),
-			receiptTime: time.Now().Add(-900 * time.Millisecond),
+			hostIdx:  0,
+			nonce:    uint64(i + 1),
+			sendTime: time.Now().Add(-time.Second),
 		}
+		inf.setReceiptAt(time.Now().Add(-900 * time.Millisecond))
 		inf.outputChunks.Store(1)
 		env.proxy.redundancy.recordStartedAttemptSamples([]*inflight{inf}, defaultParams(), true)
 	}
@@ -1382,7 +1268,6 @@ func TestRecoveredEmptyStreamsRecordPerfWithoutQuarantine(t *testing.T) {
 	require.Equal(t, emptyStreamQuarantineThreshold, stats.TotalSamples)
 	require.Zero(t, stats.ResponsiveRate)
 	require.False(t, limiter.IsBlocked(env.session.HostParticipantKey(0)))
-	require.True(t, limiter.IsShadowQuarantined(env.session.HostParticipantKey(0)))
 
 	unstarted := &inflight{hostIdx: 0, nonce: 99}
 	env.proxy.redundancy.recordStartedAttemptSamples([]*inflight{unstarted}, defaultParams(), true)
@@ -1396,11 +1281,11 @@ func TestRecordStartedAttemptSamplesDoesNotCountEmptyStreamWhenRequestFailed(t *
 
 	for i := 0; i < emptyStreamQuarantineThreshold; i++ {
 		inf := &inflight{
-			hostIdx:     0,
-			nonce:       uint64(i + 1),
-			sendTime:    time.Now().Add(-time.Second),
-			receiptTime: time.Now().Add(-900 * time.Millisecond),
+			hostIdx:  0,
+			nonce:    uint64(i + 1),
+			sendTime: time.Now().Add(-time.Second),
 		}
+		inf.setReceiptAt(time.Now().Add(-900 * time.Millisecond))
 		inf.outputChunks.Store(1)
 		env.proxy.redundancy.recordStartedAttemptSamples([]*inflight{inf}, defaultParams(), false)
 	}
@@ -1409,33 +1294,6 @@ func TestRecordStartedAttemptSamplesDoesNotCountEmptyStreamWhenRequestFailed(t *
 	require.Zero(t, stats.TotalSamples)
 	require.Zero(t, stats.FailureSamples)
 	require.False(t, limiter.IsBlocked(env.session.HostParticipantKey(0)))
-	require.True(t, limiter.IsShadowQuarantined(env.session.HostParticipantKey(0)))
-}
-
-func TestRecordStartedAttemptSamplesDoesNotCountEmptyStreamDuringRelaxedPoC(t *testing.T) {
-	setPoCModeForTest(t, pocRequestModeRelaxed)
-	setPoCPhaseState(true, "confirmation_poc")
-
-	env := setupTestProxyWithClients(t, []user.HostClient{streamContentThenStallClient{}})
-	limiter := NewParticipantRequestLimiter(10, 10)
-	env.proxy.redundancy.participantLimiter = limiter
-
-	for i := 0; i < emptyStreamQuarantineThreshold; i++ {
-		inf := &inflight{
-			hostIdx:     0,
-			nonce:       uint64(i + 1),
-			sendTime:    time.Now().Add(-time.Second),
-			receiptTime: time.Now().Add(-900 * time.Millisecond),
-		}
-		inf.outputChunks.Store(1)
-		env.proxy.redundancy.recordStartedAttemptSamples([]*inflight{inf}, defaultParams(), true)
-	}
-
-	participantKey := env.session.HostParticipantKey(0)
-	stats := env.proxy.redundancy.perf.Stats(0)
-	require.Zero(t, stats.TotalSamples)
-	require.False(t, limiter.IsBlocked(participantKey))
-	require.False(t, limiter.IsShadowQuarantined(participantKey))
 }
 
 func TestEmptyStreamWithoutWinnerSkipsTimeoutVoteOnlyWhenFinished(t *testing.T) {
@@ -1444,10 +1302,10 @@ func TestEmptyStreamWithoutWinnerSkipsTimeoutVoteOnlyWhenFinished(t *testing.T) 
 	require.NoError(t, err)
 
 	inf := &inflight{
-		nonce:       prepared.Nonce(),
-		receiptTime: time.Now(),
-		resp:        &host.HostResponse{ConfirmedAt: time.Now().Unix()},
+		nonce: prepared.Nonce(),
+		resp:  &host.HostResponse{ConfirmedAt: time.Now().Unix()},
 	}
+	inf.setReceiptAt(time.Now())
 
 	reason, skip := emptyStreamWithoutWinnerTimeoutSkipReason(inf, env.session)
 
@@ -1484,7 +1342,6 @@ func TestErrorStreamWithoutFinishPostsTimeoutVote(t *testing.T) {
 		nonce:           prepared.Nonce(),
 		escrowID:        "escrow-proxy",
 		sendTime:        time.Now().Add(-10 * time.Second),
-		receiptTime:     time.Now().Add(-9 * time.Second),
 		errorSource:     "error.NotFoundError",
 		errorCode:       "404",
 		errorType:       "NotFoundError",
@@ -1493,6 +1350,7 @@ func TestErrorStreamWithoutFinishPostsTimeoutVote(t *testing.T) {
 		resp:            &host.HostResponse{Nonce: prepared.Nonce()},
 		done:            make(chan struct{}),
 	}
+	inf.setReceiptAt(time.Now().Add(-9 * time.Second))
 	inf.outputChunks.Store(1)
 	inf.contentChunks.Store(1)
 	close(inf.done)
@@ -1945,15 +1803,6 @@ func TestRunInference_ExportsPrometheusMetrics(t *testing.T) {
 	require.Contains(t, body, `reason="attempt_failed"`)
 	require.Contains(t, body, `devshard_id="escrow-proxy"`)
 	require.Contains(t, body, "devshard_host_total_time_seconds")
-	require.Contains(t, body, `devshard_gateway_requests_total{model="llama",outcome="success",reason="none"} 1`)
-	require.Contains(t, body, "devshard_gateway_slot_decisions_total")
-	require.Contains(t, body, `decision="real_send"`)
-	require.Contains(t, body, "devshard_gateway_attempts_started_total")
-	require.Contains(t, body, `role="primary"`)
-	require.Contains(t, body, `role="extra"`)
-	require.Contains(t, body, "devshard_gateway_attempts_terminal_total")
-	require.Contains(t, body, "devshard_gateway_attempt_failures_total")
-	require.Contains(t, body, "devshard_gateway_user_requests_with_hidden_failure_total")
 }
 
 func TestPerfTrackerIsUnresponsiveUsesThreshold(t *testing.T) {
@@ -1987,7 +1836,7 @@ func TestWaitForFirstTokenUntilReturnsWhenTokenArrives(t *testing.T) {
 	}
 	go func() {
 		time.Sleep(10 * time.Millisecond)
-		inf.firstToken = time.Now()
+		inf.setFirstTokenAt(time.Now())
 		close(inf.firstTokenCh)
 	}()
 

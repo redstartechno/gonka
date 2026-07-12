@@ -70,7 +70,7 @@ func recoveryTestSettings() GatewaySettings {
 func stubRuntimeBuilder(t *testing.T) {
 	t.Helper()
 	saved := gatewayRuntimeBuilder
-	gatewayRuntimeBuilder = func(cfg RuntimeConfig, _, _ string, _ *PerfTracker) (*devshardRuntime, error) {
+	gatewayRuntimeBuilder = func(cfg RuntimeConfig, _ runtimeBuildDeps) (*devshardRuntime, error) {
 		return &devshardRuntime{id: cfg.ID, model: cfg.Model}, nil
 	}
 	t.Cleanup(func() { gatewayRuntimeBuilder = saved })
@@ -167,7 +167,7 @@ func TestCreateRotationEscrowPersistFailureRecoversViaCommitment(t *testing.T) {
 
 	// Force the persist to fail (runtime build error) on the create path.
 	savedBuilder := gatewayRuntimeBuilder
-	gatewayRuntimeBuilder = func(RuntimeConfig, string, string, *PerfTracker) (*devshardRuntime, error) {
+	gatewayRuntimeBuilder = func(RuntimeConfig, runtimeBuildDeps) (*devshardRuntime, error) {
 		return nil, errors.New("persist boom")
 	}
 	_, err := g.createRotationEscrow(context.Background(), settings, model, rotationRoleTemp, 10)

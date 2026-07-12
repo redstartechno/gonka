@@ -193,36 +193,6 @@ func (m *CapacityState) SetHostWeightsByModel(weights map[string]map[string]floa
 	}
 }
 
-// SetHostWeightViews replaces the current and full capacity views atomically.
-// Use this when the chain response contains enough data to compute both the
-// PoC-filtered current view and the all-node full baseline in the same poll.
-func (m *CapacityState) SetHostWeightViews(currentWeights, fullWeights map[string]float64, currentWeightsByModel, fullWeightsByModel map[string]map[string]float64) {
-	if m == nil {
-		return
-	}
-	current := cleanHostWeights(currentWeights)
-	full := cleanHostWeights(fullWeights)
-	currentByModel := cleanModelWeights(currentWeightsByModel)
-	fullByModel := cleanModelWeights(fullWeightsByModel)
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.currentWeights = current
-	m.fullWeights = full
-	m.currentWeightsByModel = currentByModel
-	m.fullWeightsByModel = fullByModel
-}
-
-func cleanHostWeights(weights map[string]float64) map[string]float64 {
-	clean := make(map[string]float64, len(weights))
-	for k, w := range weights {
-		if k == "" || w < 0 {
-			continue
-		}
-		clean[k] = w
-	}
-	return clean
-}
-
 func cleanModelWeights(weights map[string]map[string]float64) map[string]map[string]float64 {
 	clean := make(map[string]map[string]float64, len(weights))
 	for rawModel, hostWeights := range weights {
@@ -254,6 +224,32 @@ func cloneModelWeights(weights map[string]map[string]float64) map[string]map[str
 		clone[model] = cloneHosts
 	}
 	return clone
+}
+
+// SetHostWeightViews replaces the current and full capacity views atomically.
+// Use this when the chain response contains enough data to compute both the
+// PoC-filtered current view and the all-node full baseline in the same poll.
+func (m *CapacityState) SetHostWeightViews(current, baseline map[string]float64, currentByModel, baselineByModel map[string]map[string]float64) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.currentWeights = cleanHostWeights(current)
+	m.fullWeights = cleanHostWeights(baseline)
+	m.currentWeightsByModel = cleanModelWeights(currentByModel)
+	m.fullWeightsByModel = cleanModelWeights(baselineByModel)
+}
+
+func cleanHostWeights(weights map[string]float64) map[string]float64 {
+	clean := make(map[string]float64, len(weights))
+	for k, w := range weights {
+		if k == "" || w < 0 {
+			continue
+		}
+		clean[k] = w
+	}
+	return clean
 }
 
 // SetPoCPreserved updates the preserved-host set. Pass nil to mark the
@@ -321,7 +317,7 @@ func (m *CapacityState) hostCurrentWeightLocked(host string) float64 {
 	if w, ok := m.currentWeights[host]; ok {
 		return w
 	}
-	return 0
+	return 1.0
 }
 
 func (m *CapacityState) hostCurrentWeightForModelLocked(host, model string) float64 {
@@ -342,7 +338,7 @@ func (m *CapacityState) hostFullWeightLocked(host string) float64 {
 	if w, ok := m.fullWeights[host]; ok {
 		return w
 	}
-	return 0
+	return 1.0
 }
 
 func (m *CapacityState) hostFullWeightForModelLocked(host, model string) float64 {
