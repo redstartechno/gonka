@@ -163,13 +163,15 @@ jobs:
       - name: Make Docker Images
         env:
           GENESIS_OVERRIDES_FILE: "inference-chain/test_genesis_overrides.json"
-          USE_REGISTRY_CACHE: "1"
+          USE_REGISTRY_CACHE: "0"
         run: |
           make build-docker
           # Host Linux binaries for Testermint:
           # - build/devshardd: mounted into versiond (VERSIOND_OVERRIDE)
           # - build/devshardctl: docker-cp'd into *-api for startDevshardProxy
-          DEVSHARD_VERSION=dev make devshardd-build devshardctl-build
+          # Stamp both versiond route name and BinaryVersion as "testapp" for CI
+          # (matches VERSIOND_BINARY_NAME default / local-build-pixelplex e2e convention).
+          DEVSHARD_VERSION=testapp DEVSHARD_BINARY_VERSION=testapp make devshardd-build devshardctl-build
           echo "=== devshard version (DEVSHARD_VERSION / build/devshard-version) ==="
           make -s print-devshard-version
           cat build/devshard-version

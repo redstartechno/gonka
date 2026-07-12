@@ -79,19 +79,20 @@ fun devshardVersionedRoutePrefix(version: String = devshardTestVersion()): Strin
 fun defaultDevshardRoutePrefix(): String = devshardVersionedRoutePrefix()
 
 /**
- * [local-test-net/docker-compose.versiond.yml] only declares `VERSIOND_OVERRIDE_dev` for
- * compose substitution. Other version names need an explicit service env entry.
+ * [local-test-net/docker-compose.versiond.yml] declares override keys for compose
+ * substitution (`dev`, `testapp`, …). Other version names need an explicit entry.
  */
 fun warnIfComposeOverrideKeyNotDeclared(version: String, pairName: String) {
-    if (version == "dev") {
+    // Keys declared in local-test-net/docker-compose.versiond.yml for substitution.
+    if (version == "dev" || version == "testapp") {
         return
     }
     Logger.warn(
-        "[{}] versiond compose file declares VERSIOND_OVERRIDE_dev only; " +
-            "override tests using version '{}' need VERSIOND_OVERRIDE_{} in docker-compose.versiond.yml",
+        "[{}] versiond compose file may lack VERSIOND_OVERRIDE_{}; " +
+            "override tests using version '{}' need that key in docker-compose.versiond.yml",
         pairName,
-        version,
         version.replace('.', '_'),
+        version,
     )
 }
 

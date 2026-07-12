@@ -24,6 +24,7 @@ x-versiond: &versiond
     VERSIOND_FORCE: ${VERSIOND_FORCE:-}
     # Compose must list each override key; host env alone is not enough for substitution.
     VERSIOND_OVERRIDE_dev: ${VERSIOND_OVERRIDE_dev:-}
+    VERSIOND_OVERRIDE_testapp: ${VERSIOND_OVERRIDE_testapp:-}
     VERSIOND_OVERRIDE_v1: ${VERSIOND_OVERRIDE_v1:-}
     VERSIOND_OVERRIDE_v0_2_11: ${VERSIOND_OVERRIDE_v0_2_11:-}
     VERSIOND_OVERRIDE_v0_2_13: ${VERSIOND_OVERRIDE_v0_2_13:-}
