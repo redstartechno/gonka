@@ -1128,7 +1128,7 @@ func (g *Gateway) currentMaxConcurrentPer10000Weight() float64 {
 	g.mu.Lock()
 	settings := g.settings.WithTuningDefaults()
 	g.mu.Unlock()
-	if g.pocOrConfirmationPoCActive() {
+	if g.pocGenerationActive() {
 		return settings.PoCMaxConcurrentPer10000Weight
 	}
 	return settings.MaxConcurrentPer10000Weight

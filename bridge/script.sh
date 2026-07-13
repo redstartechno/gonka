@@ -60,13 +60,18 @@ PRYSM_FORMATTED_LOG=/var/log/prysm/beacon.log
 
 # Determine network flags
 NETWORK_FLAGS=""
+CHAIN_ID="ethereum"
 if [ "$ETHEREUM_NETWORK" = "sepolia" ] || [ "$ETHEREUM_NETWORK" = "testnet" ]; then
     echo "Running on Sepolia testnet"
     NETWORK_FLAGS="--sepolia"
+    CHAIN_ID="sepolia"
 else
     echo "Running on Mainnet (default)"
     # Geth defaults to mainnet, no flag needed
 fi
+
+# Watchdog timer variables
+ZERO_PEERS_START_TIME=0
 
 echo "Initializing Ethereum Bridge Service Version 0.1.0"
 

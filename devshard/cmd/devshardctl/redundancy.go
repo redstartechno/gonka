@@ -1734,16 +1734,32 @@ func (e *Redundancy) RunInference(ctx context.Context, params user.InferencePara
 
 	decision := e.Decide(primary.hostIdx, params.InputLength)
 	maxAttempts := e.maxAttempts()
+	if primary.suspicious && maxAttempts > 1 && (!decision.RunSecondary || decision.Delay > 0) {
+		decision = Decision{RunSecondary: true, Delay: 0, Reason: "primary_suspicious", ImmediateAttempts: 1}
+	}
 	if e.metrics != nil {
 		e.metrics.RecordSpeculativeDecision(decision.Reason)
 	}
-	logInferenceStage(ctx, primary.escrowID, primary.nonce, "decision_made",
+	decisionFields := []any{
 		"host", primary.hostID,
 		"decision", decision.Reason,
 		"delay_ms", decision.Delay.Milliseconds(),
 		"max_attempts", maxAttempts,
 		"group_size", e.groupSize,
-	)
+	}
+	if primary.suspicious {
+		decisionFields = append(decisionFields,
+			"primary_no_winner", true,
+			"primary_no_winner_reason", primary.noWinnerReason,
+		)
+		if primary.noWinnerQuarantineMode != "" {
+			decisionFields = append(decisionFields, "primary_quarantine_mode", primary.noWinnerQuarantineMode)
+		}
+		if primary.noWinnerFailureStrikes > 0 {
+			decisionFields = append(decisionFields, "primary_failure_strikes", primary.noWinnerFailureStrikes)
+		}
+	}
+	logInferenceStage(ctx, primary.escrowID, primary.nonce, "decision_made", decisionFields...)
 	race := newRaceGroup(settleCtx, ctx, e.devshardID, w)
 	attempts := []*inflight{primary}
 
@@ -2620,6 +2636,14 @@ func (e *Redundancy) nextEscalationTrigger(attempts []*inflight, params user.Inf
 func (e *Redundancy) escalationForInflight(inf *inflight, params user.InferenceParams) (escalationTrigger, bool) {
 	if inf == nil || inf.escalated {
 		return escalationTrigger{}, false
+	}
+	if inf.suspicious {
+		return escalationTrigger{
+			inf:      inf,
+			deadline: time.Now(),
+			stage:    "suspicious_host_immediate_escalation",
+			reason:   "suspicious_host",
+		}, true
 	}
 	if inf.probe {
 		return escalationTrigger{
@@ -3731,6 +3755,7 @@ func (e *Redundancy) finishRaceOutcome(ctx context.Context, attempts []*inflight
 		}
 	}
 	captureEmptyStreamAttemptRequest(ctx, e.devshardID, params, attempts, winnerNonce)
+	captureShortContentAttemptRequest(ctx, e.devshardID, params, attempts, winnerNonce)
 	effectiveSuccess := anySucceeded && !opts.forceTreatAsFailure
 	if !effectiveSuccess {
 		if opts.recordFailureSamples {
