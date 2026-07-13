@@ -439,10 +439,19 @@ func (g *ChainPhaseGate) refresh() {
 					g.logPreservedParticipantsLoaded(snapshot, state.preserved, state.excluded)
 				}
 				if capacityState != nil {
+					// The participants response has enough ML-node data to compute
+					// both views on every poll: current is PoC/CPoC-filtered,
+					// full is the all-node steady-state baseline. Updating both
+					// prevents cold starts during PoC from falling back to unknown
+					// baseline capacity.
 					capacityState.SetHostWeightViews(state.weights, state.fullWeights, state.weightsByModel, state.fullWeightsByModel)
 					if active && relaxedPoCModeEnabled() {
 						capacityState.SetPoCPreserved(state.preserved)
 					} else {
+						// Outside relaxed PoC every host is "preserved"
+						// from the limiter's perspective; nil tells the
+						// state to treat the preserved set as not-yet-loaded
+						// and therefore not block anyone on PoC grounds.
 						capacityState.SetPoCPreserved(nil)
 					}
 				}

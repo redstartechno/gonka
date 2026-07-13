@@ -155,6 +155,16 @@ func (m *Memory) AppendDiff(escrowID string, rec types.DiffRecord) error {
 	return nil
 }
 
+// AppendDiffs appends many diffs under one lock (used by HA migrate).
+func (m *Memory) AppendDiffs(escrowID string, diffs []types.DiffRecord) error {
+	for _, rec := range diffs {
+		if err := m.AppendDiff(escrowID, rec); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (m *Memory) AddSignature(escrowID string, nonce uint64, slotID uint32, sig []byte) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -328,6 +338,37 @@ func (m *Memory) ClearValidationObs(escrowID string) error {
 	}
 	s.inferenceValidationObs = make(map[uint64]map[uint32]SlotValidationObs)
 	s.sealedValidationObs = make(map[uint64]map[uint32]SlotValidationObs)
+	return nil
+}
+
+// ImportValidationObs replaces live/sealed validation-obs maps for an escrow
+// with the provided rows (HA migrate).
+func (m *Memory) ImportValidationObs(escrowID string, live, sealed []ValidationObsRow) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	s, ok := m.sessions[escrowID]
+	if !ok {
+		return fmt.Errorf("session %s not found", escrowID)
+	}
+	s.inferenceValidationObs = make(map[uint64]map[uint32]SlotValidationObs)
+	s.sealedValidationObs = make(map[uint64]map[uint32]SlotValidationObs)
+	put := func(dst map[uint64]map[uint32]SlotValidationObs, rows []ValidationObsRow) {
+		for _, r := range rows {
+			bySlot := dst[r.InferenceID]
+			if bySlot == nil {
+				bySlot = make(map[uint32]SlotValidationObs)
+				dst[r.InferenceID] = bySlot
+			}
+			bySlot[r.SlotID] = SlotValidationObs{
+				SlotID:               r.SlotID,
+				RequiredValidations:  r.Required,
+				CompletedValidations: r.Completed,
+			}
+		}
+	}
+	put(s.inferenceValidationObs, live)
+	put(s.sealedValidationObs, sealed)
 	return nil
 }
 

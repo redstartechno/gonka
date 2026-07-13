@@ -32,3 +32,24 @@ func TestNewFromConn(t *testing.T) {
 	c2 := chain.NewFromConn(c1.Conn())
 	assert.NotNil(t, c2)
 }
+
+func TestTLSEnabled_DefaultOff(t *testing.T) {
+	t.Setenv(chain.EnvChainGRPCTLS, "")
+	require.False(t, chain.TLSEnabled())
+}
+
+func TestTLSEnabled_Truthy(t *testing.T) {
+	for _, v := range []string{"1", "true", "TRUE", "yes", " Yes "} {
+		t.Run(v, func(t *testing.T) {
+			t.Setenv(chain.EnvChainGRPCTLS, v)
+			require.True(t, chain.TLSEnabled())
+		})
+	}
+}
+
+func TestNew_WithTLSEnvStillDials(t *testing.T) {
+	t.Setenv(chain.EnvChainGRPCTLS, "true")
+	c, err := chain.New("localhost:9090")
+	require.NoError(t, err)
+	assert.NotNil(t, c.Conn())
+}

@@ -27,7 +27,8 @@ type sessionManager interface {
 // staleLeaseStore abstracts storage.LeaseStore for testing.
 type staleLeaseStore interface {
 	AcquireOneStale(ctx context.Context, escrowId, instanceAddr string, ttl time.Duration) (uint64, uint64, error)
-	SetResult(ctx context.Context, escrowId string, inferenceId uint64, status storage.LeaseStatus) error
+	SetResult(ctx context.Context, escrowId string, inferenceId uint64, status storage.LeaseStatus, instanceAddr string) error
+	OwnsPendingLease(ctx context.Context, escrowId string, inferenceId uint64, instanceAddr string) (bool, error)
 }
 
 // hostSnap abstracts *host.Host state reads for testing.
@@ -127,10 +128,7 @@ func (r *RetryLoop) retryForEscrow(ctx context.Context, escrowID string) {
 			slog.Info("devshardd: retry: epoch stale, skipping validation",
 				"escrow", escrowID, "inference", inferenceID,
 				"lease_epoch", leaseEpochID, "current_epoch", r.phase.EpochID())
-			if err := r.leases.SetResult(ctx, escrowID, inferenceID, storage.LeaseStatusSkipped); err != nil {
-				slog.Warn("devshardd: retry: mark skipped failed",
-					"escrow", escrowID, "inference", inferenceID, "error", err)
-			}
+			r.markLeaseResult(ctx, escrowID, inferenceID, storage.LeaseStatusSkipped)
 			continue
 		}
 
@@ -142,10 +140,23 @@ func (r *RetryLoop) retryForEscrow(ctx context.Context, escrowID string) {
 	}
 }
 
+func (r *RetryLoop) markLeaseResult(ctx context.Context, escrowID string, inferenceID uint64, status storage.LeaseStatus) {
+	if err := r.leases.SetResult(ctx, escrowID, inferenceID, status, r.instanceAddr); err != nil {
+		if errors.Is(err, storage.ErrLeaseNotOwned) {
+			slog.Info("devshardd: retry: mark result skipped; lease not owned",
+				"escrow", escrowID, "inference", inferenceID, "status", status)
+			return
+		}
+		slog.Warn("devshardd: retry: mark result failed",
+			"escrow", escrowID, "inference", inferenceID, "status", status, "error", err)
+	}
+}
+
 // retryOne reconstructs a ValidateRequest from in-memory session state, runs
 // validation via the inner engine, submits the result to the host's mempool,
 // and marks the lease complete.
 func (r *RetryLoop) retryOne(ctx context.Context, escrowID string, inferenceID, epochID uint64) error {
+	acquiredAt := time.Now()
 	srv, ok := r.manager.existingServer(escrowID)
 	if !ok {
 		return fmt.Errorf("session %s not loaded", escrowID)
@@ -158,10 +169,7 @@ func (r *RetryLoop) retryOne(ctx context.Context, escrowID string, inferenceID, 
 		// the lease. Mark skipped so the loop doesn't cycle on it forever.
 		slog.Warn("devshardd: retry: inference not in finished state, skipping",
 			"escrow", escrowID, "inference", inferenceID)
-		if err := r.leases.SetResult(ctx, escrowID, inferenceID, storage.LeaseStatusSkipped); err != nil {
-			slog.Warn("devshardd: retry: mark skipped failed",
-				"escrow", escrowID, "inference", inferenceID, "error", err)
-		}
+		r.markLeaseResult(ctx, escrowID, inferenceID, storage.LeaseStatusSkipped)
 		return nil
 	}
 
@@ -176,14 +184,27 @@ func (r *RetryLoop) retryOne(ctx context.Context, escrowID string, inferenceID, 
 		}
 	}
 
+	if time.Since(acquiredAt) > r.leaseTTL {
+		slog.Info("devshardd: retry: lease TTL exceeded after validate; abandon submit",
+			"escrow", escrowID, "inference", inferenceID, "lease_ttl", r.leaseTTL)
+		// Leave pending for another instance after TTL from this claim.
+		return nil
+	}
+	owned, err := r.leases.OwnsPendingLease(ctx, escrowID, inferenceID, r.instanceAddr)
+	if err != nil {
+		return fmt.Errorf("owns pending lease: %w", err)
+	}
+	if !owned {
+		slog.Info("devshardd: retry: lease no longer owned after validate; abandon submit",
+			"escrow", escrowID, "inference", inferenceID)
+		return nil
+	}
+
 	if err := submitValidationToMempool(h, req.InferenceID, result.Valid); err != nil {
 		return fmt.Errorf("submit to mempool: %w", err)
 	}
 
-	if err := r.leases.SetResult(ctx, escrowID, inferenceID, storage.LeaseStatusSubmitted); err != nil {
-		slog.Warn("devshardd: retry: mark submitted failed",
-			"escrow", escrowID, "inference", inferenceID, "error", err)
-	}
+	r.markLeaseResult(ctx, escrowID, inferenceID, storage.LeaseStatusSubmitted)
 	slog.Info("devshardd: retry: validation submitted",
 		"escrow", escrowID, "inference", inferenceID, "valid", result.Valid)
 	return nil

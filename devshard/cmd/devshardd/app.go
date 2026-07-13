@@ -229,7 +229,7 @@ func buildHostManager(
 	}
 	closers.Add(func() { _ = store.Close() })
 
-	leaseValidator := inference.NewLeaseValidator(validator, phase, store, instanceAddr)
+	leaseValidator := inference.NewLeaseValidator(validator, phase, store, instanceAddr, cfg.ValidationLeaseTTL)
 
 	manager := session.NewHostManager(
 		store,

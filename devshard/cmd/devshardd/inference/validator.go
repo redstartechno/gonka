@@ -16,6 +16,8 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"sync"
+	"time"
 
 	"github.com/productscience/inference/x/inference/types"
 )
@@ -23,7 +25,13 @@ import (
 // leaseOps is satisfied by storage.LeaseStore; extracted as interface for testing.
 type leaseOps interface {
 	Acquire(ctx context.Context, escrowId string, inferenceId uint64, epochId uint64, instanceAddr string) (bool, error)
-	SetResult(ctx context.Context, escrowId string, inferenceId uint64, status storage.LeaseStatus) error
+	SetResult(ctx context.Context, escrowId string, inferenceId uint64, status storage.LeaseStatus, instanceAddr string) error
+	OwnsPendingLease(ctx context.Context, escrowId string, inferenceId uint64, instanceAddr string) (bool, error)
+}
+
+type acquireKey struct {
+	escrowID    string
+	inferenceID uint64
 }
 
 // Validator implements devshard.ValidationEngine for the standalone devshardd binary.
@@ -169,16 +177,39 @@ type LeaseValidator struct {
 	phase        *chain.Phase
 	leases       leaseOps
 	instanceAddr string
+	leaseTTL     time.Duration
+	acquires     sync.Map // acquireKey -> time.Time
 }
 
 // NewLeaseValidator wraps v with Postgres lease deduplication.
-func NewLeaseValidator(v devshardpkg.ValidationEngine, phase *chain.Phase, leases leaseOps, instanceAddr string) *LeaseValidator {
+func NewLeaseValidator(v devshardpkg.ValidationEngine, phase *chain.Phase, leases leaseOps, instanceAddr string, leaseTTL time.Duration) *LeaseValidator {
+	if leaseTTL <= 0 {
+		leaseTTL = 30 * time.Minute
+	}
 	return &LeaseValidator{
 		validator:    v,
 		phase:        phase,
 		leases:       leases,
 		instanceAddr: instanceAddr,
+		leaseTTL:     leaseTTL,
 	}
+}
+
+func (c *LeaseValidator) rememberAcquire(escrowID string, inferenceID uint64, at time.Time) {
+	c.acquires.Store(acquireKey{escrowID: escrowID, inferenceID: inferenceID}, at)
+}
+
+func (c *LeaseValidator) forgetAcquire(escrowID string, inferenceID uint64) {
+	c.acquires.Delete(acquireKey{escrowID: escrowID, inferenceID: inferenceID})
+}
+
+func (c *LeaseValidator) acquiredAt(escrowID string, inferenceID uint64) (time.Time, bool) {
+	v, ok := c.acquires.Load(acquireKey{escrowID: escrowID, inferenceID: inferenceID})
+	if !ok {
+		return time.Time{}, false
+	}
+	at, ok := v.(time.Time)
+	return at, ok
 }
 
 func (c *LeaseValidator) Validate(ctx context.Context, req devshardpkg.ValidateRequest) (*devshardpkg.ValidateResult, error) {
@@ -191,6 +222,7 @@ func (c *LeaseValidator) Validate(ctx context.Context, req devshardpkg.ValidateR
 	} else if !acquired {
 		return nil, devshardpkg.ErrValidationAlreadyLeased
 	}
+	c.rememberAcquire(req.EscrowID, req.InferenceID, time.Now())
 
 	result, err := c.validator.Validate(ctx, req)
 	if err != nil {
@@ -200,14 +232,56 @@ func (c *LeaseValidator) Validate(ctx context.Context, req devshardpkg.ValidateR
 				"escrow", req.EscrowID, "inference", req.InferenceID)
 			return &devshardpkg.ValidateResult{Valid: false}, nil
 		}
+		c.forgetAcquire(req.EscrowID, req.InferenceID)
 		return nil, err
 	}
 
 	return result, nil
 }
 
+// AllowValidationSubmit gates MsgValidation publish: TTL since acquire and
+// current pending ownership must both still hold.
+func (c *LeaseValidator) AllowValidationSubmit(ctx context.Context, escrowID string, inferenceID uint64) error {
+	if err := c.ensureLeaseStillValid(ctx, escrowID, inferenceID); err != nil {
+		c.forgetAcquire(escrowID, inferenceID)
+		return err
+	}
+	return nil
+}
+
 func (c *LeaseValidator) MarkValidationSubmitted(ctx context.Context, escrowID string, inferenceID uint64) error {
-	return c.leases.SetResult(ctx, escrowID, inferenceID, storage.LeaseStatusSubmitted)
+	if err := c.ensureLeaseStillValid(ctx, escrowID, inferenceID); err != nil {
+		c.forgetAcquire(escrowID, inferenceID)
+		return err
+	}
+	err := c.leases.SetResult(ctx, escrowID, inferenceID, storage.LeaseStatusSubmitted, c.instanceAddr)
+	c.forgetAcquire(escrowID, inferenceID)
+	if errors.Is(err, storage.ErrLeaseNotOwned) {
+		return fmt.Errorf("%w: %v", devshardpkg.ErrValidationLeaseAbandoned, err)
+	}
+	return err
+}
+
+func (c *LeaseValidator) ensureLeaseStillValid(ctx context.Context, escrowID string, inferenceID uint64) error {
+	at, ok := c.acquiredAt(escrowID, inferenceID)
+	if !ok {
+		return fmt.Errorf("%w: missing local acquire time", devshardpkg.ErrValidationLeaseAbandoned)
+	}
+	if time.Since(at) > c.leaseTTL {
+		slog.Info("devshardd: validation lease TTL exceeded; abandon submit",
+			"escrow", escrowID, "inference", inferenceID, "lease_ttl", c.leaseTTL)
+		return fmt.Errorf("%w: elapsed since acquire exceeds lease TTL", devshardpkg.ErrValidationLeaseAbandoned)
+	}
+	owned, err := c.leases.OwnsPendingLease(ctx, escrowID, inferenceID, c.instanceAddr)
+	if err != nil {
+		return err
+	}
+	if !owned {
+		slog.Info("devshardd: validation lease no longer owned; abandon submit",
+			"escrow", escrowID, "inference", inferenceID)
+		return fmt.Errorf("%w: pending lease not owned", devshardpkg.ErrValidationLeaseAbandoned)
+	}
+	return nil
 }
 
 var _ devshardpkg.ValidationEngine = (*LeaseValidator)(nil)

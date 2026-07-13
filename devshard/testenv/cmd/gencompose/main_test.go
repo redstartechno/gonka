@@ -209,6 +209,7 @@ func TestWriteCompose_MockChainService(t *testing.T) {
 	require.Contains(t, text, "VERSIOND_OVERRIDE_v2")
 	require.Contains(t, text, "NODE_MANAGER_ADDR")
 	require.Contains(t, text, "DEVSHARD_REQUIRE_POSTGRES")
+	require.Contains(t, text, "DEVSHARD_HA")
 	require.Contains(t, text, "devshard-postgres:")
 	require.Contains(t, text, "PGHOST:")
 	require.Contains(t, text, "devshardctl:")
@@ -246,6 +247,7 @@ func TestWriteCompose_SingleMode_FilePayloadFallback(t *testing.T) {
 	require.NotContains(t, text, "versiond-1:")
 	require.NotContains(t, text, "devshard-postgres:")
 	require.NotContains(t, text, "DEVSHARD_REQUIRE_POSTGRES")
+	require.NotContains(t, text, "DEVSHARD_HA")
 	require.NotContains(t, text, "PGHOST:")
 }
 

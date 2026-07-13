@@ -1,8 +1,19 @@
 package tx
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 const (
+	// DefaultChainID is production / mainnet. Override via Config.ChainID or
+	// DEVSHARD_CHAIN_ID for other networks (see KnownChainIDs).
+	DefaultChainID = "gonka-mainnet"
+	// ChainIDTestnet is the public Gonka testnet / devnet chain ID.
+	ChainIDTestnet = "gonka-testnet"
+	// ChainIDTestenv is the mock-chain ID used by devshard/testenv.
+	ChainIDTestenv = "gonka-test"
+
 	DefaultFeeDenom     = "ngonka"
 	DefaultFeeAmount    = uint64(1_000_000)
 	DefaultGasLimit     = uint64(500_000)
@@ -10,6 +21,9 @@ const (
 	DefaultPollTimeout  = 45 * time.Second
 	defaultUnorderedTTL = 9 * time.Minute
 )
+
+// KnownChainIDs lists networks with fixed, well-known chain IDs.
+var KnownChainIDs = []string{DefaultChainID, ChainIDTestnet, ChainIDTestenv}
 
 // Config holds fee, gas, and tx polling defaults.
 type Config struct {
@@ -23,6 +37,9 @@ type Config struct {
 
 func (c Config) withDefaults() Config {
 	out := c
+	if strings.TrimSpace(out.ChainID) == "" {
+		out.ChainID = DefaultChainID
+	}
 	if out.FeeDenom == "" {
 		out.FeeDenom = DefaultFeeDenom
 	}

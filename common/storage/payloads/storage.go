@@ -8,10 +8,9 @@ import (
 // ErrNotFound is returned when a requested payload does not exist.
 var ErrNotFound = errors.New("payloads: not found")
 
-// ErrSharedPostgresRequired is returned when multiple concurrent devshardd
-// runtimes need a shared Postgres payload store but PGHOST is unset.
+// ErrSharedPostgresRequired is returned when HA mode is enabled but PGHOST is unset.
 var ErrSharedPostgresRequired = errors.New(
-	"payloads: shared Postgres required for multi-versiond overlap (set PGHOST and PG* env, or run a single versiond instance)",
+	"payloads: shared Postgres required in HA mode (set PGHOST and PG* env, or unset DEVSHARD_HA / DEVSHARD_REQUIRE_POSTGRES)",
 )
 
 // Storage persists inference prompt/response bytes keyed by escrow, inference, and epoch.

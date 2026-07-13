@@ -808,7 +808,7 @@ func (e *Redundancy) pairwiseParticipantAvailable(participantKey string) bool {
 		if e.perf != nil && e.perf.IsUnresponsiveParticipant(participantKey) {
 			return false
 		}
-		if e.participantLimiter != nil && (e.participantLimiter.IsBlocked(participantKey) || e.participantLimiter.IsRecentlyQuarantined(participantKey)) {
+		if e.participantLimiter != nil && (e.participantLimiter.IsBlockedForModel(participantKey, e.model) || e.participantLimiter.IsRecentlyQuarantinedForModel(participantKey, e.model)) {
 			return false
 		}
 	}

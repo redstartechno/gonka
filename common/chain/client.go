@@ -2,17 +2,26 @@ package chain
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
+	"os"
+	"strings"
 
 	"github.com/cosmos/cosmos-sdk/client/grpc/cmtservice"
 	blstypes "github.com/productscience/inference/x/bls/types"
 	inferencetypes "github.com/productscience/inference/x/inference/types"
 	restrictionstypes "github.com/productscience/inference/x/restrictions/types"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 
 	"common/observability"
 )
+
+// EnvChainGRPCTLS enables TLS for Dial / New when set to a truthy value
+// ("1", "true", "yes"). Default is insecure (plaintext), matching co-located
+// node deployments.
+const EnvChainGRPCTLS = "CHAIN_GRPC_TLS"
 
 // InferenceClient is the narrow subset of inferencetypes.QueryClient used by this module.
 // Defined here so dependents (e.g. edge-api/queryapi, devshard/bridge) can reference it without
@@ -44,13 +53,32 @@ type Client struct {
 	conn grpc.ClientConnInterface
 }
 
+// TLSEnabled reports whether CHAIN_GRPC_TLS requests TLS for chain gRPC dials.
+func TLSEnabled() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(EnvChainGRPCTLS))) {
+	case "1", "true", "yes":
+		return true
+	default:
+		return false
+	}
+}
+
+// DialOption returns the transport credential DialOption for chain gRPC.
+// Default is insecure; set CHAIN_GRPC_TLS=true for system-root TLS.
+func DialOption() grpc.DialOption {
+	if TLSEnabled() {
+		return grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{
+			MinVersion: tls.VersionTLS12,
+		}))
+	}
+	return grpc.WithTransportCredentials(insecure.NewCredentials())
+}
+
 // New dials the chain gRPC endpoint eagerly and returns a Client.
 // cfg is assumed valid — config.Load guarantees this.
+// Transport is plaintext unless CHAIN_GRPC_TLS is truthy.
 func New(grpcURL string) (*Client, error) {
-	conn, err := grpc.NewClient(
-		grpcURL,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-	)
+	conn, err := grpc.NewClient(grpcURL, DialOption())
 	if err != nil {
 		return nil, fmt.Errorf("chain: dial %s: %w", grpcURL, err)
 	}

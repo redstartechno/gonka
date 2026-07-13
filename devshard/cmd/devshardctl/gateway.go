@@ -944,7 +944,15 @@ func (g *Gateway) modelAccessError(r *http.Request, model string) error {
 		}
 		return &ModelAccessDeniedError{Model: model, Message: message, StatusCode: http.StatusUnauthorized}
 	default:
-		return nil
+		// Unknown / typo'd modes must not fall open. Treat as api_key.
+		if g.requestHasAPIKey(r) {
+			return nil
+		}
+		message := entry.AccessMessage
+		if message == "" {
+			message = fmt.Sprintf("model %q requires an API key", model)
+		}
+		return &ModelAccessDeniedError{Model: model, Message: message, StatusCode: http.StatusUnauthorized}
 	}
 }
 
@@ -2263,6 +2271,54 @@ func normalizeStorageDir(storagePath string) string {
 	return clean
 }
 
+// resolveAdminStoragePath resolves an admin-supplied storage_path relative to
+// baseStorageDir. Absolute paths (e.g. /etc/...) and ".." segments are rejected;
+// the result must be a subdirectory of the base (same containment rule as delete).
+func resolveAdminStoragePath(storagePath, baseStorageDir string) (string, error) {
+	baseStorageDir = filepath.Clean(strings.TrimSpace(baseStorageDir))
+	if baseStorageDir == "" || baseStorageDir == "." {
+		return "", fmt.Errorf("base storage dir is not configured")
+	}
+	storagePath = strings.TrimSpace(storagePath)
+	if storagePath == "" {
+		return "", fmt.Errorf("storage_path is required")
+	}
+	if filepath.IsAbs(storagePath) {
+		return "", fmt.Errorf("storage_path must be relative to the gateway base dir")
+	}
+	for _, part := range strings.Split(filepath.ToSlash(storagePath), "/") {
+		if part == ".." {
+			return "", fmt.Errorf("storage_path must not contain ..")
+		}
+	}
+	candidate := normalizeStorageDir(filepath.Join(baseStorageDir, storagePath))
+	if err := ensureStoragePathUnderBase(candidate, baseStorageDir); err != nil {
+		return "", err
+	}
+	return candidate, nil
+}
+
+// ensureStoragePathUnderBase reports whether storagePath (already cleaned) is a
+// strict subdirectory of baseStorageDir.
+func ensureStoragePathUnderBase(storagePath, baseStorageDir string) error {
+	storagePath = normalizeStorageDir(storagePath)
+	baseStorageDir = filepath.Clean(strings.TrimSpace(baseStorageDir))
+	if storagePath == "" {
+		return nil
+	}
+	if baseStorageDir == "" || baseStorageDir == "." {
+		return fmt.Errorf("base storage dir is not configured")
+	}
+	rel, err := filepath.Rel(baseStorageDir, storagePath)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("refusing storage path outside base dir: %s", storagePath)
+	}
+	if rel == "." || storagePath == baseStorageDir {
+		return fmt.Errorf("refusing to use base storage dir as escrow path: %s", storagePath)
+	}
+	return nil
+}
+
 func migrateGatewayLegacyStorage(storageDir, originalStoragePath, escrowID string, br bridge.MainnetBridge) error {
 	storageDir = strings.TrimSpace(storageDir)
 	if storageDir == "" {
@@ -3049,7 +3105,17 @@ func (g *Gateway) addCreatedEscrowRuntime(record GatewayDevshardState) (GatewayD
 	if record.StoragePath == "" {
 		record.StoragePath = defaultStoragePath(g.baseStorageDir, record.ID)
 	} else {
-		record.StoragePath = normalizeStorageDir(record.StoragePath)
+		resolved, resolveErr := resolveAdminStoragePath(record.StoragePath, g.baseStorageDir)
+		if resolveErr != nil {
+			// Allow already-absolute paths that remain under the base (legacy records).
+			normalized := normalizeStorageDir(record.StoragePath)
+			if err := ensureStoragePathUnderBase(normalized, g.baseStorageDir); err != nil {
+				return record, resolveErr
+			}
+			record.StoragePath = normalized
+		} else {
+			record.StoragePath = resolved
+		}
 	}
 	rt, err := gatewayRuntimeBuilder(record.RuntimeConfig, g.runtimeBuildDepsFromSettings(g.perf, state.Settings))
 	if err != nil {
@@ -3256,15 +3322,16 @@ func (g *Gateway) handleAdminImportDevshard(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	req.ID = strings.TrimSpace(req.ID)
-	req.StoragePath = normalizeStorageDir(req.StoragePath)
 	if req.ID == "" {
 		http.Error(w, `{"error":{"message":"id is required"}}`, http.StatusBadRequest)
 		return
 	}
-	if req.StoragePath == "" {
-		http.Error(w, `{"error":{"message":"storage_path is required for import"}}`, http.StatusBadRequest)
+	resolvedPath, err := resolveAdminStoragePath(req.StoragePath, g.baseStorageDir)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":{"message":%q}}`, err.Error()), http.StatusBadRequest)
 		return
 	}
+	req.StoragePath = resolvedPath
 	hasKey := strings.TrimSpace(req.PrivateKey) != "" || strings.TrimSpace(req.PrivateKeyEnv) != ""
 	if !hasKey {
 		http.Error(w, `{"error":{"message":"private_key or private_key_env is required for import"}}`, http.StatusBadRequest)
@@ -3410,7 +3477,12 @@ func (g *Gateway) handleAdminAddDevshard(w http.ResponseWriter, r *http.Request)
 			record.Model = strings.TrimSpace(req.Model)
 		}
 		if strings.TrimSpace(req.StoragePath) != "" {
-			record.StoragePath = normalizeStorageDir(req.StoragePath)
+			resolved, err := resolveAdminStoragePath(req.StoragePath, g.baseStorageDir)
+			if err != nil {
+				http.Error(w, fmt.Sprintf(`{"error":{"message":%q}}`, err.Error()), http.StatusBadRequest)
+				return
+			}
+			record.StoragePath = resolved
 		}
 		if strings.TrimSpace(req.RoutePrefix) != "" {
 			record.RoutePrefix = strings.TrimSpace(req.RoutePrefix)
@@ -3424,14 +3496,21 @@ func (g *Gateway) handleAdminAddDevshard(w http.ResponseWriter, r *http.Request)
 		}
 		record = GatewayDevshardState{
 			RuntimeConfig: RuntimeConfig{
-				ID:              req.ID,
-				PrivateKeyHex:   strings.TrimSpace(req.PrivateKey),
-				PrivateKeyEnv:   strings.TrimSpace(req.PrivateKeyEnv),
-				Model:           strings.TrimSpace(req.Model),
-				StoragePath:     normalizeStorageDir(req.StoragePath),
+				ID:            req.ID,
+				PrivateKeyHex: strings.TrimSpace(req.PrivateKey),
+				PrivateKeyEnv: strings.TrimSpace(req.PrivateKeyEnv),
+				Model:         strings.TrimSpace(req.Model),
 				RoutePrefix:   strings.TrimSpace(req.RoutePrefix),
 			},
 			Active: true,
+		}
+		if strings.TrimSpace(req.StoragePath) != "" {
+			resolved, err := resolveAdminStoragePath(req.StoragePath, g.baseStorageDir)
+			if err != nil {
+				http.Error(w, fmt.Sprintf(`{"error":{"message":%q}}`, err.Error()), http.StatusBadRequest)
+				return
+			}
+			record.StoragePath = resolved
 		}
 	}
 
@@ -3459,8 +3538,9 @@ func (g *Gateway) handleAdminAddDevshard(w http.ResponseWriter, r *http.Request)
 	}
 	if record.StoragePath == "" {
 		record.StoragePath = defaultStoragePath(g.baseStorageDir, record.ID)
-	} else {
-		record.StoragePath = normalizeStorageDir(record.StoragePath)
+	} else if err := ensureStoragePathUnderBase(record.StoragePath, g.baseStorageDir); err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":{"message":%q}}`, err.Error()), http.StatusBadRequest)
+		return
 	}
 
 	rt, err := gatewayRuntimeBuilder(record.RuntimeConfig, g.runtimeBuildDepsFromSettings(g.perf, state.Settings))
@@ -3973,10 +4053,9 @@ func (g *Gateway) reconcilePendingSettlements() {
 		}
 		return
 	}
-	g.mu.Lock()
-	settlementEnabled := g.settings.EscrowRotation.SettlementEnabled
-	g.mu.Unlock()
-	if !settlementEnabled {
+	// Honor the operator's config: when settlement is disabled, never settle on
+	// startup. Leave the marker intact so a later re-enable still settles it.
+	if !state.Settings.EscrowRotation.SettlementEnabled {
 		for _, devshard := range state.Devshards {
 			if !devshard.Active && devshard.SettlementPending {
 				log.Printf("settlement_reconcile_skipped escrow=%s reason=settlement_disabled", devshard.ID)
@@ -4127,14 +4206,19 @@ func (g *Gateway) scheduleAutoSettlement(id, reason string) {
 			result, err := gatewaySettleDevshardOnChain(g, ctx, id, adminSettleEscrowRequest{})
 			cancel()
 			if err == nil {
+				g.clearSettlementPending(id)
 				log.Printf("auto_settle_submitted escrow=%s reason=%s tx_hash=%s settler=%s",
 					id, reason, result.TxHash, result.Settler)
-				g.clearSettlementPending(id)
+				g.retireRuntime(id, reason)
 				return
 			}
 			log.Printf("auto_settle_failed escrow=%s reason=%s attempt=%d/%d error=%v",
 				id, reason, attempt, autoSettlementMaxAttempts, err)
 			if attempt == autoSettlementMaxAttempts {
+				// Settlement exhausted its retries; free the in-memory runtime
+				// anyway so a permanently-unsettleable escrow cannot leak its
+				// store. On-disk state is preserved for manual recovery.
+				g.retireRuntime(id, reason)
 				return
 			}
 			time.Sleep(autoSettlementRetryInterval)
@@ -4147,12 +4231,8 @@ func removeDevshardStorage(storagePath, baseStorageDir string) error {
 		return nil
 	}
 	storagePath = normalizeStorageDir(storagePath)
-	baseStorageDir = filepath.Clean(baseStorageDir)
-	if !strings.HasPrefix(storagePath, baseStorageDir+string(os.PathSeparator)) && storagePath != baseStorageDir {
-		return fmt.Errorf("refusing to delete storage outside base dir: %s", storagePath)
-	}
-	if storagePath == baseStorageDir {
-		return fmt.Errorf("refusing to delete base storage dir: %s", storagePath)
+	if err := ensureStoragePathUnderBase(storagePath, baseStorageDir); err != nil {
+		return err
 	}
 	return os.RemoveAll(storagePath)
 }

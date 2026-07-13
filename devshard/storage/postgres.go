@@ -552,6 +552,154 @@ func (s *Postgres) AppendDiff(escrowID string, rec types.DiffRecord) error {
 	return tx.Commit(ctx)
 }
 
+// AppendDiffs inserts many diffs for one escrow in a single transaction using
+// COPY for diffs and signatures, then one latest_nonce update. Empty input is a
+// no-op. Callers must only pass new nonces (no duplicates with existing rows).
+func (s *Postgres) AppendDiffs(escrowID string, diffs []types.DiffRecord) error {
+	if len(diffs) == 0 {
+		return nil
+	}
+	epochID, err := s.lookupEpoch(escrowID)
+	if err != nil {
+		return err
+	}
+
+	type preparedDiff struct {
+		rec      types.DiffRecord
+		txsProto []byte
+		warmJSON *string
+	}
+	prepared := make([]preparedDiff, 0, len(diffs))
+	var maxNonce uint64
+	sigCount := 0
+	for _, rec := range diffs {
+		txsProto, err := marshalTxs(rec.Txs)
+		if err != nil {
+			return err
+		}
+		var warmJSON *string
+		if len(rec.WarmKeyDelta) > 0 {
+			b, err := json.Marshal(rec.WarmKeyDelta)
+			if err != nil {
+				return fmt.Errorf("marshal warm keys nonce %d: %w", rec.Nonce, err)
+			}
+			str := string(b)
+			warmJSON = &str
+		}
+		prepared = append(prepared, preparedDiff{rec: rec, txsProto: txsProto, warmJSON: warmJSON})
+		sigCount += len(rec.Signatures)
+		if rec.Nonce > maxNonce {
+			maxNonce = rec.Nonce
+		}
+	}
+
+	ctx, cancel := s.opCtx()
+	defer cancel()
+	if err := s.ensurePartition(ctx, epochID); err != nil {
+		return err
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	_, err = tx.CopyFrom(ctx,
+		pgx.Identifier{pgDiffsParent},
+		[]string{"epoch_id", "escrow_id", "nonce", "txs_proto", "user_sig", "post_state_root", "state_hash", "warm_keys_json", "created_at"},
+		pgx.CopyFromSlice(len(prepared), func(i int) ([]any, error) {
+			p := prepared[i]
+			return []any{
+				epochID,
+				escrowID,
+				p.rec.Nonce,
+				p.txsProto,
+				p.rec.UserSig,
+				p.rec.PostStateRoot,
+				p.rec.StateHash,
+				p.warmJSON,
+				p.rec.CreatedAt,
+			}, nil
+		}),
+	)
+	if err != nil {
+		return fmt.Errorf("copy diffs: %w", err)
+	}
+
+	if sigCount > 0 {
+		sigRows := make([][]any, 0, sigCount)
+		for _, p := range prepared {
+			for slotID, sig := range p.rec.Signatures {
+				sigRows = append(sigRows, []any{epochID, escrowID, p.rec.Nonce, slotID, sig})
+			}
+		}
+		_, err = tx.CopyFrom(ctx,
+			pgx.Identifier{pgSignaturesParent},
+			[]string{"epoch_id", "escrow_id", "nonce", "slot_id", "sig"},
+			pgx.CopyFromRows(sigRows),
+		)
+		if err != nil {
+			return fmt.Errorf("copy signatures: %w", err)
+		}
+	}
+
+	_, err = tx.Exec(ctx,
+		`UPDATE devshard_sessions SET latest_nonce = GREATEST(latest_nonce, $1)
+		 WHERE epoch_id = $2 AND escrow_id = $3`,
+		maxNonce, epochID, escrowID,
+	)
+	if err != nil {
+		return fmt.Errorf("update latest_nonce: %w", err)
+	}
+	return tx.Commit(ctx)
+}
+
+// ImportValidationObs upserts live and sealed validation-obs rows with exact
+// counters. Used by HA SQLite→Postgres migrate.
+func (s *Postgres) ImportValidationObs(escrowID string, live, sealed []ValidationObsRow) error {
+	epochID, err := s.lookupEpoch(escrowID)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := s.opCtx()
+	defer cancel()
+	if err := s.ensurePartition(ctx, epochID); err != nil {
+		return err
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	importRows := func(table string, rows []ValidationObsRow) error {
+		if len(rows) == 0 {
+			return nil
+		}
+		for _, r := range rows {
+			_, err := tx.Exec(ctx, fmt.Sprintf(
+				`INSERT INTO %s (epoch_id, escrow_id, inference_id, slot_id, required_validations, completed_validations)
+				 VALUES ($1, $2, $3, $4, $5, $6)
+				 ON CONFLICT (epoch_id, escrow_id, inference_id, slot_id) DO UPDATE SET
+				   required_validations = EXCLUDED.required_validations,
+				   completed_validations = EXCLUDED.completed_validations`, table),
+				epochID, escrowID, r.InferenceID, r.SlotID, r.Required, r.Completed,
+			)
+			if err != nil {
+				return fmt.Errorf("import %s: %w", table, err)
+			}
+		}
+		return nil
+	}
+	if err := importRows(pgInferenceValidationObsParent, live); err != nil {
+		return err
+	}
+	if err := importRows(pgSealedValidationObsParent, sealed); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
 func (s *Postgres) AddSignature(escrowID string, nonce uint64, slotID uint32, sig []byte) error {
 	epochID, err := s.lookupEpoch(escrowID)
 	if err != nil {

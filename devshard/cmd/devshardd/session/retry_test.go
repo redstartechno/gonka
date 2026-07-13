@@ -21,7 +21,8 @@ import (
 
 type stubStaleLeaseStore struct {
 	acquireFn      func(ctx context.Context, escrowId, instanceAddr string, ttl time.Duration) (uint64, uint64, error)
-	setResultFn    func(ctx context.Context, escrowId string, inferenceId uint64, status storage.LeaseStatus) error
+	setResultFn    func(ctx context.Context, escrowId string, inferenceId uint64, status storage.LeaseStatus, instanceAddr string) error
+	ownsFn         func(ctx context.Context, escrowId string, inferenceId uint64, instanceAddr string) (bool, error)
 	setResultCalls []string
 }
 
@@ -29,12 +30,19 @@ func (s *stubStaleLeaseStore) AcquireOneStale(ctx context.Context, escrowId, ins
 	return s.acquireFn(ctx, escrowId, instanceAddr, ttl)
 }
 
-func (s *stubStaleLeaseStore) SetResult(ctx context.Context, escrowId string, inferenceId uint64, status storage.LeaseStatus) error {
+func (s *stubStaleLeaseStore) SetResult(ctx context.Context, escrowId string, inferenceId uint64, status storage.LeaseStatus, instanceAddr string) error {
 	s.setResultCalls = append(s.setResultCalls, fmt.Sprintf("%s/%d/%s", escrowId, inferenceId, status))
 	if s.setResultFn != nil {
-		return s.setResultFn(ctx, escrowId, inferenceId, status)
+		return s.setResultFn(ctx, escrowId, inferenceId, status, instanceAddr)
 	}
 	return nil
+}
+
+func (s *stubStaleLeaseStore) OwnsPendingLease(ctx context.Context, escrowId string, inferenceId uint64, instanceAddr string) (bool, error) {
+	if s.ownsFn != nil {
+		return s.ownsFn(ctx, escrowId, inferenceId, instanceAddr)
+	}
+	return true, nil
 }
 
 

@@ -67,11 +67,15 @@ fun retryGetCli(config: ApplicationConfig, pairName: String, maxAttempts: Int = 
     error("Could not find node container for keyName=$pairName after $maxAttempts attempts")
 }
 const val LOCAL_TEST_NET_DIR = "local-test-net"
-/** CoreDNS service with fixed IP 172.25.0.10 — owned only by the genesis compose project. */
+/** CoreDNS with fixed IP 172.25.0.10 — owned by long-lived compose project [SHARED_DNS_PROJECT]. */
 private const val DNS_SERVER_COMPOSE_FILE = "$LOCAL_TEST_NET_DIR/docker-compose.dns.yml"
 /** Points pair services at 172.25.0.10 without declaring the test-dns container. */
 private const val DNS_OVERRIDES_COMPOSE_FILE = "$LOCAL_TEST_NET_DIR/docker-compose.dns-overrides.yml"
+/** Kept for callers that want both dns server + overrides; genesis/join use overrides only. */
 val DNS_COMPOSE_FILES = listOf(DNS_SERVER_COMPOSE_FILE, DNS_OVERRIDES_COMPOSE_FILE)
+/** Separate from genesis/join so pair `compose down` does not kill CoreDNS between tests. */
+private const val SHARED_DNS_PROJECT = "testdns"
+private const val TEST_DNS_IPV4 = "172.25.0.10"
 val BASE_COMPOSE_FILES = listOf(
     "${LOCAL_TEST_NET_DIR}/docker-compose-base.yml",
 )
@@ -80,9 +84,31 @@ val BASE_COMPOSE_FILES = listOf(
 // Join pairs keep their postgres reachable only from chain-public.
 private val POSTGRES_HOST_OVERLAY = listOf("$LOCAL_TEST_NET_DIR/docker-compose.postgres.yml")
 
+// Ephemeral services stopped on reboot. Shared test-dns stays up; postgres
+// services are reset separately so payload/diff DBs cannot leak across tests.
+private val PAIR_EPHEMERAL_SERVICES = listOf(
+    "proxy",
+    "edge-api",
+    "api",
+    "mock-server",
+    "chain-node",
+    "versiond",
+    "versiond-2",
+    "versiond-3",
+    "versiond-router",
+    "testapp-server",
+    "devshardd-artifact-server",
+)
+
+/** Pair + shared-devshard Postgres — stop/rm + drop named volumes on every reboot. */
+private val PAIR_POSTGRES_SERVICES = listOf(
+    "postgres",
+    "devshard-postgres",
+)
+
 val GENESIS_COMPOSE_FILES = BASE_COMPOSE_FILES +
     "${LOCAL_TEST_NET_DIR}/docker-compose.genesis.yml" +
-    DNS_COMPOSE_FILES +
+    DNS_OVERRIDES_COMPOSE_FILE +
     POSTGRES_HOST_OVERLAY
 // Joins use dns-overrides only. Declaring test-dns in every pair's compose set made
 // three projects fight over container_name=test-dns / 172.25.0.10 on reboot.
@@ -222,9 +248,11 @@ data class DockerGroup(
             // often exits before genesis creates the cold key. Boot chain-node first, then
             // the rest. Default genesis tests (no versiond overlay) keep the original path.
             Logger.info("Genesis + versiond overlay: starting chain-node before full stack", "")
+            // --force-recreate: guarantee a fresh node even if a stale container survived
+            // teardown; reusing one against freshly-wiped prod-local panics on cs.wal.
             val nodeExit = runComposeLogged(
                 "genesis-chain-node-up",
-                *(baseArgs + listOf("up", "-d", "chain-node")).toTypedArray(),
+                *(baseArgs + listOf("up", "-d", "--force-recreate", "chain-node")).toTypedArray(),
             )
             if (nodeExit != 0) {
                 logComposeProjectState("after-failed-genesis-chain-node-up")
@@ -238,8 +266,9 @@ data class DockerGroup(
         } else {
             composeArgs.addAll(listOf("up", "-d"))
             if (!isGenesis) {
-                // This will allow us to get our consensus key and add the participant BEFORE we launch the API
-                composeArgs.add("chain-node")
+                // This will allow us to get our consensus key and add the participant BEFORE we launch the API.
+                // --force-recreate: never reuse a stale node against freshly-wiped prod-local (cs.wal panic).
+                composeArgs.addAll(listOf("--force-recreate", "chain-node"))
             }
             if (!isGenesis) {
                 val exitCode = runComposeLogged("join-chain-node-up", *composeArgs.toTypedArray())
@@ -422,10 +451,11 @@ data class DockerGroup(
      * Full genesis `compose up -d` with exit-code check and proxy-stack readiness.
      * Proxy depends_on edge-api; ignoring compose exit previously left discovery without genesis-proxy.
      *
-     * Retries once after forcing shared test-dns removal: reboot can leave 172.25.0.10
-     * allocated on chain-public so CoreDNS fails with "Address already in use".
+     * Shared test-dns is prestarted (long-lived). Retry frees .10 if something else stole it,
+     * then re-ensures CoreDNS — without tearing down a healthy test-dns.
      */
     private fun bringUpGenesisFullStack(baseArgs: List<String>) {
+        ensureSharedTestDns()
         Logger.info("[{}] Starting genesis full stack (up -d)", pairName)
         var exit = runComposeLogged(
             "genesis-full-stack-up",
@@ -433,12 +463,13 @@ data class DockerGroup(
         )
         if (exit != 0) {
             Logger.warn(
-                "[{}] genesis full stack up exited {}; clearing DNS IPAM and retrying once",
+                "[{}] genesis full stack up exited {}; ensuring DNS IP {} and retrying once",
                 pairName,
                 exit,
+                TEST_DNS_IPV4,
             )
-            removeSharedTestDns()
-            recreateChainPublicNetworkIfPossible()
+            releaseAddressOnChainPublic(TEST_DNS_IPV4)
+            ensureSharedTestDns()
             Thread.sleep(Duration.ofSeconds(1))
             exit = runComposeLogged(
                 "genesis-full-stack-up-retry",
@@ -517,17 +548,79 @@ data class DockerGroup(
 
     private fun dockerContainerRunning(containerName: String): Boolean = isDockerContainerRunning(containerName)
 
-    fun tearDownExisting() {
-        Logger.info("Tearing down existing docker group with keyName={}", pairName)
+    fun tearDownExisting(preservePostgres: Boolean = false) {
+        if (!preservePostgres) {
+            // Default: full project down including postgres volumes. Keeps shared
+            // test-dns (separate compose project) alive across reboots.
+            Logger.info("Fully tearing down docker group with keyName={}", pairName)
+            val composeArgs = mutableListOf("compose", "-p", pairName)
+            composeFiles.forEach { file ->
+                composeArgs.addAll(listOf("-f", file))
+            }
+            composeArgs.addAll(listOf("--project-directory", workingDirectory, "down", "-v"))
+            dockerProcess(*composeArgs.toTypedArray()).start().waitFor()
+            return
+        }
+        Logger.info(
+            "Tearing down ephemeral services for keyName={} (resetting postgres; keeping shared test-dns)",
+            pairName,
+        )
         val composeArgs = mutableListOf("compose", "-p", pairName)
         composeFiles.forEach { file ->
             composeArgs.addAll(listOf("-f", file))
         }
-        // -v removes the per-pair postgres-data volume so a rebooted cluster
-        // starts on a clean database. Bind-mounted dapi state is cleaned up
-        // separately by the launch scripts.
-        composeArgs.addAll(listOf("--project-directory", workingDirectory, "down", "-v"))
-        dockerProcess(*composeArgs.toTypedArray()).start().waitFor()
+        composeArgs.addAll(listOf("--project-directory", workingDirectory))
+        // Stop/rm only ephemeral services so shared test-dns stays up.
+        // Bind-mounted dapi state is cleaned separately by launch scripts.
+        //
+        // Intersect with services actually defined in THIS group's compose set:
+        // `docker compose stop <unknown-service>` aborts the whole command (exit 255)
+        // and stops nothing, leaving stale chain-node running against wiped prod-local.
+        val definedServices = composeServiceNames(composeArgs)
+        val ephemeral = PAIR_EPHEMERAL_SERVICES.filter { it in definedServices }
+        if (ephemeral.isEmpty()) {
+            Logger.warn("[{}] No ephemeral services resolved from compose set; skipping stop/rm", pairName)
+        } else {
+            val stopArgs = composeArgs + listOf("stop") + ephemeral
+            dockerProcess(*stopArgs.toTypedArray()).start().waitFor()
+            val rmArgs = composeArgs + listOf("rm", "-f") + ephemeral
+            dockerProcess(*rmArgs.toTypedArray()).start().waitFor()
+        }
+        resetPostgresServices(composeArgs, definedServices)
+    }
+
+    /** Service names defined in this group's compose set (`compose config --services`). */
+    private fun composeServiceNames(composeArgs: List<String>): Set<String> {
+        val proc = dockerProcess(*(composeArgs + listOf("config", "--services")).toTypedArray())
+            .redirectErrorStream(false)
+        val process = proc.start()
+        val services = process.inputStream.bufferedReader().readLines()
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .toSet()
+        process.waitFor()
+        return services
+    }
+
+    /**
+     * Drop pair postgres (and shared [devshard-postgres] when present) so payload/diff
+     * tables cannot leak across reboots (duplicate-key on `devshard_diffs_*`).
+     */
+    private fun resetPostgresServices(composeArgs: List<String>, definedServices: Set<String>) {
+        val pgServices = PAIR_POSTGRES_SERVICES.filter { it in definedServices }
+        if (pgServices.isNotEmpty()) {
+            Logger.info("[{}] Resetting postgres services: {}", pairName, pgServices.joinToString(","))
+            dockerProcess(*(composeArgs + listOf("stop") + pgServices).toTypedArray()).start().waitFor()
+            // -v removes anonymous volumes attached to the containers.
+            dockerProcess(*(composeArgs + listOf("rm", "-f", "-v") + pgServices).toTypedArray()).start().waitFor()
+        }
+        // Named volume from docker-compose-base.yml (`postgres-data`) survives `rm -v`
+        // unless removed explicitly — that is what caused stale payloads across tests.
+        runDockerLogged("postgres-volume-rm-$pairName", "volume", "rm", "-f", "${pairName}_postgres-data")
+        // Shared genesis-only volume name if compose project labels differ.
+        if (pairName == "genesis") {
+            runDockerLogged("devshard-postgres-rm", "rm", "-f", "devshard-postgres")
+        }
     }
 
     var coldAccountPubkey: String? = null
@@ -809,6 +902,7 @@ fun getRepoRoot(): String {
 
 /**
  * Force-remove shared CoreDNS and free its fixed IP on chain-public.
+ * Used by full stop paths; normal test reboot keeps test-dns via [ensureSharedTestDns].
  *
  * `docker rm -f test-dns` alone is not enough: Docker can leave 172.25.0.10
  * allocated on the bridge after multi-project reboot tearDowns, so the next
@@ -816,13 +910,84 @@ fun getRepoRoot(): String {
  */
 fun removeSharedTestDns() {
     Logger.info("Removing shared test-dns container if present", "")
+    val repoRoot = getRepoRoot()
+    runDockerLogged(
+        "testdns-compose-down",
+        "compose",
+        "-p", SHARED_DNS_PROJECT,
+        "-f", "$repoRoot/$DNS_SERVER_COMPOSE_FILE",
+        "--project-directory", repoRoot,
+        "down", "-v",
+    )
     runDockerLogged("test-dns-rm", "rm", "-f", "test-dns")
     // Clear a stale network endpoint even when the container is already gone.
     runDockerLogged(
         "test-dns-disconnect",
         "network", "disconnect", "-f", "chain-public", "test-dns",
     )
-    releaseAddressOnChainPublic("172.25.0.10")
+    releaseAddressOnChainPublic(TEST_DNS_IPV4)
+}
+
+/**
+ * Create chain-public with IPAM that keeps 172.25.0.10 outside the DHCP pool.
+ * Pair compose files mark the network external so they do not reject a
+ * non-compose-created network (missing com.docker.compose.network labels).
+ *
+ * Do not use --aux-address for .10: Docker then rejects CoreDNS static assign.
+ */
+fun ensureChainPublicNetwork() {
+    val inspect = runDockerLogged("chain-public-inspect-exists", "network", "inspect", "chain-public")
+    if (inspect == 0) {
+        return
+    }
+    Logger.info("Creating chain-public with DHCP pool excluding reserved DNS IP {}", TEST_DNS_IPV4)
+    val createExit = runDockerLogged(
+        "chain-public-create",
+        "network", "create",
+        "--driver", "bridge",
+        "--subnet", "172.25.0.0/16",
+        "--gateway", "172.25.0.1",
+        "--ip-range", "172.25.128.0/17",
+        "chain-public",
+    )
+    if (createExit != 0) {
+        error("Failed to create chain-public network (exit $createExit)")
+    }
+}
+
+/**
+ * Ensure long-lived CoreDNS is running on 172.25.0.10 (compose project [SHARED_DNS_PROJECT]).
+ * No-op if already healthy; does not restart a running container.
+ */
+fun ensureSharedTestDns() {
+    ensureChainPublicNetwork()
+    if (isDockerContainerRunning("test-dns")) {
+        Logger.info("Shared test-dns already running; leaving it up", "")
+        return
+    }
+    // Free .10 if a stale endpoint holds it before starting CoreDNS.
+    releaseAddressOnChainPublic(TEST_DNS_IPV4)
+    Logger.info("Starting shared test-dns (project={})", SHARED_DNS_PROJECT)
+    val repoRoot = getRepoRoot()
+    val exit = runDockerLogged(
+        "testdns-up",
+        "compose",
+        "-p", SHARED_DNS_PROJECT,
+        "-f", "$repoRoot/$DNS_SERVER_COMPOSE_FILE",
+        "--project-directory", repoRoot,
+        "up", "-d",
+    )
+    if (exit != 0) {
+        error("Failed to start shared test-dns (exit $exit)")
+    }
+    val deadline = System.nanoTime() + Duration.ofSeconds(30).toNanos()
+    while (System.nanoTime() < deadline) {
+        if (isDockerContainerRunning("test-dns")) {
+            return
+        }
+        Thread.sleep(Duration.ofSeconds(1))
+    }
+    error("test-dns did not become running after compose up")
 }
 
 /** Force-disconnect any chain-public endpoint still holding [ipv4]. */
@@ -838,6 +1003,10 @@ private fun releaseAddressOnChainPublic(ipv4: String) {
         val parts = line.trim().split(Regex("\\s+"))
         if (parts.size >= 2 && (parts[1].startsWith("$ipv4/") || parts[1] == ipv4)) {
             val name = parts[0]
+            if (name == "test-dns" && isDockerContainerRunning("test-dns")) {
+                // Keep a healthy CoreDNS endpoint.
+                return@forEach
+            }
             Logger.warn("Force-disconnecting {} from chain-public (holds {})", name, ipv4)
             runDockerLogged(
                 "ip-release-disconnect",
@@ -848,10 +1017,14 @@ private fun releaseAddressOnChainPublic(ipv4: String) {
 }
 
 /**
- * After all pair `compose down`s, drop chain-public so IPAM is reset.
- * Compose recreates it on the next genesis `up`. No-op if still in use.
+ * After all pair tearDowns, drop chain-public so IPAM is reset — only when test-dns
+ * is not holding the network (normal reboot keeps DNS and skips this).
  */
 fun recreateChainPublicNetworkIfPossible() {
+    if (isDockerContainerRunning("test-dns")) {
+        Logger.info("Skipping chain-public rm; shared test-dns still attached", "")
+        return
+    }
     Logger.info("Attempting to remove chain-public network to reset DNS IPAM", "")
     val exit = runDockerLogged("chain-public-rm", "network", "rm", "chain-public")
     if (exit != 0) {
@@ -892,7 +1065,7 @@ fun initializeCluster(joinCount: Int = 0, config: ApplicationConfig, currentClus
                     config,
                     false
                 )
-            }.forEach { it.tearDownExisting() }
+            }.forEach { it.tearDownExisting(preservePostgres = false) }
         }
         val joinGroups = (1..joinCount).mapIndexed { index, _ ->
             val actualIndex = (index + 1) * 10
@@ -901,10 +1074,12 @@ fun initializeCluster(joinCount: Int = 0, config: ApplicationConfig, currentClus
         val allGroups = listOf(genesisGroup) + joinGroups
         Logger.info("Initializing cluster with {} nodes", allGroups.size)
         allGroups.forEach { it.tearDownExisting() }
-        // Shared CoreDNS is global (container_name=test-dns, IP 172.25.0.10).
-        // TearDown + rm is not always enough — reset network IPAM before recreate.
-        removeSharedTestDns()
-        recreateChainPublicNetworkIfPossible()
+        // Keep shared CoreDNS across reboots. Only recreate chain-public IPAM when
+        // DNS is not attached (e.g. first run after stop.sh).
+        if (!isDockerContainerRunning("test-dns")) {
+            recreateChainPublicNetworkIfPossible()
+        }
+        ensureSharedTestDns()
         genesisGroup.init()
         Thread.sleep(Duration.ofSeconds(30L))
         val genesisNode = retryGetCli(config, genesisGroup.pairName)

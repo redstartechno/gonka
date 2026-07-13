@@ -136,6 +136,7 @@ services:
       OTEL_ENDPOINT: ${TESTENV_OTEL_ENDPOINT:-}
 {{ if eq $.Versiond.Mode "multi" }}
       DEVSHARD_REQUIRE_POSTGRES: "1"
+      DEVSHARD_HA: "1"
 {{ end }}
 {{ if $.Postgres.Enabled }}
       PGHOST: {{ $.Postgres.Host }}

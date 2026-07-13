@@ -151,10 +151,8 @@ volumes:
   postgres-data:
 
 networks:
+  # Created by Testermint ensureChainPublicNetwork / long-lived testdns project
+  # (IPAM reserves .0–.127 for static addresses like test-dns=172.25.0.10).
   chain-public:
     name: chain-public
-    driver: bridge
-    ipam:
-      driver: default
-      config:
-        - subnet: 172.25.0.0/16
+    external: true

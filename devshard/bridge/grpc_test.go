@@ -62,6 +62,13 @@ func TestGRPCBridge_GetValidationThreshold(t *testing.T) {
 	assert.Equal(t, int64(50), threshold.Value)
 }
 
+func TestGRPCBridge_GetValidationThreshold_MissingReturnsError(t *testing.T) {
+	b := startGRPCBridge(t)
+	_, err := b.GetValidationThreshold(1, "missing-model")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "validation threshold not found")
+}
+
 func TestGRPCBridge_VerifyWarmKey(t *testing.T) {
 	b := startGRPCBridge(t)
 	host := "gonka1host000000000000000000000000000000000"

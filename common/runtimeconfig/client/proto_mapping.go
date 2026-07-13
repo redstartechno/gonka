@@ -22,9 +22,12 @@ func SnapshotFromProto(c *gen.RuntimeConfig) Snapshot {
 			SHA256: v.GetSha256(),
 		})
 	}
-	servedAt := time.Unix(c.GetServedAtUnix(), 0)
-	if c.GetServedAtUnix() == 0 {
-		servedAt = time.Time{}
+	var servedAt time.Time
+	// 0 = unset (canonical). Negative values are treated as unset too so a
+	// legacy ToProto that emitted time.Time{}.Unix() (~year 1) does not
+	// look like a real served-at timestamp.
+	if unix := c.GetServedAtUnix(); unix > 0 {
+		servedAt = time.Unix(unix, 0)
 	}
 	var thresholds []ModelValidationThreshold
 	for _, t := range c.GetValidationThresholds() {

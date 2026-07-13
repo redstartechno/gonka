@@ -44,7 +44,8 @@ type CapacityState struct {
 	// outside PoC (steady-state baseline). currentWeights is the
 	// latest poll (matches fullWeights outside PoC, may be reduced
 	// during PoC). Only the keys we have actually observed appear in
-	// each map; absence means "unknown" -> weight 0.
+	// each map; absence means "unknown" -> neutral weight 1.0 so the
+	// picker can still compare load before the first capacity poll.
 	fullWeights    map[string]float64
 	currentWeights map[string]float64
 
@@ -312,7 +313,7 @@ func (m *CapacityState) hostAvailableLocked(host string) bool {
 }
 
 // hostCurrentWeightLocked returns the current raw poc_weight capacity for the
-// host or 0 if the state has no entry.
+// host, or neutral weight 1.0 if the state has no entry yet.
 func (m *CapacityState) hostCurrentWeightLocked(host string) float64 {
 	if w, ok := m.currentWeights[host]; ok {
 		return w
@@ -333,7 +334,7 @@ func (m *CapacityState) hostCurrentWeightForModelLocked(host, model string) floa
 }
 
 // hostFullWeightLocked returns the steady-state raw poc_weight capacity for the
-// host or 0 if no observation has landed yet.
+// host, or neutral weight 1.0 if no observation has landed yet.
 func (m *CapacityState) hostFullWeightLocked(host string) float64 {
 	if w, ok := m.fullWeights[host]; ok {
 		return w

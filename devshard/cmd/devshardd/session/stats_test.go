@@ -106,7 +106,7 @@ func createStoredSessionWithVersion(t *testing.T, store storage.Storage, escrowI
 	return group, user, hosts[0]
 }
 
-func TestStatsShardsListsCurrentEpochWithoutDetails(t *testing.T) {
+func TestStatsShardsListsNonPrunedActiveWithoutDetails(t *testing.T) {
 	base := newManagerTestStore(t)
 	_, _, hostSigner := createStoredSession(t, base, "escrow-current", 7, 0)
 	createStoredSession(t, base, "escrow-old", 6, 0)
@@ -131,10 +131,13 @@ func TestStatsShardsListsCurrentEpochWithoutDetails(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
 	require.Equal(t, uint64(7), resp.CurrentEpochID)
-	require.Equal(t, []string{"escrow-current"}, resp.ActiveEscrows)
-	require.Len(t, resp.Shards, 1)
+	// Lexicographic escrow id order from boundVersionActiveSessions.
+	require.Equal(t, []string{"escrow-current", "escrow-old"}, resp.ActiveEscrows)
+	require.Len(t, resp.Shards, 2)
 	require.Equal(t, "escrow-current", resp.Shards[0].EscrowID)
 	require.Equal(t, uint64(7), resp.Shards[0].EpochID)
+	require.Equal(t, "escrow-old", resp.Shards[1].EscrowID)
+	require.Equal(t, uint64(6), resp.Shards[1].EpochID)
 
 	cached := requestStats(t, mgr, statsTestRoutePrefix, "/stats/shards")
 	require.Equal(t, http.StatusOK, cached.Code, "body: %s", cached.Body.String())
@@ -242,6 +245,41 @@ func TestStatsShardDetailReturnsStatsOnly(t *testing.T) {
 	cached := requestStats(t, mgr, statsTestRoutePrefix, "/stats/shards/escrow-detail")
 	require.Equal(t, http.StatusOK, cached.Code, "body: %s", cached.Body.String())
 	require.Equal(t, rec.Body.String(), cached.Body.String())
+}
+
+func TestStatsShardDetailServesPriorEpochSession(t *testing.T) {
+	base := newManagerTestStore(t)
+	group, user, hostSigner := createStoredSession(t, base, "escrow-prior", 6, 1)
+	// Chain has advanced; session remains active until prune.
+	store := currentEpochStore{Storage: base, epoch: 7}
+	addresses := make([]string, len(group))
+	for i, s := range group {
+		addresses[i] = s.ValidatorAddress
+	}
+	br := &mockBridge{
+		escrow: &bridge.EscrowInfo{
+			EscrowID:       "escrow-prior",
+			EpochID:        6,
+			Amount:         100000000,
+			CreatorAddress: user.Address(),
+			Slots:          addresses,
+		},
+	}
+	mgr := NewHostManager(store, hostSigner, stub.NewInferenceEngine(), stub.NewValidationEngine(), nil, testutil.RuntimeTestVersion, br, nil, nil)
+	require.NoError(t, mgr.RecoverSessions())
+
+	rec := requestStats(t, mgr, statsTestRoutePrefix, "/stats/shards/escrow-prior")
+	require.Equal(t, http.StatusOK, rec.Code, "body: %s", rec.Body.String())
+
+	var resp struct {
+		EscrowID string `json:"escrow_id"`
+		EpochID  uint64 `json:"epoch_id"`
+		Nonce    uint64 `json:"nonce"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	require.Equal(t, "escrow-prior", resp.EscrowID)
+	require.Equal(t, uint64(6), resp.EpochID)
+	require.Equal(t, uint64(1), resp.Nonce)
 }
 
 func TestStatsShardDetailSkipsForeignVersionSession(t *testing.T) {

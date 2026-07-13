@@ -48,8 +48,8 @@ class DevshardVersiondAdvancedTests : DevshardVersiondTestBase() {
             assertThat(status.config.inferenceSealGraceNonces).isEqualTo(devshardAutoSealInferenceSealGraceNonces.toInt())
             assertThat(status.config.inferenceSealGraceSeconds)
                 .isEqualTo(devshardAutoSealInferenceSealGraceSeconds.toInt())
-            // Governance/create treats validation_rate=0 as unset → default 5000 (50%).
-            assertThat(status.config.validationRate).isEqualTo(5_000)
+            // Governance/create treats validation_rate=0 as unset → default 1000 (10%).
+            assertThat(status.config.validationRate).isEqualTo(1_000)
 
             logSection("Sending first batch ($firstBatch finished inferences)")
             for (i in 0 until firstBatch) {
@@ -237,11 +237,16 @@ class DevshardVersiondAdvancedTests : DevshardVersiondTestBase() {
             }
 
             logSection("Waiting for validation observability on active escrows")
-            sessions.forEach { session ->
+            // Re-sync on each retry: validations often finish after the initial
+            // sync-hosts, and obs only appears on genesis after those diffs apply.
+            sessions.zip(handles).forEach { (session, handle) ->
                 genesis.waitForDevshardValidationObservability(
                     session.escrowId,
                     minCompleted = 1,
                     routePrefix = overrideRoutePrefix,
+                    beforeRetry = {
+                        genesis.syncDevshardProxyHosts(handle.proxyUrl, log = false)
+                    },
                 )
             }
 

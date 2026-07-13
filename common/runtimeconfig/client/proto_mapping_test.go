@@ -5,6 +5,8 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+
+	"common/nodemanager/gen"
 )
 
 func TestProtoMapping_RoundTrip(t *testing.T) {
@@ -25,4 +27,24 @@ func TestProtoMapping_RoundTrip(t *testing.T) {
 	}
 	round := SnapshotFromProto(ProtoFromSnapshot(orig))
 	require.Equal(t, orig, round)
+}
+
+func TestToProto_ZeroServedAtEmitsZero(t *testing.T) {
+	proto := Snapshot{}.ToProto()
+	require.Equal(t, int64(0), proto.GetServedAtUnix())
+
+	round := SnapshotFromProto(proto)
+	require.True(t, round.ServedAt.IsZero())
+}
+
+func TestSnapshotFromProto_NegativeServedAtUnset(t *testing.T) {
+	// Legacy ToProto emitted time.Time{}.Unix() ≈ year-1 sentinel.
+	snap := SnapshotFromProto(&gen.RuntimeConfig{ServedAtUnix: time.Time{}.Unix()})
+	require.True(t, snap.ServedAt.IsZero())
+	require.True(t, time.Time{}.Unix() < 0)
+}
+
+func TestProtoFromSnapshot_ZeroServedAtEmitsZero(t *testing.T) {
+	proto := ProtoFromSnapshot(Snapshot{})
+	require.Equal(t, int64(0), proto.GetServedAtUnix())
 }

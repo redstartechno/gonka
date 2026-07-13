@@ -138,7 +138,7 @@ func (m *HostManager) statsShards(now time.Time) (*statsShardsResponse, error) {
 	}
 	m.statsMu.Unlock()
 
-	currentEpochID, active, err := m.currentEpochActiveSessions()
+	currentEpochID, active, err := m.boundVersionActiveSessions()
 	if err != nil {
 		return nil, err
 	}
@@ -174,7 +174,7 @@ func (m *HostManager) statsShardDetail(escrowID string, now time.Time) (*statsSh
 	}
 	m.statsMu.Unlock()
 
-	sess, err := m.currentEpochActiveSession(escrowID)
+	sess, err := m.boundVersionActiveSession(escrowID)
 	if err != nil {
 		return nil, err
 	}
@@ -208,8 +208,8 @@ func (m *HostManager) statsShardDetail(escrowID string, now time.Time) (*statsSh
 	return resp, nil
 }
 
-func (m *HostManager) currentEpochActiveSession(escrowID string) (storage.ActiveSession, error) {
-	_, active, err := m.currentEpochActiveSessions()
+func (m *HostManager) boundVersionActiveSession(escrowID string) (storage.ActiveSession, error) {
+	currentEpochID, active, err := m.boundVersionActiveSessions()
 	if err != nil {
 		return storage.ActiveSession{}, err
 	}
@@ -218,10 +218,80 @@ func (m *HostManager) currentEpochActiveSession(escrowID string) (storage.Active
 			return sess, nil
 		}
 	}
+	m.logStatsSessionNotFound(escrowID, currentEpochID, active)
 	return storage.ActiveSession{}, storage.ErrSessionNotFound
 }
 
-func (m *HostManager) currentEpochActiveSessions() (uint64, []storage.ActiveSession, error) {
+// logStatsSessionNotFound explains why detail stats 404'd: missing from storage
+// (pruned / never created) or filtered by bound version. Rate-limited only by
+// the caller's polling; keep fields compact for grep in CI dumps.
+func (m *HostManager) logStatsSessionNotFound(escrowID string, currentEpochID uint64, filtered []storage.ActiveSession) {
+	all, listErr := m.store.ListActiveSessions()
+	filteredIDs := make([]string, 0, len(filtered))
+	for _, sess := range filtered {
+		filteredIDs = append(filteredIDs, sess.EscrowID)
+	}
+
+	var (
+		foundInStore bool
+		sessionEpoch uint64
+		metaVersion  string
+		versionMatch bool
+		metaErr      error
+	)
+	if listErr == nil {
+		for _, sess := range all {
+			if sess.EscrowID != escrowID {
+				continue
+			}
+			foundInStore = true
+			sessionEpoch = sess.EpochID
+			metaVersion, versionMatch, metaErr = m.sessionMatchesBoundVersion(escrowID)
+			break
+		}
+	}
+
+	reason := "absent_from_active_store"
+	switch {
+	case listErr != nil:
+		reason = "list_active_failed"
+	case !foundInStore:
+		reason = "absent_from_active_store"
+	case metaErr != nil:
+		reason = "meta_unreadable"
+	case !versionMatch:
+		reason = "version_mismatch"
+	default:
+		reason = "filtered_unknown"
+	}
+
+	storeSummary := make([]string, 0, len(all))
+	for _, sess := range all {
+		storeSummary = append(storeSummary, fmt.Sprintf("%s@%d", sess.EscrowID, sess.EpochID))
+	}
+
+	logging.Warn("devshard stats session not in bound-version active set",
+		inferenceTypes.System,
+		"escrow_id", escrowID,
+		"filter_reason", reason,
+		"current_epoch_id", currentEpochID,
+		"session_epoch_id", sessionEpoch,
+		"found_in_store", foundInStore,
+		"bound_version", m.boundVersion,
+		"meta_version", metaVersion,
+		"version_match", versionMatch,
+		"meta_error", metaErr,
+		"list_error", listErr,
+		"filtered_escrows", strings.Join(filteredIDs, ","),
+		"store_escrows", strings.Join(storeSummary, ","),
+	)
+}
+
+// boundVersionActiveSessions returns non-pruned active sessions for this
+// versiond bind. Epoch is recorded on each shard but not used as a filter:
+// unsettled sessions remain queryable across epoch boundaries until prune.
+// currentEpochID is still returned for list metadata / operators.
+func (m *HostManager) boundVersionActiveSessions() (uint64, []storage.ActiveSession, error) {
 	active, err := m.store.ListActiveSessions()
 	if err != nil {
 		return 0, nil, fmt.Errorf("list active sessions: %w", err)
@@ -238,9 +308,6 @@ func (m *HostManager) currentEpochActiveSessions() (uint64, []storage.ActiveSess
 
 	filtered := make([]storage.ActiveSession, 0, len(active))
 	for _, sess := range active {
-		if sess.EpochID != currentEpochID {
-			continue
-		}
 		_, matches, err := m.sessionMatchesBoundVersion(sess.EscrowID)
 		if err != nil {
 			logging.Debug("skipping devshard stats session with unreadable meta",

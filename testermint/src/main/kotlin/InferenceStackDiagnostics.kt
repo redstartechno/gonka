@@ -233,7 +233,7 @@ fun dumpInferenceDockerLogsForArtifact(
         pairNames.forEach { pair ->
             inferenceStackServices.forEach serviceLoop@{ svc ->
                 val container = "$pair-$svc"
-                val tail = if (svc == "versiond") VERSIOND_DOCKER_LOG_TAIL else DEFAULT_DOCKER_LOG_TAIL
+                val tail = if (svc.startsWith("versiond")) VERSIOND_DOCKER_LOG_TAIL else DEFAULT_DOCKER_LOG_TAIL
                 if (!dockerContainerExists(container)) {
                     Files.writeString(
                         missingPath,
@@ -243,26 +243,12 @@ fun dumpInferenceDockerLogsForArtifact(
                     )
                     return@serviceLoop
                 }
-                val state =
-                    ProcessBuilder(
-                        "docker",
-                        "inspect",
-                        "-f",
-                        "state={{.State.Status}} exit={{.State.ExitCode}} err={{.State.Error}}",
-                        container,
-                    )
-                        .redirectErrorStream(true)
-                        .start()
-                        .let { proc ->
-                            proc.inputStream.bufferedReader().use { it.readText().trim() }.also { proc.waitFor() }
-                        }
-                Files.writeString(
-                    inspectPath,
-                    "=== $container $state ===\n",
-                    StandardOpenOption.CREATE,
-                    StandardOpenOption.APPEND,
-                )
-                captureDockerLogsToFile(container, tail, dumpDir.resolve("$container.log"))
+                dumpOneContainer(container, tail, dumpDir, inspectPath)
+            }
+            // Sticky multi-versiond replicas (genesis-versiond-2, …) are not in the
+            // fixed service list but hold per-slot session state / validations.
+            discoverVersiondReplicas(pair, psOutput).forEach { container ->
+                dumpOneContainer(container, VERSIOND_DOCKER_LOG_TAIL, dumpDir, inspectPath)
             }
         }
 
@@ -286,6 +272,43 @@ private fun dockerContainerExists(containerName: String): Boolean {
             .start()
     proc.waitFor()
     return proc.exitValue() == 0
+}
+
+/** Names like genesis-versiond-2 from `docker ps` (excludes the primary `$pair-versiond`). */
+private fun discoverVersiondReplicas(pair: String, dockerPsOutput: String): List<String> {
+    val primary = "$pair-versiond"
+    val prefix = "$pair-versiond-"
+    return dockerPsOutput
+        .lineSequence()
+        .mapNotNull { line ->
+            line.split(Regex("\\s+")).lastOrNull()?.takeIf { it.startsWith(prefix) && it != primary }
+        }
+        .distinct()
+        .sorted()
+        .toList()
+}
+
+private fun dumpOneContainer(container: String, tail: Int, dumpDir: Path, inspectPath: Path) {
+    val state =
+        ProcessBuilder(
+            "docker",
+            "inspect",
+            "-f",
+            "state={{.State.Status}} exit={{.State.ExitCode}} err={{.State.Error}}",
+            container,
+        )
+            .redirectErrorStream(true)
+            .start()
+            .let { proc ->
+                proc.inputStream.bufferedReader().use { it.readText().trim() }.also { proc.waitFor() }
+            }
+    Files.writeString(
+        inspectPath,
+        "=== $container $state ===\n",
+        StandardOpenOption.CREATE,
+        StandardOpenOption.APPEND,
+    )
+    captureDockerLogsToFile(container, tail, dumpDir.resolve("$container.log"))
 }
 
 private fun captureDockerLogsToFile(containerName: String, tail: Int, outputFile: Path) {

@@ -1162,6 +1162,17 @@ func (h *Host) validateAsync(ctx context.Context, job validateJob) {
 		return
 	}
 
+	if h.validationRecorder != nil {
+		if err := h.validationRecorder.AllowValidationSubmit(ctx, h.escrowID, job.inferenceID); err != nil {
+			logging.Info("validation submit abandoned after lease check",
+				"subsystem", "host",
+				"inference_id", job.inferenceID,
+				"error", err,
+			)
+			return
+		}
+	}
+
 	h.mu.Lock()
 	h.mempool.Add(MempoolEntry{
 		Tx:         tx,
@@ -1185,7 +1196,11 @@ func (h *Host) validateAsync(ctx context.Context, job validateJob) {
 
 	if h.validationRecorder != nil {
 		if err := h.validationRecorder.MarkValidationSubmitted(ctx, h.escrowID, job.inferenceID); err != nil {
-			logging.Error("mark validation submitted failed", "subsystem", "host", "inference_id", job.inferenceID, "error", err)
+			if errors.Is(err, devshard.ErrValidationLeaseAbandoned) {
+				logging.Info("mark validation submitted skipped: lease abandoned", "subsystem", "host", "inference_id", job.inferenceID, "error", err)
+			} else {
+				logging.Error("mark validation submitted failed", "subsystem", "host", "inference_id", job.inferenceID, "error", err)
+			}
 		}
 	}
 }

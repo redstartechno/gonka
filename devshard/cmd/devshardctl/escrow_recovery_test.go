@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"common/chain"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -96,7 +98,7 @@ func stubCreateOnChain(t *testing.T, txHash string, escrowID uint64) {
 func stubQueryTxEscrowID(t *testing.T, fn func(string) (uint64, bool, error)) {
 	t.Helper()
 	saved := gatewayQueryTxEscrowID
-	gatewayQueryTxEscrowID = func(_ context.Context, _ GatewaySettings, txHash string) (uint64, bool, error) {
+	gatewayQueryTxEscrowID = func(_ context.Context, _ *chain.Client, _ GatewaySettings, txHash string) (uint64, bool, error) {
 		return fn(txHash)
 	}
 	t.Cleanup(func() { gatewayQueryTxEscrowID = saved })

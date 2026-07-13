@@ -125,8 +125,11 @@ func (b *GRPCBridge) GetValidationThreshold(epochID uint64, modelID string) (*De
 	if err != nil {
 		return nil, fmt.Errorf("EpochGroupData epoch=%d model=%s: %w", epochID, modelID, err)
 	}
+	if resp == nil {
+		return nil, fmt.Errorf("validation threshold not found for epoch %d model %s", epochID, modelID)
+	}
 	egd := resp.EpochGroupData
-	if resp == nil || egd.ModelSnapshot == nil || egd.ModelSnapshot.ValidationThreshold == nil {
+	if egd.ModelSnapshot == nil || egd.ModelSnapshot.ValidationThreshold == nil {
 		return nil, fmt.Errorf("validation threshold not found for epoch %d model %s", epochID, modelID)
 	}
 	threshold := egd.ModelSnapshot.ValidationThreshold

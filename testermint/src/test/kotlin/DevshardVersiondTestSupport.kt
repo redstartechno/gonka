@@ -64,12 +64,22 @@ abstract class DevshardVersiondTestBase : TestermintTest() {
     )
 
     protected val parallelLongEpochConfig = versiondConfig(
-        genesisSpec = createSpec(epochLength = 25, epochShift = 10).merge(devshardNoRestrictionsSpec),
+        genesisSpec = createSpec(epochLength = 25, epochShift = 10)
+            .merge(devshardNoRestrictionsSpec)
+            // Escrow sampling (bps); 50% so each parallel session is likely to
+            // record validation observability before the wait times out.
+            .merge(devshardEscrowHalfValidateSpec),
         env = overrideVersiondEnv,
     )
 
     protected val overrideAlwaysValidateConfig = versiondConfig(
-        genesisSpec = mergedGenesisSpec(devshardNoRestrictionsSpec, devshardAlwaysValidateSpec),
+        genesisSpec = mergedGenesisSpec(
+            devshardNoRestrictionsSpec,
+            devshardAlwaysValidateSpec,
+            // Escrow sampling is independent of legacy ValidationParams; 50% so the
+            // missing-logit executor is challenged often enough for the assert.
+            devshardEscrowHalfValidateSpec,
+        ),
         env = overrideVersiondEnv,
     )
 

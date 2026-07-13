@@ -22,28 +22,85 @@ var ErrStoragePGBoundWithoutPostgres = errors.New(
 
 // ErrStoragePostgresUnavailable is returned for new sessions while running in
 // degraded SQLite-only mode because PGHOST is set but Postgres is unreachable.
+// In HA mode this error also aborts process boot (no degraded fallback).
 var ErrStoragePostgresUnavailable = errors.New("devshard postgres storage is configured but unavailable")
 
 // NewStorage builds the canonical Storage for a host process.
 //
-// The returned store is a per-session router (HybridStorage):
-//   - When PGHOST is unset it is SQLite-only. If .pg-bound exists and SQLite
-//     still has sessions, boot enters degraded SQLite-owned-only mode: existing
-//     SQLite escrows are served, but new/unknown escrows are rejected because
-//     they may belong to unavailable Postgres.
-//   - When PGHOST is set, Postgres is the backend for all new escrows. If
-//     Postgres is temporarily unavailable, boot enters degraded mode instead of
-//     taking the whole process down.
-//   - When PGHOST is set and Postgres connects, legacy SQLite escrows are
-//     attached alongside Postgres so they keep being served and drain in place
-//     while new escrows go to Postgres.
+// Non-HA mode (default when DEVSHARD_HA / DEVSHARD_REQUIRE_POSTGRES are unset)
+// returns a per-session router (HybridStorage):
+//   - When PGHOST is unset it is SQLite-only (with .pg-bound guards).
+//   - When PGHOST is set, Postgres backs new escrows; unreachable Postgres
+//     enters degraded reconnect mode; legacy SQLite escrows drain in place.
 //
-// A given escrow lives in exactly one backend: CreateSession picks one backend
-// and never falls back to SQLite for Postgres-destined new escrows, so append
-// logs cannot fork across backends.
+// HA mode (DEVSHARD_HA=1 or DEVSHARD_REQUIRE_POSTGRES=1):
+//   - PGHOST is required.
+//   - Postgres must be reachable at boot or NewStorage fails.
+//   - Local SQLite sessions are batch-copied into Postgres, then quarantined.
+//   - The process runs Postgres-only with no SQLite fallback.
 //
 // See devshard/docs/storage-design.md#storage-mode-selection.
 func NewStorage(ctx context.Context, storeDir string) (Storage, error) {
+	if HAModeEnabled() {
+		return newHAStorage(ctx, storeDir)
+	}
+	return newStorageFlexible(ctx, storeDir)
+}
+
+func newHAStorage(ctx context.Context, storeDir string) (Storage, error) {
+	pgHost := os.Getenv("PGHOST")
+	if pgHost == "" {
+		return nil, ErrHAPostgresRequired
+	}
+
+	pg, err := openPostgresWithTimeout(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrStoragePostgresUnavailable, err)
+	}
+
+	sqlite, sqliteDrain, err := openSQLiteDrain(storeDir)
+	if err != nil {
+		_ = pg.Close()
+		return nil, fmt.Errorf("open sqlite for HA migrate: %w", err)
+	}
+	if sqliteDrain {
+		src, ok := sqlite.(*SQLite)
+		if !ok {
+			_ = pg.Close()
+			_ = sqlite.Close()
+			return nil, fmt.Errorf("HA migrate: unexpected sqlite backend type %T", sqlite)
+		}
+		n, migErr := MigrateSQLiteSessions(src, pg)
+		closeErr := src.Close()
+		if migErr != nil {
+			_ = pg.Close()
+			if closeErr != nil {
+				return nil, fmt.Errorf("HA migrate failed: %w (also close sqlite: %v)", migErr, closeErr)
+			}
+			return nil, fmt.Errorf("HA migrate failed: %w", migErr)
+		}
+		if closeErr != nil {
+			_ = pg.Close()
+			return nil, fmt.Errorf("close sqlite after HA migrate: %w", closeErr)
+		}
+		if err := quarantineSQLiteArtifacts(storeDir); err != nil {
+			_ = pg.Close()
+			return nil, fmt.Errorf("quarantine sqlite after HA migrate: %w", err)
+		}
+		slog.Info("devshard storage: HA migrated sqlite sessions to postgres",
+			"dir", storeDir, "sessions", n)
+	}
+
+	router := newHybridRouter(nil, pg, true, storeDir)
+	if err := router.reconcilePGBoundAtBoot(); err != nil {
+		_ = router.Close()
+		return nil, fmt.Errorf("reconcile pg-bound: %w", err)
+	}
+	slog.Info("devshard storage: HA mode postgres-only", "dir", storeDir, "host", pgHost)
+	return router, nil
+}
+
+func newStorageFlexible(ctx context.Context, storeDir string) (Storage, error) {
 	pgHost := os.Getenv("PGHOST")
 
 	if pgHost == "" {

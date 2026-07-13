@@ -256,12 +256,20 @@ func (m *ManagedStorage) AcquireOneStale(ctx context.Context, escrowID, instance
 	return ls.AcquireOneStale(ctx, escrowID, instanceAddr, ttl)
 }
 
-func (m *ManagedStorage) SetResult(ctx context.Context, escrowID string, inferenceID uint64, status LeaseStatus) error {
+func (m *ManagedStorage) SetResult(ctx context.Context, escrowID string, inferenceID uint64, status LeaseStatus, instanceAddr string) error {
 	ls, ok := m.inner.(LeaseStore)
 	if !ok {
 		return fmt.Errorf("storage backend does not support validation leases")
 	}
-	return ls.SetResult(ctx, escrowID, inferenceID, status)
+	return ls.SetResult(ctx, escrowID, inferenceID, status, instanceAddr)
+}
+
+func (m *ManagedStorage) OwnsPendingLease(ctx context.Context, escrowID string, inferenceID uint64, instanceAddr string) (bool, error) {
+	ls, ok := m.inner.(LeaseStore)
+	if !ok {
+		return false, fmt.Errorf("storage backend does not support validation leases")
+	}
+	return ls.OwnsPendingLease(ctx, escrowID, inferenceID, instanceAddr)
 }
 
 var _ Storage = (*ManagedStorage)(nil)

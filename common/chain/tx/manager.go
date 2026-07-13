@@ -62,7 +62,7 @@ func New(conn grpc.ClientConnInterface, cfg Config) (*Manager, error) {
 // NewWithKeyring creates a Manager that can sign ordered txs via keyring.
 func NewWithKeyring(conn grpc.ClientConnInterface, kr keyring.Keyring, address, signerKeyName, chainID string, cfg Config) (*Manager, error) {
 	if strings.TrimSpace(chainID) == "" {
-		return nil, fmt.Errorf("chain id is required")
+		chainID = DefaultChainID
 	}
 	if kr == nil {
 		return nil, fmt.Errorf("keyring is required")
@@ -258,11 +258,12 @@ func (m *Manager) SubmitDisputeState(ctx context.Context, escrowID uint64, state
 }
 
 func (m *Manager) chainID(ctx context.Context) (string, error) {
-	if strings.TrimSpace(m.cfg.ChainID) != "" {
-		return m.cfg.ChainID, nil
+	_ = ctx
+	if id := strings.TrimSpace(m.cfg.ChainID); id != "" {
+		return id, nil
 	}
-	// Unconfigured chain ID: callers should set Config.ChainID in testenv/production.
-	return "", fmt.Errorf("chain id is required")
+	// withDefaults should have filled this; keep a hard fallback for safety.
+	return DefaultChainID, nil
 }
 
 func (m *Manager) accountInfo(ctx context.Context, address string) (chainAccount, error) {

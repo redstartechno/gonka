@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"common/logging"
 
@@ -28,12 +29,50 @@ func NewFileStorage(baseDir string) *FileStorage {
 	return &FileStorage{baseDir: baseDir}
 }
 
+// sanitizeEscrowPathSegment rejects empty IDs and any escrowId that is not a
+// single path segment under baseDir (no separators, ".", "..", or cleaned
+// inequality). Keeps on-disk layout compatible with existing numeric IDs.
+func sanitizeEscrowPathSegment(escrowId string) (string, error) {
+	escrowId = strings.TrimSpace(escrowId)
+	if escrowId == "" {
+		return "", fmt.Errorf("payloads: empty escrowId")
+	}
+	if strings.Contains(escrowId, "/") || strings.Contains(escrowId, `\`) || strings.Contains(escrowId, string(filepath.Separator)) {
+		return "", fmt.Errorf("payloads: invalid escrowId")
+	}
+	if escrowId == "." || escrowId == ".." || strings.Contains(escrowId, "..") {
+		return "", fmt.Errorf("payloads: invalid escrowId")
+	}
+	cleaned := filepath.Base(escrowId)
+	if cleaned != escrowId || cleaned == "." || cleaned == ".." {
+		return "", fmt.Errorf("payloads: invalid escrowId")
+	}
+	return cleaned, nil
+}
+
+func (f *FileStorage) escrowDir(escrowId string, epochId uint64) (string, error) {
+	segment, err := sanitizeEscrowPathSegment(escrowId)
+	if err != nil {
+		return "", err
+	}
+	dir := filepath.Clean(filepath.Join(f.baseDir, strconv.FormatUint(epochId, 10), segment))
+	base := filepath.Clean(f.baseDir)
+	rel, err := filepath.Rel(base, dir)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("payloads: escrow path escapes baseDir")
+	}
+	return dir, nil
+}
+
 func (f *FileStorage) Store(ctx context.Context, escrowId string, inferenceId, epochId uint64, promptPayload, responsePayload []byte) error {
 	_ = ctx
 	logging.Debug("Storing payload (file)", types.PayloadStorage,
 		"escrowId", escrowId, "inferenceId", inferenceId, "epochId", epochId, "baseDir", f.baseDir)
 
-	dir := filepath.Join(f.baseDir, strconv.FormatUint(epochId, 10), escrowId)
+	dir, err := f.escrowDir(escrowId, epochId)
+	if err != nil {
+		return err
+	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("payloads: mkdir: %w", err)
 	}
@@ -60,7 +99,11 @@ func (f *FileStorage) Store(ctx context.Context, escrowId string, inferenceId, e
 
 func (f *FileStorage) Retrieve(ctx context.Context, escrowId string, inferenceId, epochId uint64) ([]byte, []byte, error) {
 	_ = ctx
-	filePath := filepath.Join(f.baseDir, strconv.FormatUint(epochId, 10), escrowId, strconv.FormatUint(inferenceId, 10)+".json")
+	dir, err := f.escrowDir(escrowId, epochId)
+	if err != nil {
+		return nil, nil, err
+	}
+	filePath := filepath.Join(dir, strconv.FormatUint(inferenceId, 10)+".json")
 	data, err := os.ReadFile(filePath)
 	if err != nil {
 		if os.IsNotExist(err) {

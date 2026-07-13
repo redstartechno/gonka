@@ -69,6 +69,47 @@ func TestMemoryLease_AcquireOneStale_PicksStale(t *testing.T) {
 	require.Equal(t, uint64(10), epochID)
 }
 
+func TestMemoryLease_SetResult_RequiresOwner(t *testing.T) {
+	store := NewMemory()
+	ctx := context.Background()
+
+	_, err := store.Acquire(ctx, "escrow-1", 1, 10, "instance-1")
+	require.NoError(t, err)
+
+	err = store.SetResult(ctx, "escrow-1", 1, LeaseStatusSubmitted, "instance-2")
+	require.ErrorIs(t, err, ErrLeaseNotOwned)
+
+	owned, err := store.OwnsPendingLease(ctx, "escrow-1", 1, "instance-1")
+	require.NoError(t, err)
+	require.True(t, owned)
+
+	require.NoError(t, store.SetResult(ctx, "escrow-1", 1, LeaseStatusSubmitted, "instance-1"))
+	owned, err = store.OwnsPendingLease(ctx, "escrow-1", 1, "instance-1")
+	require.NoError(t, err)
+	require.False(t, owned)
+}
+
+func TestMemoryLease_SetResult_RejectsAfterStaleSteal(t *testing.T) {
+	store := NewMemory()
+	ctx := context.Background()
+
+	_, err := store.Acquire(ctx, "escrow-1", 1, 10, "instance-1")
+	require.NoError(t, err)
+
+	store.mu.Lock()
+	lease := store.validationLeases["escrow-1"][1]
+	lease.claimedAt = time.Now().Add(-time.Hour)
+	store.validationLeases["escrow-1"][1] = lease
+	store.mu.Unlock()
+
+	_, _, err = store.AcquireOneStale(ctx, "escrow-1", "instance-2", 30*time.Minute)
+	require.NoError(t, err)
+
+	err = store.SetResult(ctx, "escrow-1", 1, LeaseStatusSubmitted, "instance-1")
+	require.ErrorIs(t, err, ErrLeaseNotOwned)
+	require.NoError(t, store.SetResult(ctx, "escrow-1", 1, LeaseStatusSubmitted, "instance-2"))
+}
+
 // SQLite is single-instance, so its lease store is a deliberate no-op: Acquire
 // always grants (validation runs inline) and AcquireOneStale/SetResult do
 // nothing. Cross-instance dedup is only meaningful on Postgres. See
@@ -110,5 +151,5 @@ func TestSQLiteLease_SetResult_NoOp(t *testing.T) {
 	store := newTestSQLite(t)
 	ctx := context.Background()
 
-	require.NoError(t, store.SetResult(ctx, "escrow-1", 1, LeaseStatusSubmitted))
+	require.NoError(t, store.SetResult(ctx, "escrow-1", 1, LeaseStatusSubmitted, "instance-1"))
 }

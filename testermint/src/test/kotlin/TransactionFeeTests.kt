@@ -53,19 +53,9 @@ class TransactionFeeTests : TestermintTest() {
         logHighlight("FeeParams correctly nil at genesis")
     }
 
-    @Test
-    @Order(2)
-    fun `inference succeeds before fee enablement`() {
-        logHighlight("Testing that inference works before fee enforcement is enabled")
-
-        // Past set_new_validators so GetRandomExecutor uses all participants, not the
-        // preserved-node PoC filter (which is empty right at that boundary).
-        genesis.waitForStage(EpochStage.SET_NEW_VALIDATORS, offset = 2)
-        val response = genesis.makeInferenceRequest(inferenceRequest)
-
-        assertThat(response.choices).isNotEmpty
-        logHighlight("Inference succeeded pre-fees: model=${response.model}")
-    }
+    // Pre-fee classic inference smoke test removed with the dapi deprecation:
+    // classic /v1/chat/completions now returns 410. Fee-exempt bypass for
+    // inference/PoC messages remains covered by unit tests in ante_fee_test.go.
 
     // ========== ENABLE FEES ==========
 

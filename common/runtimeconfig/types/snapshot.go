@@ -67,6 +67,10 @@ func (s Snapshot) ToProto() *gen.RuntimeConfig {
 			ThresholdExponent: t.Exponent,
 		}
 	}
+	var servedAtUnix int64
+	if !s.ServedAt.IsZero() {
+		servedAtUnix = s.ServedAt.Unix()
+	}
 	return &gen.RuntimeConfig{
 		ParamsBlockHeight:       s.ParamsBlockHeight,
 		CurrentEpochId:          s.CurrentEpochID,
@@ -74,7 +78,7 @@ func (s Snapshot) ToProto() *gen.RuntimeConfig {
 		DevshardRequestsEnabled: s.DevshardRequestsEnabled,
 		MaxNonce:                s.MaxNonce,
 		ApprovedVersions:        versions,
-		ServedAtUnix:            s.ServedAt.Unix(),
+		ServedAtUnix:            servedAtUnix,
 		RefusalTimeout:          s.RefusalTimeout,
 		ExecutionTimeout:        s.ExecutionTimeout,
 		ValidationRate:          s.ValidationRate,

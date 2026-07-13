@@ -1116,17 +1116,17 @@ data class LocalInferencePair(
     }
 
     // Returns every inference the gateway knows about, keyed by inference id.
-    // Uses /v1/state (the per-runtime full state snapshot) which carries status and
-    // votes per inference.
+    // Uses /v1/debug/inferences (full map including sealed records). /v1/state
+    // deliberately omits inferences so summary reads stay cheap.
     fun getDevshardProxyInferences(proxyUrl: String): Map<Long, DevshardInferencePayload> {
         val raw = api.executor.exec(listOf(
             "sh", "-c",
-            "curl -sf $proxyUrl/v1/state -H 'Authorization: Bearer $devshardAdminApiKey'"
+            "curl -sf $proxyUrl/v1/debug/inferences -H 'Authorization: Bearer $devshardAdminApiKey'"
         ), null).joinToString("")
         val start = raw.indexOf('{')
         val end = raw.lastIndexOf('}')
         if (start < 0 || end < 0) {
-            error("state returned no JSON object. raw:\n$raw")
+            error("debug/inferences returned no JSON object. raw:\n$raw")
         }
         val root = JsonParser.parseString(raw.substring(start, end + 1)).asJsonObject
         val inferences = root.getAsJsonObject("inferences") ?: return emptyMap()

@@ -385,7 +385,7 @@ func mustBuildGateway(gatewayStore *GatewayStore, gatewayState GatewayState, bas
 
 	runtimeParams, runtimeParamsClose := mustInitGatewayRuntimeParams(
 		context.Background(),
-		gatewayState.Settings.ChainGRPC,
+		chainClient,
 	)
 
 	runtimes, err := buildGatewayRuntimes(gatewayStore, &gatewayState, baseStorageDir, perf, chainClient)

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -18,7 +19,8 @@ import (
 // stubLeases implements leaseOps for testing.
 type stubLeases struct {
 	acquireFn      func(ctx context.Context, escrowId string, inferenceId uint64, epochId uint64, instanceAddr string) (bool, error)
-	setResultFn    func(ctx context.Context, escrowId string, inferenceId uint64, status storage.LeaseStatus) error
+	setResultFn    func(ctx context.Context, escrowId string, inferenceId uint64, status storage.LeaseStatus, instanceAddr string) error
+	ownsFn         func(ctx context.Context, escrowId string, inferenceId uint64, instanceAddr string) (bool, error)
 	setResultCalls []string // records "escrowId/inferenceId/status"
 }
 
@@ -26,12 +28,19 @@ func (s *stubLeases) Acquire(ctx context.Context, escrowId string, inferenceId u
 	return s.acquireFn(ctx, escrowId, inferenceId, epochId, instanceAddr)
 }
 
-func (s *stubLeases) SetResult(ctx context.Context, escrowId string, inferenceId uint64, status storage.LeaseStatus) error {
+func (s *stubLeases) SetResult(ctx context.Context, escrowId string, inferenceId uint64, status storage.LeaseStatus, instanceAddr string) error {
 	s.setResultCalls = append(s.setResultCalls, fmt.Sprintf("%s/%d/%s", escrowId, inferenceId, status))
 	if s.setResultFn != nil {
-		return s.setResultFn(ctx, escrowId, inferenceId, status)
+		return s.setResultFn(ctx, escrowId, inferenceId, status, instanceAddr)
 	}
 	return nil
+}
+
+func (s *stubLeases) OwnsPendingLease(ctx context.Context, escrowId string, inferenceId uint64, instanceAddr string) (bool, error) {
+	if s.ownsFn != nil {
+		return s.ownsFn(ctx, escrowId, inferenceId, instanceAddr)
+	}
+	return true, nil
 }
 
 func makeReq() devshardpkg.ValidateRequest {
@@ -54,7 +63,7 @@ func (s *stubValidator) Validate(ctx context.Context, req devshardpkg.ValidateRe
 // newTestLeaseValidator builds a LeaseValidator wrapping a stub ValidationEngine.
 // phase is always a zero *chain.Phase (EpochID returns 0).
 func newTestLeaseValidator(leases leaseOps, innerFn func(context.Context, devshardpkg.ValidateRequest) (*devshardpkg.ValidateResult, error)) *LeaseValidator {
-	return NewLeaseValidator(&stubValidator{fn: innerFn}, new(chain.Phase), leases, "validator-addr")
+	return NewLeaseValidator(&stubValidator{fn: innerFn}, new(chain.Phase), leases, "validator-addr", time.Hour)
 }
 
 // successInner returns a valid result.
@@ -217,8 +226,44 @@ func TestLeaseValidator_MarkValidationSubmitted_SetsSubmitted(t *testing.T) {
 	}
 	c := newTestLeaseValidator(store, successInner)
 
-	err := c.MarkValidationSubmitted(context.Background(), "escrow-1", 42)
+	_, err := c.Validate(context.Background(), makeReq())
+	require.NoError(t, err)
+
+	err = c.MarkValidationSubmitted(context.Background(), "escrow-1", 42)
 	require.NoError(t, err)
 	require.Len(t, store.setResultCalls, 1)
 	assert.Contains(t, store.setResultCalls[0], storage.LeaseStatusSubmitted)
+}
+
+func TestLeaseValidator_AllowValidationSubmit_TTLExceeded(t *testing.T) {
+	store := &stubLeases{
+		acquireFn: func(_ context.Context, _ string, _ uint64, _ uint64, _ string) (bool, error) {
+			return true, nil
+		},
+	}
+	c := NewLeaseValidator(&stubValidator{fn: successInner}, new(chain.Phase), store, "validator-addr", time.Millisecond)
+	_, err := c.Validate(context.Background(), makeReq())
+	require.NoError(t, err)
+	time.Sleep(2 * time.Millisecond)
+
+	err = c.AllowValidationSubmit(context.Background(), "escrow-1", 42)
+	require.ErrorIs(t, err, devshardpkg.ErrValidationLeaseAbandoned)
+	require.Empty(t, store.setResultCalls)
+}
+
+func TestLeaseValidator_AllowValidationSubmit_NotOwned(t *testing.T) {
+	store := &stubLeases{
+		acquireFn: func(_ context.Context, _ string, _ uint64, _ uint64, _ string) (bool, error) {
+			return true, nil
+		},
+		ownsFn: func(_ context.Context, _ string, _ uint64, _ string) (bool, error) {
+			return false, nil
+		},
+	}
+	c := newTestLeaseValidator(store, successInner)
+	_, err := c.Validate(context.Background(), makeReq())
+	require.NoError(t, err)
+
+	err = c.AllowValidationSubmit(context.Background(), "escrow-1", 42)
+	require.ErrorIs(t, err, devshardpkg.ErrValidationLeaseAbandoned)
 }

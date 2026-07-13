@@ -31,6 +31,7 @@ export DISABLE_DEVSHARD_PROXY=${DISABLE_DEVSHARD_PROXY:-false}
 
 export EDGE_API_SERVICE_NAME=${EDGE_API_SERVICE_NAME:-edge-api}
 export EDGE_API_PORT=${EDGE_API_PORT:-18080}
+# Public Tier A read-only routes (always published when EDGE_API_SERVICE_NAME is set).
 EDGE_API_ROUTE_PATHS_DEFAULT='
 /v1/status
 /v1/models
@@ -50,6 +51,10 @@ EDGE_API_ROUTE_PATHS_DEFAULT='
 /v1/bls/signatures/{request_id}
 /v1/bridge/addresses
 /v1/poc-batches/{epoch}
+'
+# CPU-heavy verify/debug helpers: private by default. Opt in with
+# EDGE_API_EXPOSE_OPTIONAL_ROUTES=true (auth can sit on nginx in front).
+EDGE_API_OPTIONAL_ROUTE_PATHS_DEFAULT='
 /v1/verify-proof
 /v1/verify-block
 /v1/debug/pubkey-to-addr/{pubkey}
@@ -59,6 +64,11 @@ if [ -z "${EDGE_API_ROUTE_PATHS:-}" ]; then
     EDGE_API_ROUTE_PATHS=$EDGE_API_ROUTE_PATHS_DEFAULT
 fi
 export EDGE_API_ROUTE_PATHS=${EDGE_API_ROUTE_PATHS:-""}
+if [ -z "${EDGE_API_OPTIONAL_ROUTE_PATHS:-}" ]; then
+    EDGE_API_OPTIONAL_ROUTE_PATHS=$EDGE_API_OPTIONAL_ROUTE_PATHS_DEFAULT
+fi
+export EDGE_API_OPTIONAL_ROUTE_PATHS=${EDGE_API_OPTIONAL_ROUTE_PATHS:-""}
+export EDGE_API_EXPOSE_OPTIONAL_ROUTES=${EDGE_API_EXPOSE_OPTIONAL_ROUTES:-false}
 
 if [ -n "${KEY_NAME}" ] && [ "${KEY_NAME}" != "" ]; then
     export KEY_NAME_PREFIX="${KEY_NAME}-"
@@ -776,6 +786,55 @@ append_exempt_location() {
     done
 }
 
+edge_api_route_list_contains() {
+    local needle="$1"
+    local haystack="$2"
+    local route
+    set -f
+    for route in $haystack; do
+        if [ "$route" = "$needle" ]; then
+            set +f
+            return 0
+        fi
+    done
+    set +f
+    return 1
+}
+
+edge_api_is_optional_route() {
+    edge_api_route_list_contains "$1" "$EDGE_API_OPTIONAL_ROUTE_PATHS"
+}
+
+# When optional verify/debug routes are not exposed, return unique blocked
+# prefixes suitable for append_blocked_location (first path segment after /v1/).
+# Parameterized paths like /v1/debug/... collapse to "debug".
+# set -f: keep `{param}` placeholders from pathname/brace expansion under bash/zsh.
+optional_edge_api_blocked_prefixes() {
+    local route rest first seen out=""
+    set -f
+    for route in $EDGE_API_OPTIONAL_ROUTE_PATHS; do
+        rest=${route#/}
+        case "$rest" in
+            */*) rest=${rest#*/} ;;
+            *) rest="" ;;
+        esac
+        first=${rest%%/*}
+        first=${first%%\{*}
+        if [ -z "$first" ]; then
+            continue
+        fi
+        case " ${seen} " in
+            *" ${first} "*) ;;
+            *)
+                seen="${seen} ${first}"
+                out="${out} ${first}"
+                ;;
+        esac
+    done
+    set +f
+    echo "$out"
+}
+
 append_edge_api_route_locations() {
     # Usage: append_edge_api_route_locations "/v1/foo /v1/foo/{id}"
     # Emitted before generic /v1/ API locations so Tier A read-only routes
@@ -791,6 +850,11 @@ append_edge_api_route_locations() {
     fi
 
     for route in $routes; do
+        # Optional verify/debug group stays private unless explicitly exposed.
+        # Skip even if an old EDGE_API_ROUTE_PATHS override still lists them.
+        if [ "${EDGE_API_EXPOSE_OPTIONAL_ROUTES}" != "true" ] && edge_api_is_optional_route "$route"; then
+            continue
+        fi
         route_without_version=$(echo "$route" | sed 's|^/||; s|^[^/]*/||')
         route_is_blocked="false"
         for blocked_route in $GONKA_API_BLOCKED_ROUTES; do
@@ -921,6 +985,20 @@ BLOCKED_ROUTES_CONFIG=""
 EXEMPT_ROUTES_CONFIG=""
 
 append_edge_api_route_locations "$EDGE_API_ROUTE_PATHS"
+if [ "${EDGE_API_EXPOSE_OPTIONAL_ROUTES}" = "true" ]; then
+    OPTIONAL_EDGE_API_TO_APPEND=""
+    set -f
+    for route in $EDGE_API_OPTIONAL_ROUTE_PATHS; do
+        if ! edge_api_route_list_contains "$route" "$EDGE_API_ROUTE_PATHS"; then
+            OPTIONAL_EDGE_API_TO_APPEND="${OPTIONAL_EDGE_API_TO_APPEND} ${route}"
+        fi
+    done
+    set +f
+    append_edge_api_route_locations "$OPTIONAL_EDGE_API_TO_APPEND"
+    echo "Edge API optional routes EXPOSED (verify/debug): [${EDGE_API_OPTIONAL_ROUTE_PATHS}]"
+else
+    echo "Edge API optional routes PRIVATE (verify/debug blocked on proxy). Set EDGE_API_EXPOSE_OPTIONAL_ROUTES=true to publish."
+fi
 
 # Legacy /v1/devshard/* clients → canonical /devshard/v1/* (re-search → /devshard/ → versiond).
 if [ "${DISABLE_DEVSHARD_PROXY}" != "true" ]; then
@@ -997,6 +1075,10 @@ export API_VERSION_LOCATIONS
 
 # 4. Generate Blocked Routes
 append_blocked_location "$GONKA_API_BLOCKED_ROUTES" "${APP_BLOCKED_PREFIXES}"
+if [ "${EDGE_API_EXPOSE_OPTIONAL_ROUTES}" != "true" ]; then
+    # 403 (not dapi 404) for verify/debug while they remain private.
+    append_blocked_location "$(optional_edge_api_blocked_prefixes)" "${APP_BLOCKED_PREFIXES}"
+fi
 
 # 2. Chain API
 append_blocked_location "$CHAIN_API_BLOCKED_ROUTES" "/chain-api/"
@@ -1111,6 +1193,11 @@ echo "   /chain-api/*   -> Chain REST API"
 echo "   /chain-grpc/*  -> Chain gRPC"
 if [ -n "${EDGE_API_SERVICE_NAME}" ]; then
     echo "   /v1/* (Tier A) -> Edge API ($FINAL_EDGE_API_SERVICE:$EDGE_API_PORT)"
+    if [ "${EDGE_API_EXPOSE_OPTIONAL_ROUTES}" = "true" ]; then
+        echo "   /v1/verify-* /v1/debug/* -> Edge API (optional routes exposed)"
+    else
+        echo "   /v1/verify-* /v1/debug/* -> blocked (set EDGE_API_EXPOSE_OPTIONAL_ROUTES=true to publish)"
+    fi
 fi
 if [ "${DISABLE_DEVSHARD_PROXY}" != "true" ]; then
     echo "   /devshard/*    -> Versiond (devshard binaries)"
