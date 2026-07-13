@@ -106,7 +106,7 @@ func EndpointsFromConfig(cfg *config.File) Endpoints {
 	}
 }
 
-// Up starts the stack with docker compose up (reuses local images; no --build).
+// Up starts the stack with docker compose up (expects citest-images built; pulls missing hub images).
 func (s *Stack) Up(t *testing.T) {
 	t.Helper()
 	s.composeUp(t, false, nil)
@@ -151,7 +151,7 @@ func (s *Stack) composeUp(t *testing.T, build bool, services []string) {
 	t.Cleanup(func() { s.Down(t) })
 
 	args := append([]string{"compose"}, s.composeFileArgs()...)
-	args = append(args, "up", "-d", "--wait", "--pull", "never")
+	args = append(args, "up", "-d", "--wait", "--pull", "missing")
 	if build {
 		args = append(args, "--build")
 	}
@@ -162,6 +162,7 @@ func (s *Stack) composeUp(t *testing.T, build bool, services []string) {
 	out, err := up.CombinedOutput()
 	if err != nil {
 		DumpComposeLogs(t, s)
+		s.Down(t)
 		t.Fatalf("docker compose up: %v\n%s", err, out)
 	}
 }

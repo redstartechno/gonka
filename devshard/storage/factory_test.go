@@ -711,6 +711,7 @@ func TestNewStorage_HA_MigratesSQLiteThenPostgresOnly(t *testing.T) {
 	}
 	cleanup := setupPostgresContainer(t)
 	defer cleanup()
+	pgHost := os.Getenv("PGHOST")
 
 	storeDir := t.TempDir()
 	t.Setenv("DEVSHARD_HA", "")
@@ -727,6 +728,7 @@ func TestNewStorage_HA_MigratesSQLiteThenPostgresOnly(t *testing.T) {
 	require.NoError(t, sqliteStore.Close())
 
 	t.Setenv("DEVSHARD_HA", "1")
+	t.Setenv("PGHOST", pgHost)
 	store, err := NewStorage(context.Background(), storeDir)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })

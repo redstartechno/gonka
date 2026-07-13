@@ -1,6 +1,7 @@
 package harness
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,10 +11,19 @@ import (
 )
 
 // WriteS1Config writes a minimal multi-versiond (2 hosts) config skeleton for Phase 8 S1.
-// Uses non-default ports and subnet so citest can run alongside a dev `make up` stack.
+// Host ports are chosen at runtime so citest can run alongside local-test-net / dev stacks.
 func WriteS1Config(t *testing.T, dir string) {
 	t.Helper()
-	skeleton := strings.TrimPrefix(`chain_id: gonka-test
+	chainGRPC := pickFreePort(t)
+	chainRPC := pickFreePort(t)
+	chainTestenv := pickFreePort(t)
+	dapiGRPC := pickFreePort(t)
+	dapiHTTP := pickFreePort(t)
+	openAIHTTP := pickFreePort(t)
+	routerPort := pickFreePort(t)
+	gatewayPort := pickFreePort(t)
+
+	skeleton := fmt.Sprintf(`chain_id: gonka-test
 block_height: 150
 epoch:
   index: 1
@@ -22,22 +32,22 @@ epoch:
 params:
   devshard_requests_enabled: true
 mock_chain:
-  grpc_port: 19090
-  rpc_port: 26667
-  testenv_port: 19191
+  grpc_port: %d
+  rpc_port: %d
+  testenv_port: %d
 mock_dapi:
-  grpc_port: 19400
-  http_port: 19100
+  grpc_port: %d
+  http_port: %d
 mock_openai:
-  http_port: 18088
+  http_port: %d
 versiond:
   mode: multi
   version_name: v2
   binary_version: 0.2.13-v2-r2
 versiond_router:
-  port: 18080
+  port: %d
 devshardctl:
-  port: 18081
+  port: %d
 postgres:
   enabled: true
 network:
@@ -61,7 +71,7 @@ grantees:
   - granter_address: ""
     message_type_url: /inference.inference.MsgStartInference
     grantees: [""]
-`, "\n")
+`, chainGRPC, chainRPC, chainTestenv, dapiGRPC, dapiHTTP, openAIHTTP, routerPort, gatewayPort)
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(skeleton), 0o644))
 }
 

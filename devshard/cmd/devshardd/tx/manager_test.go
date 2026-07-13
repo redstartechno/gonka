@@ -33,7 +33,8 @@ func TestNew_EmptyChainID(t *testing.T) {
 	chainClient, err := chain.New("localhost:9090")
 	require.NoError(t, err)
 
+	// Empty chain ID defaults to gonka-mainnet (common/chain/tx.DefaultChainID).
 	mgr, err := tx.New(chainClient.Conn(), kr, "gonka1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqhupgam", "validator", "")
-	require.Error(t, err)
-	require.Nil(t, mgr)
+	require.NoError(t, err)
+	require.NotNil(t, mgr)
 }

@@ -33,7 +33,8 @@ docker compose \
   config --quiet
 
 echo "==> docker compose render (deploy/join + multi versiond)"
-docker compose \
+# Overlay requires DEVSHARD_POSTGRES_PASSWORD (no default); dummy is enough to validate render.
+DEVSHARD_POSTGRES_PASSWORD=validate-only docker compose \
   -f "${REPO_ROOT}/deploy/join/docker-compose.yml" \
   -f "${REPO_ROOT}/deploy/join/docker-compose.versiond.yml" \
   config --quiet

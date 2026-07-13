@@ -1,6 +1,7 @@
 package harness
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -42,5 +43,5 @@ func TestWriteS1Config_GencomposeProducesTwoVersiondServices(t *testing.T) {
 	require.Contains(t, text, "versiond-0:")
 	require.Contains(t, text, "versiond-1:")
 	require.NotContains(t, text, "versiond-2:")
-	require.Contains(t, text, `"18080:8080"`)
+	require.Contains(t, text, fmt.Sprintf(`"%d:8080"`, cfg.VersiondRouter.Port))
 }
