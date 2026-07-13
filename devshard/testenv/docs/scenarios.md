@@ -49,7 +49,7 @@ TESTENV_CITEST=1 go test -tags=testenvci ./citest/ -run TestS3_ParamsLongPoll -v
 
 Wrapper script: [`scripts/run-stack-citest.sh`](../scripts/run-stack-citest.sh).
 
-CI: `workflow_dispatch` with `integration: true` → `make -C devshard ci-testenv-integration`.
+CI: `workflow_dispatch` with `integration: true`, or PR comment `/run-testenv` (OWNER/MEMBER) → `make -C devshard ci-testenv-integration`.
 
 ## Scenario index
 
