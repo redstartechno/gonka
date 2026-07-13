@@ -127,8 +127,9 @@ func WaitVersiondSessionHealthy(t *testing.T, stack *Stack, cfg *config.File, ep
 	}
 	client := HTTPClient()
 	WaitGETOK(t, client, eps.RouterHTTP+"/healthz", 5*time.Minute, "versiond-router healthz", stack)
-	sessionHealth := RouterSessionURL(eps.RouterHTTP, cfg.Versiond.VersionName, escrowID, "/healthz")
-	WaitGETOK(t, client, sessionHealth, 5*time.Minute, "devshardd session healthz via router", stack)
+	// Session routes have no /healthz; mempool resolves the escrow via lazy load / RecoverSessions.
+	sessionReady := RouterSessionURL(eps.RouterHTTP, cfg.Versiond.VersionName, escrowID, "/mempool")
+	WaitGETOK(t, client, sessionReady, 5*time.Minute, "devshardd session mempool via router", stack)
 	WaitGETOK(t, client, eps.RouterHTTP+"/"+cfg.Versiond.VersionName+"/healthz", 5*time.Minute, "devshardd health via router", stack)
 	WaitGETOK(t, client, eps.GatewayHTTP+"/v1/status", 3*time.Minute, "gateway /v1/status", stack)
 }
