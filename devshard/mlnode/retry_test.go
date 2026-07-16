@@ -180,6 +180,23 @@ func TestDoWithNode_4xx_NoRetry(t *testing.T) {
 	assert.Equal(t, gen.ReleaseOutcome_APPLICATION_ERROR, lock.releases[0].outcome)
 }
 
+func TestDoWithNode_4xx_ClosesBody(t *testing.T) {
+	lock := &stubLock{
+		acquires: []acquireResult{{nodeID: "node-1", endpoint: "http://node1", lockID: "lock-1"}},
+	}
+
+	body := &trackingBody{Reader: strings.NewReader("error body")}
+
+	_, err := mlnode.DoWithNode(context.Background(), lock, "model-a", 3,
+		func(_ context.Context, _ string) (*http.Response, error) {
+			return &http.Response{StatusCode: http.StatusBadRequest, Body: body}, nil
+		},
+	)
+
+	require.Error(t, err)
+	assert.True(t, body.isClosed(), "4xx response body must be closed before returning to avoid connection leak")
+}
+
 func TestDoWithNode_Timeout_StopsRetry(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	lock := &stubLock{

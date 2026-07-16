@@ -68,6 +68,10 @@ func DoWithNode(
 
 		// retry only on transport error
 		if outcome != gen.ReleaseOutcome_TRANSPORT_ERROR {
+			// Close body before returning: the response is not handed to the caller.
+			if resp != nil && resp.Body != nil {
+				_ = resp.Body.Close()
+			}
 			return nil, err
 		}
 
