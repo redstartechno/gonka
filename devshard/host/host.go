@@ -1311,7 +1311,11 @@ func (h *Host) ChallengeReceipt(ctx context.Context, inferenceID uint64, payload
 	if err != nil || job == nil {
 		return receipt, confirmedAt, err
 	}
-	h.executeAsync(ctx, job)
+	// Fire-and-forget: the receipt must return promptly so the verifier's
+	// bounded challenge RPC sees a live executor. Detach from the request
+	// context so execution survives the RPC returning; RunExecution logs
+	// its own failures.
+	go h.executeAsync(context.WithoutCancel(ctx), job)
 	return receipt, confirmedAt, nil
 }
 
