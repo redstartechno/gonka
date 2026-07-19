@@ -718,6 +718,124 @@ func (h *Host) findDiff(diffs []types.Diff, nonce uint64) *types.Diff {
 	return nil
 }
 
+// acceptStatus reports how acceptAsExecutorLocked resolved an inference.
+type acceptStatus int
+
+const (
+	acceptRejected         acceptStatus = iota // not accepted; inspect the returned error when it is non-nil
+	acceptExecute                              // newly accepted; job returned for execution
+	acceptAlreadyExecuting                     // dedup: execution already in-flight
+	acceptAlreadyFinished                      // replay: inference already completed
+)
+
+// acceptParams carries the resolved inference fields that both the user SSE
+// (signReceipt) and timeout challenge (challengeReceiptLocked) paths feed into
+// acceptAsExecutorLocked, plus the small hooks that capture where the two paths
+// intentionally diverge.
+type acceptParams struct {
+	payload     *InferencePayload
+	inferenceID uint64
+	promptHash  []byte
+	model       string
+	inputLength uint64
+	maxTokens   uint64
+	startedAt   int64
+
+	// softFailVerify makes a payload mismatch return acceptRejected with no
+	// error (challenge: the verifier already checked the payload before
+	// forwarding). When false a mismatch is a hard error (SSE).
+	softFailVerify bool
+
+	// addConfirmStart adds a MsgConfirmStart to the mempool right after the
+	// receipt is signed so the confirmation survives HTTP failures (SSE only).
+	addConfirmStart bool
+
+	// alreadyFinished reports a completed inference from a path-specific replay
+	// source (SSE: cached response body; challenge: mempool FinishInference).
+	// When it returns true the receipt is returned without a job. nil = never.
+	alreadyFinished func() bool
+
+	// wrapSignErr wraps receipt marshal/sign failures. SSE classifies for
+	// observability; challenge uses a plain error wrap. nil = identity.
+	wrapSignErr func(reason observability.Reason, err error) error
+}
+
+// acceptAsExecutorLocked is the shared "accept as executor" core: it verifies
+// the payload, signs the executor receipt, dedups against in-flight and finished
+// work, and marks the inference executing. It owns the logic common to both the
+// user SSE and timeout challenge paths; the intentional divergences live in the
+// acceptParams hooks. Caller must hold h.mu.
+func (h *Host) acceptAsExecutorLocked(p acceptParams) ([]byte, int64, *devshard.ExecuteRequest, acceptStatus, error) {
+	if p.wrapSignErr == nil {
+		p.wrapSignErr = func(_ observability.Reason, err error) error { return err }
+	}
+
+	// Verify payload matches signed diff.
+	if err := VerifyPayload(p.payload, p.promptHash, p.model, p.inputLength, p.maxTokens, p.startedAt); err != nil {
+		if p.softFailVerify {
+			return nil, 0, nil, acceptRejected, nil
+		}
+		return nil, 0, nil, acceptRejected, observability.Classify(observability.ReasonPayloadVerifyErr, observability.WhereHostSignReceipt, err)
+	}
+
+	// Sign executor receipt with wall-clock confirmed_at.
+	confirmedAt := time.Now().Unix()
+	receiptContent := &types.ExecutorReceiptContent{
+		InferenceId: p.inferenceID,
+		PromptHash:  p.promptHash,
+		Model:       p.model,
+		InputLength: p.inputLength,
+		MaxTokens:   p.maxTokens,
+		StartedAt:   p.startedAt,
+		EscrowId:    h.escrowID,
+		ConfirmedAt: confirmedAt,
+	}
+	receiptData, err := proto.Marshal(receiptContent)
+	if err != nil {
+		return nil, 0, nil, acceptRejected, p.wrapSignErr(observability.ReasonReceiptMarshalErr, fmt.Errorf("marshal executor receipt: %w", err))
+	}
+	sig, err := h.signer.Sign(receiptData)
+	if err != nil {
+		return nil, 0, nil, acceptRejected, p.wrapSignErr(observability.ReasonReceiptSignErr, fmt.Errorf("sign executor receipt: %w", err))
+	}
+
+	if p.addConfirmStart {
+		// Add MsgConfirmStart to mempool so it survives HTTP failures.
+		// If the response is lost (e.g. 503), the next request delivers it via mempool.
+		h.mempool.Add(MempoolEntry{
+			Tx: &types.DevshardTx{Tx: &types.DevshardTx_ConfirmStart{ConfirmStart: &types.MsgConfirmStart{
+				InferenceId: p.inferenceID,
+				ExecutorSig: sig,
+				ConfirmedAt: confirmedAt,
+			}}},
+			ProposedAt: h.sm.LatestNonce(),
+		})
+	}
+
+	// Dedup: return receipt (proves executor alive) but skip execution.
+	if _, dup := h.executing[p.inferenceID]; dup {
+		return sig, confirmedAt, nil, acceptAlreadyExecuting, nil
+	}
+
+	// Already completed via a path-specific replay source: skip execution.
+	if p.alreadyFinished != nil && p.alreadyFinished() {
+		return sig, confirmedAt, nil, acceptAlreadyFinished, nil
+	}
+
+	h.executing[p.inferenceID] = struct{}{}
+	job := &devshard.ExecuteRequest{
+		InferenceID: p.inferenceID,
+		Model:       p.model,
+		Prompt:      p.payload.Prompt,
+		PromptHash:  p.promptHash,
+		InputLength: p.inputLength,
+		MaxTokens:   p.maxTokens,
+		EscrowID:    h.escrowID,
+		EpochID:     h.epochID,
+	}
+	return sig, confirmedAt, job, acceptExecute, nil
+}
+
 // signReceipt verifies the payload and signs the executor receipt (sync, under mutex).
 // Returns the receipt sig, confirmed_at timestamp, an ExecuteRequest if this host is the executor,
 // and cached response body if the inference already completed (reconnect case).
@@ -746,70 +864,47 @@ func (h *Host) signReceipt(req HostRequest) ([]byte, int64, *devshard.ExecuteReq
 		}
 		outcome.receiptExpected = true
 
-		// Verify payload matches signed diff.
-		if err := VerifyPayload(req.Payload, start.PromptHash, start.Model, start.InputLength, start.MaxTokens, start.StartedAt); err != nil {
-			return nil, 0, nil, nil, outcome, observability.Classify(observability.ReasonPayloadVerifyErr, observability.WhereHostSignReceipt, err)
-		}
-
-		// Sign executor receipt with wall-clock confirmed_at.
-		confirmedAt := time.Now().Unix()
-		receiptContent := &types.ExecutorReceiptContent{
-			InferenceId: start.InferenceId,
-			PromptHash:  start.PromptHash,
-			Model:       start.Model,
-			InputLength: start.InputLength,
-			MaxTokens:   start.MaxTokens,
-			StartedAt:   start.StartedAt,
-			EscrowId:    h.escrowID,
-			ConfirmedAt: confirmedAt,
-		}
-		receiptData, err := proto.Marshal(receiptContent)
-		if err != nil {
-			return nil, 0, nil, nil, outcome, observability.Classify(observability.ReasonReceiptMarshalErr, observability.WhereHostSignReceipt, fmt.Errorf("marshal executor receipt: %w", err))
-		}
-		sig, err := h.signer.Sign(receiptData)
-		if err != nil {
-			return nil, 0, nil, nil, outcome, observability.Classify(observability.ReasonReceiptSignErr, observability.WhereHostSignReceipt, fmt.Errorf("sign executor receipt: %w", err))
-		}
-
-		// Add MsgConfirmStart to mempool so it survives HTTP failures.
-		// If the response is lost (e.g. 503), the next request delivers it via mempool.
-		h.mempool.Add(MempoolEntry{
-			Tx: &types.DevshardTx{Tx: &types.DevshardTx_ConfirmStart{ConfirmStart: &types.MsgConfirmStart{
-				InferenceId: start.InferenceId,
-				ExecutorSig: sig,
-				ConfirmedAt: confirmedAt,
-			}}},
-			ProposedAt: h.sm.LatestNonce(),
+		var cachedBody []byte
+		sig, confirmedAt, job, status, err := h.acceptAsExecutorLocked(acceptParams{
+			payload:         req.Payload,
+			inferenceID:     start.InferenceId,
+			promptHash:      start.PromptHash,
+			model:           start.Model,
+			inputLength:     start.InputLength,
+			maxTokens:       start.MaxTokens,
+			startedAt:       start.StartedAt,
+			addConfirmStart: true, // SSE: confirmation must survive HTTP failures.
+			alreadyFinished: func() bool {
+				// Already completed: execution finished, response cached (reconnect case).
+				if cached, ok := h.completedResponses[start.InferenceId]; ok {
+					cachedBody = cached
+					return true
+				}
+				return false
+			},
+			wrapSignErr: func(reason observability.Reason, err error) error {
+				return observability.Classify(reason, observability.WhereHostSignReceipt, err)
+			},
 		})
-
-		// Dedup: return receipt (proves executor alive) but skip execution.
-		if _, dup := h.executing[start.InferenceId]; dup {
+		if err != nil {
+			return nil, 0, nil, nil, outcome, err
+		}
+		switch status {
+		case acceptAlreadyExecuting:
 			outcome.reason = observability.ReasonAlreadyExecuting
 			return sig, confirmedAt, nil, nil, outcome, nil
-		}
-
-		// Already completed: execution finished, response cached.
-		if cached, ok := h.completedResponses[start.InferenceId]; ok {
+		case acceptAlreadyFinished:
 			outcome.reason = observability.ReasonCachedResponse
-			return sig, confirmedAt, nil, cached, outcome, nil
+			return sig, confirmedAt, nil, cachedBody, outcome, nil
+		case acceptExecute:
+			outcome.executionExpected = true
+			outcome.reason = observability.ReasonOK
+			return sig, confirmedAt, job, nil, outcome, nil
+		default:
+			// acceptRejected is unreachable here: the SSE path leaves
+			// softFailVerify=false, so a rejected accept always returns a
+			// non-nil error, handled above.
 		}
-
-		h.executing[start.InferenceId] = struct{}{}
-		outcome.executionExpected = true
-		outcome.reason = observability.ReasonOK
-
-		job := &devshard.ExecuteRequest{
-			InferenceID: start.InferenceId,
-			Model:       start.Model,
-			Prompt:      req.Payload.Prompt,
-			PromptHash:  start.PromptHash,
-			InputLength: start.InputLength,
-			MaxTokens:   start.MaxTokens,
-			EscrowID:    h.escrowID,
-			EpochID:     h.epochID,
-		}
-		return sig, confirmedAt, job, nil, outcome, nil
 	}
 	return nil, 0, nil, nil, outcome, nil
 }
@@ -1341,54 +1436,31 @@ func (h *Host) challengeReceiptLocked(inferenceID uint64, payload *InferencePayl
 	if payload == nil {
 		return nil, 0, nil, nil
 	}
-	if err := VerifyPayload(payload, rec.PromptHash, rec.Model, rec.InputLength, rec.MaxTokens, rec.StartedAt); err != nil {
-		return nil, 0, nil, nil
-	}
 
-	confirmedAt := time.Now().Unix()
-	receiptContent := &types.ExecutorReceiptContent{
-		InferenceId: inferenceID,
-		PromptHash:  rec.PromptHash,
-		Model:       rec.Model,
-		InputLength: rec.InputLength,
-		MaxTokens:   rec.MaxTokens,
-		StartedAt:   rec.StartedAt,
-		EscrowId:    h.escrowID,
-		ConfirmedAt: confirmedAt,
-	}
-	receiptData, err := proto.Marshal(receiptContent)
-	if err != nil {
-		return nil, 0, nil, fmt.Errorf("marshal executor receipt: %w", err)
-	}
-	sig, err := h.signer.Sign(receiptData)
-	if err != nil {
-		return nil, 0, nil, fmt.Errorf("sign executor receipt: %w", err)
-	}
-
-	// Dedup: return receipt (proves executor alive) but skip execution
-	// if already in-flight or already finished in mempool.
-	if _, dup := h.executing[inferenceID]; dup {
-		return sig, confirmedAt, nil, nil
-	}
-	for _, tx := range h.mempool.Txs() {
-		if fi := tx.GetFinishInference(); fi != nil && fi.InferenceId == inferenceID {
-			return sig, confirmedAt, nil, nil
-		}
-	}
-
-	h.executing[inferenceID] = struct{}{}
-
-	job := &devshard.ExecuteRequest{
-		InferenceID: inferenceID,
-		Model:       rec.Model,
-		Prompt:      payload.Prompt,
-		PromptHash:  rec.PromptHash,
-		InputLength: rec.InputLength,
-		MaxTokens:   rec.MaxTokens,
-		EscrowID:    h.escrowID,
-		EpochID:     h.epochID,
-	}
-	return sig, confirmedAt, job, nil
+	// On payload validation error the challenge soft-fails (returns no receipt)
+	// rather than erroring: the verifier already checked the payload before
+	// forwarding, and the executor IS reachable (defense-in-depth). The replay
+	// source is the mempool -- a FinishInference already queued means execution
+	// completed, so the receipt returns without a job.
+	sig, confirmedAt, job, _, err := h.acceptAsExecutorLocked(acceptParams{
+		payload:        payload,
+		inferenceID:    inferenceID,
+		promptHash:     rec.PromptHash,
+		model:          rec.Model,
+		inputLength:    rec.InputLength,
+		maxTokens:      rec.MaxTokens,
+		startedAt:      rec.StartedAt,
+		softFailVerify: true, // verifier already checked payload; executor still reachable.
+		alreadyFinished: func() bool {
+			for _, tx := range h.mempool.Txs() {
+				if fi := tx.GetFinishInference(); fi != nil && fi.InferenceId == inferenceID {
+					return true
+				}
+			}
+			return false
+		},
+	})
+	return sig, confirmedAt, job, err
 }
 
 func (h *Host) LatestNonce() uint64 {

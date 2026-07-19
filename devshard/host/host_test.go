@@ -1046,6 +1046,35 @@ func TestHost_ChallengeReceipt_AlreadyFinished(t *testing.T) {
 	require.Equal(t, 1, engine.calls, "engine should not be called again")
 }
 
+// TestHost_AcceptDivergence_BadPayload pins the intentional divergence that the
+// shared acceptAsExecutorLocked helper preserves: the user SSE path hard-fails
+// on a payload mismatch, while the timeout challenge path soft-fails (no receipt,
+// no error) because the verifier already validated the payload before forwarding.
+func TestHost_AcceptDivergence_BadPayload(t *testing.T) {
+	hosts := []*signing.Secp256k1Signer{testutil.MustGenerateKey(t), testutil.MustGenerateKey(t), testutil.MustGenerateKey(t)}
+	user := testutil.MustGenerateKey(t)
+
+	badPayload := func() *InferencePayload {
+		p := defaultPayload()
+		p.MaxTokens = 999 // mismatches StartTx(1).MaxTokens = 50
+		return p
+	}
+	diff := testutil.SignDiff(t, user, "escrow-1", 1, []*types.DevshardTx{testutil.StartTx(1)})
+
+	// SSE path: a payload mismatch is a hard error.
+	sseHost := newTestHost(t, 1, hosts, user, 10000, 10)
+	_, err := sseHost.HandleRequest(context.Background(), HostRequest{
+		Diffs: []types.Diff{diff}, Nonce: 1, Payload: badPayload(),
+	})
+	require.ErrorIs(t, err, types.ErrPayloadMismatch, "SSE must hard-fail on payload mismatch")
+
+	// Challenge path: the same mismatch soft-fails -- no receipt, no error.
+	chHost := newTestHost(t, 1, hosts, user, 10000, 10)
+	receipt, _, err := chHost.ChallengeReceipt(context.Background(), 1, badPayload(), []types.Diff{diff})
+	require.NoError(t, err, "challenge must soft-fail (no error) on payload mismatch")
+	require.Nil(t, receipt, "challenge must not produce a receipt on payload mismatch")
+}
+
 // blockingEngine gates Execute on a release channel so tests can hold an
 // inference "in flight" and observe what happens around it.
 type blockingEngine struct {
