@@ -4,7 +4,6 @@ import (
 	"context"
 	"decentralized-api/logging"
 	"sync"
-	"testing"
 
 	"github.com/productscience/inference/x/inference/types"
 )
@@ -83,13 +82,13 @@ func NewMockClient() *MockClient {
 	}
 }
 
-func (m *MockClient) WithTryLock(t *testing.T, f func()) {
-	lock := m.Mu.TryLock()
-	if !lock {
-		t.Fatal("TryLock called more than once")
-	} else {
-		defer m.Mu.Unlock()
-	}
+// WithLock runs f while holding the mock's mutex. Broker command dispatch is
+// asynchronous (per-node worker goroutines), so a worker may legitimately hold
+// the mutex when a test asserts state; blocking here waits the in-flight call
+// out instead of failing spuriously like the previous non-blocking TryLock did.
+func (m *MockClient) WithLock(f func()) {
+	m.Mu.Lock()
+	defer m.Mu.Unlock()
 
 	f()
 }
