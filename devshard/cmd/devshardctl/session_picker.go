@@ -194,6 +194,14 @@ type sessionPicker struct {
 	done   bool
 	notify chan struct{} // signaled (non-blocking) on submit or stop
 
+	// onIterationStart is called at the top of every run-loop
+	// iteration, before the availability snapshot and before the
+	// queue is read for dispatch. nil in production; tests set it to
+	// park the loop at a known point so they can mutate process-global
+	// PoC state with a happens-before edge to the snapshot that
+	// observes it.
+	onIterationStart func()
+
 	stopOnce sync.Once
 	stopped  chan struct{}
 }
@@ -273,6 +281,10 @@ func (p *sessionPicker) wakeUp() {
 func (p *sessionPicker) run() {
 	defer close(p.stopped)
 	for {
+		if p.onIterationStart != nil {
+			p.onIterationStart()
+		}
+
 		// Phase 0: snapshot which participants are non-PoC right now.
 		// Done outside p.mu because Session.HostParticipantKey acquires
 		// Session.mu, and the chooser later acquires p.mu while

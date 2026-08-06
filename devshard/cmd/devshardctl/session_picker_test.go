@@ -310,6 +310,15 @@ func TestPicker_NoAvailableHost_DropsImmediately(t *testing.T) {
 //
 // The throttle-flip equivalent (same shape, different source of the
 // flip) is TestPicker_AllRemainingHostsThrottled_DropsExhausted.
+//
+// PoC state is process-global (setPoCPreservedParticipantsByModel),
+// unlike the injected throttleChecker of the throttle analogue, so the
+// flip cannot simply be staged before start(): submitting first and
+// flipping afterwards leaves the run loop free to snapshot the
+// pre-flip world and dispatch the request. The test therefore parks
+// the loop on onIterationStart until the request is queued AND the
+// flip is published, which is what makes "queued while viable,
+// stranded mid-flight" deterministic rather than timing-dependent.
 func TestPicker_PoCFlipDropsQueuedRequest(t *testing.T) {
 	// Enable relaxed PoC so shouldUseProbeForParticipant can return
 	// true for unpreserved participants.
@@ -330,8 +339,33 @@ func TestPicker_PoCFlipDropsQueuedRequest(t *testing.T) {
 
 	ghost := &fakeGhost{}
 	p := newSessionPicker(env.session, "llama", ghost.dispatch, nil, nil)
+
+	// Barrier: hold the run loop on its very first iteration, before it
+	// has snapshotted availability or looked at the queue. Only the
+	// first iteration parks (parked is read and written by the run
+	// goroutine alone), so every later iteration -- including the one
+	// stop() relies on to observe p.done -- runs unhindered.
+	reachedBarrier := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseBarrier := func() { releaseOnce.Do(func() { close(release) }) }
+	parked := false
+	p.onIterationStart = func() {
+		if parked {
+			return
+		}
+		parked = true
+		close(reachedBarrier)
+		<-release
+	}
+
 	p.start()
 	t.Cleanup(p.stop)
+	// Registered after the stop cleanup, so it runs BEFORE it (LIFO):
+	// stop() can never block on a picker still parked at the barrier.
+	t.Cleanup(releaseBarrier)
+
+	<-reachedBarrier // loop is parked; nothing has been dispatched yet
 
 	// Submit: excludes participants on slots 0 and 2; only the
 	// participant on slot 1 is viable. With every participant
@@ -353,7 +387,11 @@ func TestPicker_PoCFlipDropsQueuedRequest(t *testing.T) {
 		}
 	}
 	setPoCPreservedParticipantsByModel(map[string][]string{"llama": remaining})
-	p.wakeUp() // force re-evaluation
+
+	// Release only now: the request is queued (viable at submit time)
+	// and the flip is published, so the first snapshot the loop takes
+	// is guaranteed to see the stranded request.
+	releaseBarrier()
 
 	res := waitReply(t, req, 2*time.Second)
 	require.Error(t, res.err)
