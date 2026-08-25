@@ -20,9 +20,10 @@ import (
 
 // fakeClock drives supervisor timers deterministically in tests.
 type fakeClock struct {
-	mu     sync.Mutex
-	now    time.Time
-	timers []*fakeTimer
+	mu        sync.Mutex
+	now       time.Time
+	timers    []*fakeTimer
+	armCounts map[time.Duration]int
 }
 
 type fakeTimer struct {
@@ -31,7 +32,7 @@ type fakeTimer struct {
 }
 
 func newFakeClock(start time.Time) *fakeClock {
-	return &fakeClock{now: start}
+	return &fakeClock{now: start, armCounts: make(map[time.Duration]int)}
 }
 
 func (c *fakeClock) Now() time.Time {
@@ -52,7 +53,16 @@ func (c *fakeClock) After(d time.Duration) <-chan time.Time {
 		ch:       make(chan time.Time, 1),
 	}
 	c.timers = append(c.timers, t)
+	c.armCounts[d]++
 	return t.ch
+}
+
+// armCount reports how many times After has been called for duration d,
+// letting tests observe timer (re-)arming instead of guessing with sleeps.
+func (c *fakeClock) armCount(d time.Duration) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.armCounts[d]
 }
 
 func (c *fakeClock) Advance(d time.Duration) {
@@ -157,6 +167,36 @@ func waitActiveSource(t *testing.T, p AdaptiveProvider, want string, max time.Du
 	t.Fatalf("timeout waiting for active source %q (got %q)", want, p.ActiveSource())
 }
 
+// advanceAfterArm advances clock by d, but only once a timer for that exact
+// duration has been (re-)armed since *armed. Advance is one-shot: firing it
+// before the supervisor re-arms the next timer silently swallows the tick.
+func advanceAfterArm(t *testing.T, clock *fakeClock, d time.Duration, armed *int) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for clock.armCount(d) <= *armed {
+		if !time.Now().Before(deadline) {
+			t.Fatalf("timeout waiting for timer (duration=%s) to be armed", d)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	*armed = clock.armCount(d)
+	clock.Advance(d)
+}
+
+// waitTickProcessed blocks until duration d re-arms since armed, proving the
+// tick just advanced was fully processed (a re-arm only follows completed
+// tick handling). Do not call after a tick that switches to another timer.
+func waitTickProcessed(t *testing.T, clock *fakeClock, d time.Duration, armed int) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for clock.armCount(d) <= armed {
+		if !time.Now().Before(deadline) {
+			t.Fatalf("timeout waiting for tick (duration=%s) to be processed", d)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
 func TestAdaptive_BootUnimplemented_StartsChain(t *testing.T) {
 	clock := newFakeClock(time.Unix(0, 0))
 	client := &scriptNMClient{
@@ -210,10 +250,9 @@ func TestAdaptive_FailbackAfterDapiUpgrade(t *testing.T) {
 
 	waitActiveSource(t, p, SourceActiveChain, 2*time.Second)
 
-	clock.Advance(cfg.GRPCReprobe)
-	time.Sleep(20 * time.Millisecond)
-	clock.Advance(cfg.GRPCReprobe)
-	time.Sleep(20 * time.Millisecond)
+	armed := 0
+	advanceAfterArm(t, clock, cfg.GRPCReprobe, &armed)
+	advanceAfterArm(t, clock, cfg.GRPCReprobe, &armed)
 
 	waitActiveSource(t, p, SourceActiveGRPC, 3*time.Second)
 	waitForHeight(t, p, 50)
@@ -371,10 +410,9 @@ func TestAdaptive_RoundTrip_GRPCChainGRPC(t *testing.T) {
 	time.Sleep(30 * time.Millisecond)
 	waitActiveSource(t, p, SourceActiveChain, 3*time.Second)
 
-	clock.Advance(cfg.GRPCReprobe)
-	time.Sleep(20 * time.Millisecond)
-	clock.Advance(cfg.GRPCReprobe)
-	time.Sleep(20 * time.Millisecond)
+	armed := 0
+	advanceAfterArm(t, clock, cfg.GRPCReprobe, &armed)
+	advanceAfterArm(t, clock, cfg.GRPCReprobe, &armed)
 	waitActiveSource(t, p, SourceActiveGRPC, 3*time.Second)
 	waitForHeight(t, p, 50)
 }
@@ -456,17 +494,16 @@ func TestAdaptive_FailbackHysteresis_NeedsConsecutiveProbes(t *testing.T) {
 
 	waitActiveSource(t, p, SourceActiveChain, 2*time.Second)
 
-	clock.Advance(cfg.GRPCReprobe)
-	time.Sleep(20 * time.Millisecond)
+	armed := 0
+	advanceAfterArm(t, clock, cfg.GRPCReprobe, &armed)
+	waitTickProcessed(t, clock, cfg.GRPCReprobe, armed)
 	assert.Equal(t, SourceActiveChain, p.ActiveSource(), "one healthy probe must not fail back")
 
-	clock.Advance(cfg.GRPCReprobe)
-	time.Sleep(20 * time.Millisecond)
+	advanceAfterArm(t, clock, cfg.GRPCReprobe, &armed)
+	waitTickProcessed(t, clock, cfg.GRPCReprobe, armed)
 	assert.Equal(t, SourceActiveChain, p.ActiveSource(), "failed reprobe must reset streak")
 
-	clock.Advance(cfg.GRPCReprobe)
-	time.Sleep(20 * time.Millisecond)
-	clock.Advance(cfg.GRPCReprobe)
-	time.Sleep(20 * time.Millisecond)
+	advanceAfterArm(t, clock, cfg.GRPCReprobe, &armed)
+	advanceAfterArm(t, clock, cfg.GRPCReprobe, &armed)
 	waitActiveSource(t, p, SourceActiveGRPC, 3*time.Second)
 }
